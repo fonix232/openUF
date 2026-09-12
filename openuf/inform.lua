@@ -3534,6 +3534,28 @@ function M.run(cfg, ufhw)
 	M._populate_net_info(st, cfg)
 	M._warn_identity_change(prev_mac, st, cfg)
 	M._warn_missing_uci()
+	-- Identity and reported address must come off the same netdev. openUF takes
+	-- the MAC from lan_cpueth and the IP from the bridge that port is enslaved
+	-- to, which only agree when the two share a MAC -- true on every swconfig
+	-- board, false on DSA, where the gateway then flags an IP conflict between
+	-- the AP and itself. Reconciled once, here, before the first inform carries
+	-- the mismatch. pcall'd for the same reason reapply_runtime_rules is: this
+	-- reaches UCI and sysfs, and a board where either is missing must still
+	-- start and report statistics.
+	if M._ucihelper and M._ucihelper.ensure_bridge_identity then
+		local ok_id, err_id = pcall(M._ucihelper.ensure_bridge_identity, cfg)
+		if not ok_id then
+			io.stderr:write("inform: could not reconcile bridge identity: "
+				.. tostring(err_id) .. "\n")
+		elseif err_id then
+			-- It changed UCI; netifd has to be told, and nothing else at
+			-- startup consumes _network_dirty (apply_config's reload only runs
+			-- on a setparam, which may be many minutes away or never).
+			M._ucihelper._network_dirty = false
+			M._sysinfo._run_cmd("/etc/init.d/network reload 2>/dev/null")
+			M._populate_net_info(st, cfg)  -- the address may have moved with it
+		end
+	end
 	M._sync_bootstrap_account(st.adopted, cfg and cfg.config and cfg.config.bootstrap_adopt_user)
 	-- Blocked-client nft rules are live kernel state, not persisted UCI --
 	-- reapply from state.json on every fresh start (mirrors the bootstrap

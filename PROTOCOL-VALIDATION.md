@@ -1046,6 +1046,43 @@ Two costs, both accepted deliberately:
   `No such file or directory`, `bridge fdb flush` → `Not supported`) and survives a link
   bounce. It ages out in ~140 s, and the port works from that moment.
 
+### Identity and reported address must come off the same netdev
+
+**Found 2026-09-12 on the AX3000T**, as a gateway alert reading *"IP Address Conflict —
+multiple devices are using the same 192.0.2.4 address"* against a network that was
+correctly configured.
+
+openUF takes its IDENTITY from `dev.conf.net.lan_cpueth` — that MAC is what the controller
+keys the adopted device on and what `lldpd.config.cid_interface` advertises. It takes its
+reported IP from the same name, but `announce.get_ip` deliberately hops to the **bridge**
+that port is enslaved to, because a bridge member carries no address of its own.
+
+MAC from the port, address from the bridge. That is safe only while the two share a MAC,
+which on every swconfig board here they do — `eth1` and `br-lan` read the same address, so
+the divergence never existed to be noticed. On DSA it is false: `lan_cpueth` names a
+*socket* (`wan`, whose MAC is `board.json`'s `label_macaddr`) while `br-lan` inherits the
+DSA conduit's (`eth0`). The AP therefore announced itself as `00:00:5e:00:53:01` while every
+frame it sourced — and the ARP entry for the very address it reported — was
+`00:00:5e:00:53:02`. Captured on `wan`: `192.0.2.4` sending exclusively from the eth0
+MAC. The controller sees one device claiming the IP and another using it.
+
+Not a misconfiguration and not a DHCP problem: this AP is `proto 'static'` with no `udhcpc`
+running at all, and `192.0.2.4` sits outside the pool (`.100`–`.254`).
+
+Fixed by `ucihelper.ensure_bridge_identity`, run once at startup from `inform.M.run`: it
+pins the bridge's `macaddr` to `lan_cpueth`'s MAC when — and only when — the two differ.
+That is what a real UniFi AP looks like, one MAC for identity, LLDP and management traffic.
+Adoption is keyed on `lan_cpueth`'s MAC, which is untouched, so the device record survives.
+
+Verified on hardware: `br-lan` went `00:00:5e:00:53:02` → `00:00:5e:00:53:01`, the static
+address was unaffected, `192.0.2.4` now sources from the identity MAC, a second restart
+logged nothing and reloaded nothing, and the Archer C5 — whose port and bridge already agree
+— wrote no `macaddr` and was left entirely alone.
+
+> On a DHCP-addressed board the new L2 identity means a new lease and possibly a new
+> address. Adoption is unaffected and openUF reports the change on the next inform, but
+> that is why this logs loudly rather than acting silently.
+
 ### `radio.<n>.ieee_mode` carries a width, not a PHY generation
 
 The wire says `11nght20` / `11naht40`. Read literally that pins an 802.11ax radio to

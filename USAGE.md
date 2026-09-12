@@ -933,6 +933,24 @@ uci set lldpd.config.cid_interface='wan'   # the AX3000T's uplink socket
 uci commit lldpd && /etc/init.d/lldpd restart
 ```
 
+**openUF closes the other half of this itself.** The same two-MAC split has a second
+symptom that LLDP does not cover: openUF reports its IP from the *bridge* `lan_cpueth` is
+enslaved to (a bridge member carries no address of its own), so on a DSA board it announced
+itself under the socket's MAC while every frame it sent, and the ARP entry for the address
+it reported, carried `br-lan`'s. The gateway sees one device claiming the IP and another
+using it, and raises **"IP Address Conflict — multiple devices are using the same
+address"** against a network that is perfectly configured.
+
+`ucihelper.ensure_bridge_identity` runs once at daemon start and pins the bridge's
+`macaddr` to `lan_cpueth`'s MAC when — and only when — the two differ, so identity, LLDP
+and management traffic all agree, the way they do on a real UniFi AP. Boards where they
+already match (every swconfig one) are untouched and no reload is issued. It logs what it
+pinned; adoption is keyed on `lan_cpueth`'s MAC, which it never changes.
+
+> If the board takes its management address by **DHCP**, the new L2 identity means a new
+> lease and possibly a new address. The adoption survives and openUF reports the new
+> address on the next inform, but expect the change.
+
 Verify the two agree:
 ```sh
 lldpcli show chassis | grep ChassisID          # lldpd's identity

@@ -100,6 +100,16 @@ end
 -- the enforcement calls override the stubs inside fn; every seam (including
 -- those and get_ifname_for_vap) is restored here even when fn raises, so a
 -- failing test cannot leak its stubs into later ones.
+-- Suppress a function's stderr. ensure_bridge_identity reports what it pins,
+-- which is right on a device and noise in a test run.
+local function silently(fn)
+	local real = io.stderr
+	io.stderr = {write = function() end}
+	local ok, err = pcall(fn)
+	io.stderr = real
+	if not ok then error(err, 0) end
+end
+
 local function with_ucihelper(fn)
 	local m = new_mock_uci()
 	local cmds = {}
@@ -392,6 +402,102 @@ return {
 					"learning off must not outlive the bridge that needed it")
 				assert_eq(db.network.openuf_brdev10, nil, "bridge gone")
 				assert_eq(db.network.openuf_vlan10, nil, "interface gone")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: the management bridge is pinned to the identity MAC",
+		fn = function()
+			-- openUF takes its MAC from lan_cpueth and its reported IP from the
+			-- bridge that port is enslaved to. On DSA those are different
+			-- netdevs with different MACs, so the AP announces one identity and
+			-- sources every frame from another -- and the gateway raises an IP
+			-- conflict between the device and itself.
+			with_ucihelper(function(db)
+				local c = ucihelper._uci.cursor()
+				c:set("network", "br_lan", "device")
+				c:set("network", "br_lan", "type", "bridge")
+				c:set("network", "br_lan", "name", "br-lan")
+				ucihelper._popen = function() return "../../virtual/net/br-lan" end
+				ucihelper._read_file = function(path)
+					if path:match("/wan/address")    then return "00:00:5e:00:53:01\n" end
+					if path:match("/br%-lan/address") then return "00:00:5e:00:53:02\n" end
+				end
+				local changed
+				silently(function()
+					changed = ucihelper.ensure_bridge_identity({net = {lan_cpueth = "wan"}})
+				end)
+				assert_true(changed, "reported a change")
+				assert_eq(db.network.br_lan.macaddr, "00:00:5e:00:53:01",
+					"the bridge now carries the MAC openUF identifies as")
+				assert_true(ucihelper._network_dirty, "and netifd must be told")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: a board whose port and bridge already agree is left alone",
+		fn = function()
+			-- Every swconfig board: eth1 and br-lan read the same address, which
+			-- is why this divergence went unnoticed until the first DSA board.
+			-- Acting there would rewrite UCI and bounce the network for nothing.
+			with_ucihelper(function(db, cmds)
+				local c = ucihelper._uci.cursor()
+				c:set("network", "br_lan", "device")
+				c:set("network", "br_lan", "type", "bridge")
+				c:set("network", "br_lan", "name", "br-lan")
+				ucihelper._popen = function() return "../../virtual/net/br-lan" end
+				ucihelper._read_file = function() return "00:00:5e:00:53:04\n" end
+				assert_false(ucihelper.ensure_bridge_identity({net = {lan_cpueth = "eth1"}}),
+					"nothing to reconcile")
+				assert_eq(db.network.br_lan.macaddr, nil, "no macaddr written")
+				assert_eq(#cmds, 0, "and no reload")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: pinning the bridge identity is idempotent",
+		fn = function()
+			-- Runs on every daemon start. A second pass must not re-dirty the
+			-- network and bounce the uplink the inform connection rides on.
+			with_ucihelper(function(db)
+				local c = ucihelper._uci.cursor()
+				c:set("network", "br_lan", "device")
+				c:set("network", "br_lan", "type", "bridge")
+				c:set("network", "br_lan", "name", "br-lan")
+				c:set("network", "br_lan", "macaddr", "00:00:5e:00:53:01")
+				ucihelper._popen = function() return "../../virtual/net/br-lan" end
+				ucihelper._read_file = function(path)
+					if path:match("/wan/address")     then return "00:00:5e:00:53:01\n" end
+					if path:match("/br%-lan/address") then return "00:00:5e:00:53:02\n" end
+				end
+				ucihelper._network_dirty = false
+				assert_false(ucihelper.ensure_bridge_identity({net = {lan_cpueth = "wan"}}),
+					"already pinned")
+				assert_false(ucihelper._network_dirty or false, "no reload requested")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: a port that carries its own address is never touched",
+		fn = function()
+			-- No bridge means no divergence to reconcile -- and no section to
+			-- write to. Guessing one would pin a MAC onto the wrong device.
+			with_ucihelper(function(db)
+				-- A bridge section and a MAC that DOES differ are both present:
+				-- the only thing stopping this from being written is that the
+				-- port has no master, so the test fails if that check is lost.
+				local c = ucihelper._uci.cursor()
+				c:set("network", "br_lan", "device")
+				c:set("network", "br_lan", "type", "bridge")
+				c:set("network", "br_lan", "name", "br-lan")
+				ucihelper._popen = function() return "" end
+				ucihelper._read_file = function(path)
+					if path:match("/wan/address")     then return "00:00:5e:00:53:01\n" end
+					if path:match("/br%-lan/address") then return "00:00:5e:00:53:02\n" end
+				end
+				assert_false(ucihelper.ensure_bridge_identity({net = {lan_cpueth = "wan"}}),
+					"nothing to do")
+				assert_eq(db.network.br_lan.macaddr, nil, "and nothing was pinned")
 			end)
 		end
 	},

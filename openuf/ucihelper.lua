@@ -724,6 +724,92 @@ function M.ensure_vlan_network(cpueth, vlan_id)
 	return section_name
 end
 
+-- ─── Bridge identity ─────────────────────────────────────────────────────────
+
+-- One netdev's MAC from sysfs, lowercased, or nil.
+local function mac_of(ifname)
+	local raw = ifname and M._read_file("/sys/class/net/" .. ifname .. "/address")
+	local mac = type(raw) == "string" and raw:match("(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)")
+	return mac and mac:lower() or nil
+end
+
+-- The bridge a netdev is enslaved to, or nil when it carries its own address.
+local function master_of(ifname)
+	local m = M._popen("readlink /sys/class/net/" .. tostring(ifname) .. "/master")
+	m = type(m) == "string" and m:match("([^/%s]+)%s*$") or nil
+	if m and m ~= "" and m ~= ifname then return m end
+	return nil
+end
+
+-- Give the management bridge the MAC openUF identifies as.
+--
+-- openUF takes its IDENTITY from `dev.conf.net.lan_cpueth` -- that netdev's MAC
+-- is what the controller keys the adopted device on, what lldpd advertises as
+-- the chassis id, and what every inform arrives under. It takes its reported
+-- IP from the same name, but `announce.get_ip` deliberately hops to the BRIDGE
+-- that port is enslaved to, because a bridge member carries no address.
+--
+-- MAC from the port, address from the bridge: fine as long as the two share a
+-- MAC, which on every swconfig board here they do (`eth1` and `br-lan` both
+-- read the same address, so the divergence never existed to be noticed). It is
+-- NOT true on DSA. There `lan_cpueth` names a socket -- `wan` on the AX3000T,
+-- whose MAC is board.json's `label_macaddr` -- while `br-lan` inherits the DSA
+-- conduit's (`eth0`). openUF then announces itself as 00:00:5e:00:53:01 while
+-- every frame it sources, and the ARP entry for the address it reports, is
+-- 00:00:5e:00:53:02. The gateway sees one device claiming the IP and a
+-- different one using it, and raises an IP conflict against a network that is
+-- in fact correctly configured. Confirmed on the wire 2026-09-12: a capture on
+-- `wan` shows 192.0.2.4 sending exclusively from the eth0 MAC, while
+-- `lldpd.config.cid_interface='wan'` advertises the other one.
+--
+-- Pinning the bridge's `macaddr` closes it, and is what a real UniFi AP looks
+-- like: one MAC for identity, LLDP and management traffic. Adoption is keyed
+-- on `lan_cpueth`'s MAC, which this does not touch, so the device record
+-- survives -- see _warn_identity_change for what changing THAT would cost.
+--
+-- Only ever acts when the two genuinely differ, so a board where they already
+-- agree (every swconfig one) is untouched and no reload is issued. Note that
+-- on a DHCP-addressed board the new L2 identity means a new lease and possibly
+-- a new address; openUF reports the change on the next inform and the adoption
+-- is unaffected, but that is why this is loud rather than silent.
+function M.ensure_bridge_identity(cfg)
+	local cpueth = cfg and cfg.net and cfg.net.lan_cpueth
+	local want = mac_of(cpueth)
+	if not want then return false end
+
+	local br = master_of(cpueth)
+	-- No bridge means the port holds the address itself: nothing diverges.
+	if not br then return false end
+	local have = mac_of(br)
+	if not have or have == want then return false end
+
+	local cursor = get_uci().cursor()
+	-- Found by the bridge's NAME, not a section name: it is the board's own
+	-- anonymous `network.@device[0]`, and openUF must not assume where it sits.
+	local sec
+	cursor:foreach("network", "device", function(s)
+		if s.name == br and s.type == "bridge" then sec = s[".name"] end
+	end)
+	if not sec then
+		io.stderr:write(("ucihelper: %s has MAC %s but openUF identifies as %s, and "
+			.. "there is no `config device` section for %s to pin it on -- the "
+			.. "controller will see an IP conflict against itself\n")
+			:format(br, have, want, br))
+		return false
+	end
+
+	if tostring(cursor:get("network", sec, "macaddr") or ""):lower() == want then
+		return false
+	end
+	cursor:set("network", sec, "macaddr", want)
+	cursor:commit("network")
+	io.stderr:write(("ucihelper: pinning %s to the identity MAC %s (was %s, from %s) "
+		.. "-- MAC and reported IP must belong to the same netdev or the gateway "
+		.. "reports an IP conflict\n"):format(br, want, have, cpueth))
+	M._network_dirty = true
+	return true
+end
+
 -- Delete the interface and bridge sections of every VLAN not in `wanted`
 -- (a set keyed by VLAN id). Only openUF's own sections are ever touched --
 -- same discipline as wlan_clear()'s openuf_ prefix rule.
