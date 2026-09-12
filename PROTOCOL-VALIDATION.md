@@ -1642,6 +1642,32 @@ listed in.
 Ports flagged `is_uplink: true` are skipped by the controller for client creation, since that
 port faces the controller's own network.
 
+**An uplink port must carry no `mac_table` at all — not even the gateway.** Reporting just
+the one MAC on the other end of the cable is tempting: openUF knows it (finding it is how the
+uplink socket is identified), a real UniFi gateway visibly does it on its own uplink port, and
+it would fill the Ports view's Connection column, which is otherwise blank or stuck on a
+retained "last seen device". It would also invert the topology map. The controller matches
+every MAC on a port against its adopted devices, and a port carrying exactly one known device
+files that device into this one's `downlink_table` (`wRSpUfdrmMXnppHBKZ`):
+
+```java
+bl9 = !is_uplink && device.isUplinkMac(neighbour);
+if (!bl9) downlink_table.add(neighbour, port);
+```
+
+The `isUplinkMac` guard that would prevent it is ANDed with `!is_uplink`, so it disables
+itself on exactly the port where it is needed — the gateway would hang beneath every AP that
+reported it. A real gateway escapes this because its upstream is the ISP's router, which is
+not an adopted device and never reaches that branch; openUF cannot tell the two cases apart
+from the device. Verified on the live site: with both APs silent on their uplinks, each AP's
+`downlink_table` is empty and the gateway's holds both APs, which is the correct shape.
+
+A blank Connection column on an uplink port is therefore intended. `last_connection` is only
+recomputed when a port reports exactly one MAC (`wefewPevorbc`: `if (list.size() > 1) return
+existing`), and is never touched at all when the port sends no `mac_table` field — which is
+why a stale value there persists until cleared with the Ports view's **Clear Last Seen
+Device**.
+
 Two exclusion filters prevent double-reporting: the device's **own** MACs, and any MAC
 currently associated as a wireless station — a wireless client bridged into `br-lan` genuinely
 appears in the bridge FDB too.

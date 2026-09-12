@@ -1444,8 +1444,10 @@ function M.build_json(st, cfg, ufhw)
 			-- Hosts from the switch's own ARL table -- which socket each MAC
 			-- sits on, the one thing the bridge FDB cannot say. Suppressed on
 			-- the uplink (that socket faces the controller's network: every
-			-- host on the far side would be reported as plugged into this AP)
-			-- and on any socket whose pvid is not the management VLAN -- the
+			-- host on the far side would be reported as plugged into this AP,
+			-- and see the netdev branch below for why not even the gateway
+			-- alone may be reported there) and on any socket whose pvid is
+			-- not the management VLAN -- the
 			-- Archer C5's WAN socket is live but stranded on VLAN 2, and a
 			-- host there is not reachable on the LAN it would be listed in.
 			if not is_uplink and (link.pvid == nil or link.pvid == mgmt_vlan) then
@@ -1497,6 +1499,26 @@ function M.build_json(st, cfg, ufhw)
 			-- ports -- the controller itself skips client creation on ports
 			-- flagged is_uplink, since that port faces the controller's own
 			-- network, not an end host.
+			--
+			-- Do NOT be tempted to report just the gateway here, however
+			-- reasonable "the device on the other end of this cable" sounds,
+			-- and however visibly a real UniFi gateway does it on its own
+			-- uplink port. openUF knows which MAC that is -- finding it is how
+			-- the uplink socket was identified in the first place -- and
+			-- reporting it would populate the Ports view's Connection column.
+			-- It would also invert the topology. The controller matches every
+			-- MAC on a port against its adopted devices, and a port carrying
+			-- exactly one known device files that device in this one's
+			-- `downlink_table`; the guard that would stop it is
+			--     bl9 = !is_uplink && isUplinkMac(neighbour)
+			-- which disables itself on precisely the port where it is needed.
+			-- The gateway would hang beneath every AP that reported it.
+			--
+			-- A real gateway gets away with it because its upstream is the
+			-- ISP's router, which is not an adopted device and so never
+			-- reaches that branch. openUF cannot tell the two cases apart
+			-- from the device, and the failure mode is a wrong map of the
+			-- network, so it reports nothing on the uplink at all.
 			if not entry.is_uplink then
 				-- This socket's bridge, which is the uplink's for every socket
 				-- openUF has not moved. bridge_of is TTL-cached and
