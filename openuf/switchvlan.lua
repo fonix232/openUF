@@ -14,20 +14,25 @@
 
 	=== SCOPE AND LIMITS -- read before extending ===
 
-	**swconfig boards only.** All three boards this project targets (TP-Link
-	WDR3500, Archer C5 v1, WR1043ND v2) are ath79/swconfig, and both modelmaps
-	already carry the swconfig physical-port map this needs. Modern OpenWrt
-	(21.02+) is DSA, where per-port VLAN is `config bridge-vlan` instead --
-	detect_backend() recognizes DSA and refuses, rather than emitting
-	unverifiable config. There is no DSA board here to verify against.
+	**Two backends, and they are not equally proven.** The ath79/swconfig boards
+	(TP-Link WDR3500, Archer C5 v1, WR1043ND v2) get `switch_vlan` sections and
+	need a modelmap physical-port map. Modern OpenWrt (21.02+) is DSA, where
+	there is no switch table to write: M.dsa_apply moves the assigned socket out
+	of br-lan and into that VLAN's bridge instead. `config bridge-vlan` is
+	deliberately NOT used -- see PROTOCOL-VALIDATION.md for the netifd reasons.
 
-	**Not verified against real switch hardware.** The validation container has
-	no switch, no swconfig binary, and only a mock UCI. What is verified: the
-	wire format (live, against a real controller), the parse layer, and the
-	UCI state this module produces (unit tests with a mock cursor). What is
-	NOT: that the generated `switch_vlan` sections actually program a switch
-	ASIC, that traffic lands on the right VLAN, or that the reload command
-	behaves on real ath79. Same honesty as bcfilter.lua's nftables caveat.
+	**swconfig is not verified against real switch hardware.** The validation
+	container has no switch, no swconfig binary, and only a mock UCI. What is
+	verified there: the wire format (live, against a real controller), the parse
+	layer, and the UCI state this module produces (unit tests with a mock
+	cursor). What is NOT: that the generated `switch_vlan` sections actually
+	program a switch ASIC, that traffic lands on the right VLAN, or that the
+	reload command behaves on real ath79. Same honesty as bcfilter.lua's
+	nftables caveat.
+
+	**DSA is verified on real hardware** -- a Xiaomi AX3000T against a real UCG
+	Ultra, including the one-address-table hazard that makes `learning '0'`
+	mandatory and the nft tap that gives the reporting back.
 
 	**Reversibility.** Assigning a port to a VLAN requires removing it from the
 	stock VLAN's port list, so unlike the wireless side this module cannot stay
@@ -826,10 +831,12 @@ function M.dsa_apply(sw, cfg, st, uplink_ifname)
 	-- both, which is what makes this so hard to see: every counter and every
 	-- log line says the port move worked.
 	--
-	-- Cost: the socket's hosts stop appearing in `bridge fdb show dev <sock>`,
-	-- so inform's port_table no longer reports who is behind this port and the
-	-- controller stops crediting the client to it. Connectivity is worth more
-	-- than an attribution row, and only assigned sockets pay it.
+	-- Cost: the socket's hosts stop appearing in `bridge fdb show dev <sock>`.
+	-- That was priced here as "an attribution row" and it is not -- the bridge
+	-- FDB is the ONLY wired-host source on a DSA board, so the port reports no
+	-- clients at all and the controller credits them to the gateway. Paid for
+	-- by M.reconcile_mac_taps below, which observes the socket where the FDB
+	-- no longer can. Only assigned sockets need it.
 	--
 	-- NOTE a live reassignment still converges slowly: an entry learned while
 	-- the socket was in br-lan is already in the ASIC, cannot be deleted

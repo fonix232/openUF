@@ -696,15 +696,64 @@ With learning off: DISCOVER → OFFER → REQUEST → ACK in 2 ms.
 
 Two consequences worth knowing:
 
-- The socket's hosts stop showing up in `bridge fdb show dev <socket>`, so `port_table` no
-  longer reports who is behind that port and the controller stops crediting the client to
-  it. Only assigned sockets pay this, and connectivity is worth more than an attribution row.
+- The socket's hosts stop showing up in `bridge fdb show dev <socket>`, which is where every
+  wired-host answer comes from — so `port_table` publishes an empty `mac_table` for that
+  port and the controller credits the client to whoever else saw the MAC, which in practice
+  is the gateway. **openUF works around this with an nftables tap** (below); you do not have
+  to do anything, but it is why a `bridge openuf_learn` table exists on a board with an
+  assigned socket.
 - **A live reassignment converges slowly.** An entry the ASIC learned while the socket was
   still in `br-lan` is already there, cannot be deleted (`bridge fdb del … self` answers
   `No such file or directory`, `bridge fdb flush` answers `Not supported`) and does not
   clear on a link bounce. It ages out on its own — measured at ~140 s — and the port works
   from that moment. If a freshly moved port looks dead, wait three minutes before
   suspecting anything else.
+
+### Where the hosts behind an assigned socket come from
+
+With the FDB empty for that socket, openUF observes it somewhere else: a bridge-family
+nftables rule that files each frame's source address into a dynamic set.
+
+```
+# nft list table bridge openuf_learn
+table bridge openuf_learn {
+	set portmacs {
+		type ifname . ether_addr
+		flags dynamic,timeout
+		timeout 5m
+		elements = { "lan2" . 00:00:5e:00:53:07 expires 4m34s10ms }
+	}
+	chain learn {
+		type filter hook prerouting priority dstnat; policy accept;
+		iifname "lan2" update @portmacs { iifname . ether saddr }
+	}
+}
+```
+
+It works for the same reason the original bug existed: the socket is in a bridge whose other
+member is a software device, so it cannot be hardware-offloaded and **every one of its
+frames reaches the CPU**. The rule has no verdict and the chain's policy is `accept` — it
+observes and never decides. The 5 minute set timeout is the bridge's own FDB ageing time, so
+a host disappears from the report exactly as long after unplugging as it used to.
+
+One set and one rule cover every assigned socket, and the table is rebuilt from scratch
+whenever an assignment changes, torn down when the last one goes, and reinstalled at openUF
+startup (nftables keeps nothing across a reboot). The bridge FDB always wins where it has an
+answer — the tap is a fallback for a socket the kernel cannot speak for, never a second
+opinion about one it can.
+
+A quiet device is reported a little later than it used to be: the FDB knew a host the
+instant the bridge saw a frame from it, and so does the tap, but a device that transmits
+once a minute is now invisible for up to that long after a restart. Nothing that talks more
+often than the 5 minute timeout is affected.
+
+**Known limitation — the controller labels the client with the wrong network.** With the
+client credited to the AP's port, the controller classifies it into the *AP's* network
+rather than the port's, so an IoT device on an assigned socket is listed under the
+management LAN in Client Devices even though its IP and the Ports view's Native VLAN column
+are both correct. `port_table[]` has no field to say otherwise. Before this, the gateway
+reported the client and the label was right while the port, the link speed and the device
+were all wrong — so this is a trade, not a clean win. Verified live on a UCG Ultra.
 
 > Some attached devices still need a power cycle afterwards. A Trådfri hub put through
 > several link bounces during this investigation stopped transmitting entirely — zero

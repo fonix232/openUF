@@ -1038,13 +1038,109 @@ uplink. `strings /sbin/netifd` carries `brport/learning`, and the persistence wa
 rather than assumed: forcing `bridge link set dev lan2 learning on` and then reloading the
 network put it back to `0`, while the unassigned `lan4` stayed at `1`.
 
-Two costs, both accepted deliberately:
+Two costs. One is paid; the other was mispriced and is addressed below.
 
-- the socket's hosts leave `bridge fdb show dev <socket>`, so `port_table` stops reporting
-  who is behind an assigned port;
 - an entry the ASIC learned *before* the move cannot be deleted (`bridge fdb del … self` →
   `No such file or directory`, `bridge fdb flush` → `Not supported`) and survives a link
   bounce. It ages out in ~140 s, and the port works from that moment.
+- the socket's hosts leave `bridge fdb show dev <socket>`, so `port_table` stops reporting
+  who is behind an assigned port. Recorded at the time as costing "an attribution row".
+
+### The attribution row was a client
+
+**Found 2026-09-12 on the AX3000T**, one day after the fix above. The wired IoT device on
+the assigned socket was listed in Client Devices under **Cloud Gateway Ultra** at the
+gateway's **GbE**, instead of under this AP's **Port 2** at the **FE** that socket had
+actually negotiated. `bridge fdb show dev lan2` returned nothing at all, against 2 entries
+for `lan4` and 22 for the uplink, both of which still have learning on.
+
+The bridge FDB is not one of several wired-host sources — it is the only one on a DSA board.
+Empty it for a socket and that port reports no clients, the controller falls back to whoever
+else saw the MAC, and the gateway sees everything.
+
+A second, independent defect surfaced while tracing it: `port_table` resolved the *uplink's*
+bridge once and asked it about every socket, so a socket living in any other bridge reported
+nothing even with learning on. Masked here by `learning '0'`; real on its own.
+
+#### Why `learning '1'` cannot come back
+
+| Attempt | Outcome |
+| --- | --- |
+| Learn in software, not in the ASIC | One `BR_LEARNING` flag per bridge port, mirrored into the driver by DSA's `port_bridge_flags`. No split knob exists. |
+| Flush the offending ASIC entry | Measured above: ENOENT / EOPNOTSUPP / survives a link bounce, and re-learned on the client's next frame. |
+| `locked on` + `mab on` | Locked FDB entries are deliberately *not* pushed to switchdev — the exact split wanted — but `locked` blocks the client until an authenticator authorises it, and authorising means a **static** entry, which *is* offloaded. mt7530 does not offer `BR_PORT_LOCKED` either. |
+| Per-bridge FID | `mt7530_port_set_vlan_unaware()` puts VLAN-unaware bridges in transparent/fallback mode on VID 0, so every VLAN-unaware bridge shares one learning domain no matter which Linux bridge owns the port. That *is* the measured failure. |
+
+**The one that would work, and why openUF does not do it.** `vlan_filtering '1'` on `br-lan`
+plus `config bridge-vlan` makes MT7531 VLAN-aware; `mt7530_hw_vlan_add()` sets `IVL_MAC`
+(independent VLAN learning), so the client's entry would be keyed per-VLAN and the uplink
+would be a member of that VLAN — the reply gets forwarded in hardware instead of dropped.
+Learning stays on, attribution returns through the ordinary FDB path, and the assigned
+socket gains hardware offload it does not have today.
+
+It is blocked on **netifd**, not on the switch:
+
+- netifd's `bridge_enable_member()` deletes the auto-added VLAN 1 from *every* member as
+  soon as the bridge has any VLANs, and a member with no explicit `bridge-vlan` entry gets
+  no VLAN at all. Every `br-lan` port would need an explicit entry — including the wifi
+  VAPs, whose ifnames are generated at runtime and recreated by `wpad` on each wireless
+  reload. One missed entry silently blacks out an SSID or the management VLAN.
+- OpenWrt [#16314](https://github.com/openwrt/openwrt/issues/16314) is exactly that failing
+  at runtime: enabling VLAN filtering does not add WLAN interfaces to the bridge; the
+  workarounds are a reboot or a manual `bridge vlan add`. openUF applies controller pushes
+  at runtime and never reboots.
+- OpenWrt [#9089](https://github.com/openwrt/openwrt/issues/9089): bridge-vlan ports are not
+  applied when the bridge was previously empty; a second netifd reload is needed.
+- `wan.<vid>` would have to go — 8021q's `vlan_do_receive()` runs before the bridge's
+  `rx_handler`, so `wan.10` swallows every VLAN-10 frame before `br-lan` could see it, and
+  the uplink cannot be a tagged VLAN member while that sub-device exists. That drags the
+  working, verified tagged-SSID path into the same change.
+
+Right architecture, wrong tool for a controller-driven runtime config generator on this
+netifd. Recorded here so it is not re-derived.
+
+#### What openUF does instead
+
+A bridge-family nftables tap on the moved socket, filing `ether saddr` into a dynamic set
+that `sysinfo.mac_table` reads when the FDB has nothing. It works for the same reason the
+original bug existed: the socket's bridge holds a software device, so it cannot be
+hardware-offloaded and every frame on that socket reaches the CPU.
+
+```
+table bridge openuf_learn {
+	set portmacs {
+		type ifname . ether_addr
+		flags dynamic,timeout
+		timeout 5m
+		elements = { "lan2" . 00:00:5e:00:53:07 expires 4m34s10ms }
+	}
+	chain learn {
+		type filter hook prerouting priority dstnat; policy accept;
+		iifname "lan2" update @portmacs { iifname . ether saddr }
+	}
+}
+```
+
+Verified on the board (nftables v1.1.6): `nft --check` on the generated commands first, then
+installed for real, where the tap picked up the wired IoT device's address on the assigned
+socket and the controller moved it to **Office AP Port 2 / FE**. Set timeout is 5 minutes to
+match the bridge's own FDB ageing, so a host expires exactly as it used to. The FDB always
+wins where it has an answer; the tap is only consulted for a socket whose bridge is not the
+uplink's, so no other board ever forks `nft`.
+
+**One inaccuracy traded for another, and it is not a clean win.** With the client credited
+to the AP's port, the controller classifies it into the *AP's* network rather than the
+port's: the IoT device is listed under the management LAN in Client Devices even though its
+IP (`192.0.2.20`-equivalent, on the IoT subnet) and the Ports view's own **Native VLAN =
+IoT** column are both correct. `port_table[]` carries no field to say otherwise — the
+controller already has the right IP from the gateway and labels it anyway, so supplying one
+would not help. Before this, the gateway reported the client: the network label was right
+while the port, the link speed and the reporting device were all wrong.
+
+Note this does **not** contradict the swconfig rule that a socket outside the management
+VLAN reports no hosts. There, the Archer C5's WAN socket sits on a VLAN openUF does not
+carry, with its CPU port down — the host genuinely is not reachable on the LAN it would be
+listed in. Here openUF bridges the VLAN itself and the host is reachable on it.
 
 ### Identity and reported address must come off the same netdev
 
