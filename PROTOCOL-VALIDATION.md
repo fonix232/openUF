@@ -1128,19 +1128,51 @@ match the bridge's own FDB ageing, so a host expires exactly as it used to. The 
 wins where it has an answer; the tap is only consulted for a socket whose bridge is not the
 uplink's, so no other board ever forks `nft`.
 
-**One inaccuracy traded for another, and it is not a clean win.** With the client credited
-to the AP's port, the controller classifies it into the *AP's* network rather than the
-port's: the IoT device is listed under the management LAN in Client Devices even though its
-IP (`192.0.2.20`-equivalent, on the IoT subnet) and the Ports view's own **Native VLAN =
-IoT** column are both correct. `port_table[]` carries no field to say otherwise — the
-controller already has the right IP from the gateway and labels it anyway, so supplying one
-would not help. Before this, the gateway reported the client: the network label was right
-while the port, the link speed and the reporting device were all wrong.
+#### `mac_table[].vlan` — how a wired client gets its network
+
+Reporting the host was not enough on its own. Credited to the AP's port, the client was
+listed under the **management LAN** even though its IP was on the IoT subnet and the Ports
+view's own **Native VLAN = IoT** column agreed. Supplying `mac_table[].ip` did not move it,
+and neither did a fresh association — so it is not the port's configured native VLAN and not
+the IP, both of which the controller already held.
+
+Read out of the 10.6.101 controller (`UniFi/lib/internal/internal-dependencies.jar`,
+decompiled with CFR). The wired-client processor iterates the site's layer-2 networks, and
+per network keeps only the reported hosts whose `vlan` matches:
+
+```java
+// com.ubnt.service.devmgr.isqI
+for (VpKpWhVyVFmo host : list) {
+    if (network.getVlan() != host.getInt("vlan", 1)) continue;
+    ...
+}
+```
+
+**Defaulting to 1.** Omit `vlan` and every reported host claims the untagged network, which
+is exactly what was seen. Two corroborating sites in the same build: the mac_table dedup key
+is `mac` .. `vlan` (`wRSpUfdrmMXnppHBKZ`), so one host reachable on two VLANs is two rows
+rather than one; and the wired base class copies `vlan` from the report into the client
+record, dropping it when it is 1 (`IChoNhjdVpeiMpl`, `QobJuWrHDZesfSeRYc.erGiyFkTC`).
+
+openUF reads the VLAN off the bridge the socket sits in — `br-openuf<vid>` names its own
+VLAN — rather than plumbing it down from the `switch.*` push, so it cannot disagree with
+where the frames actually go, and leaves it nil for the management VLAN.
+
+With `vlan` and the tap's address both present, the live record reads
+`last_connection_network_name: "IoT"`, `vlan: 10`, `last_uplink_name: "Office AP"`,
+`last_uplink_remote_port: 2`, at **FE** — every field correct, on a UCG Ultra running
+Network 10.6.101.
 
 Note this does **not** contradict the swconfig rule that a socket outside the management
 VLAN reports no hosts. There, the Archer C5's WAN socket sits on a VLAN openUF does not
 carry, with its CPU port down — the host genuinely is not reachable on the LAN it would be
 listed in. Here openUF bridges the VLAN itself and the host is reachable on it.
+
+**Also found and not implemented: `port_table[].mac_table_ipv6`.** The same processor reads
+it alongside `mac_table`, mapping each entry's `ip` into the client's `ipv6_addresses`, and
+requests it only from devices whose model declares `supportIpv6ClientsReporting()`. openUF
+declares no such capability and sends no such list, so this is recorded rather than
+guessed at.
 
 ### Identity and reported address must come off the same netdev
 
@@ -1591,7 +1623,10 @@ uplink at GbE with no `mac_table`, port 2 at **FE** with its host, port 3 discon
 worth noting — the netdev path reported two different negotiated speeds on one board, which
 is exactly what the swconfig CPU-port path could never do.
 
-**Non-uplink ports additionally carry `mac_table[]`** — `{mac, ip, hostname, age, uptime}`,
+**Non-uplink ports additionally carry `mac_table[]`** — `{mac, ip, hostname, age, uptime,
+vlan}`, where `vlan` is present only for a socket openUF has assigned to a VLAN and is what
+places the client on the right *network* (see the `isqI` selection rule above; absent means
+1),
 joined with `/proc/net/arp` for IPs and `/tmp/dhcp.leases` when present for hostnames
 (optional — an AP is usually not the DHCP server; `hostname` stays absent rather than
 invented). The host list itself is per-socket from the ARL table

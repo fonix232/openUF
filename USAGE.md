@@ -747,13 +747,26 @@ instant the bridge saw a frame from it, and so does the tap, but a device that t
 once a minute is now invisible for up to that long after a restart. Nothing that talks more
 often than the 5 minute timeout is affected.
 
-**Known limitation — the controller labels the client with the wrong network.** With the
-client credited to the AP's port, the controller classifies it into the *AP's* network
-rather than the port's, so an IoT device on an assigned socket is listed under the
-management LAN in Client Devices even though its IP and the Ports view's Native VLAN column
-are both correct. `port_table[]` has no field to say otherwise. Before this, the gateway
-reported the client and the label was right while the port, the link speed and the device
-were all wrong — so this is a trade, not a clean win. Verified live on a UCG Ultra.
+### Why the tap also collects addresses
+
+Reporting *who* is behind the socket is only half of it. The controller decides which
+**network** a wired client belongs to by walking the site's layer-2 networks and keeping the
+client only where the network's VLAN id matches the `vlan` on the reported row, defaulting
+to 1. It does not use the port's configured native VLAN for this, and it does not use the
+IP it already holds from the gateway.
+
+So openUF reports two things it could not otherwise know for an assigned socket:
+
+- **`mac_table[].vlan`** — read off the bridge the socket was moved into (`br-openuf<vid>`
+  names its own VLAN), omitted for the management VLAN since the controller drops a `vlan`
+  of 1 on arrival.
+- **`mac_table[].ip`** — from the tap's `portips` set. The AP holds no address on that VLAN,
+  so `/proc/net/arp` can never answer for a host behind the socket; without this the client
+  is listed with no address of its own.
+
+With both, an IoT device on an assigned socket shows up under the right port, at the right
+link speed, with the right address, on the right network. Verified live against a UCG Ultra
+running Network 10.6.
 
 > Some attached devices still need a power cycle afterwards. A Trådfri hub put through
 > several link bounces during this investigation stopped transmitting entirely — zero
