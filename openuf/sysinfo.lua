@@ -897,6 +897,16 @@ local function uplink_memo(key, fn)
 	return value
 end
 
+-- Drop everything the TTL cache holds, for the one event the TTL cannot cover:
+-- openUF itself moving a socket between bridges. The 300 s here is tuned for
+-- "a human moved a cable", which nobody does twice a minute -- but a controller
+-- push that reassigns a port VLAN rewrites the answer to bridge_of() in the
+-- same second, and a port reporting against the bridge it was in five minutes
+-- ago reports no hosts at all. Called on the config path, not the heartbeat.
+function M.forget_uplink_cache()
+	M._uplink_cache = {}
+end
+
 -- The MAC of the default gateway: its IP from the default route, then that
 -- IP's hardware address from the kernel's ARP cache. Lowercased. nil whenever
 -- any link of the chain is missing -- no default route, no ARP entry yet.

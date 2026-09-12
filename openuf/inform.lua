@@ -1345,9 +1345,19 @@ function M.build_json(st, cfg, ufhw)
 	-- a mac_table of the entire far side -- worse than the static fallback.
 	local uplink_ifname = nil
 	-- Kept in scope for the port loop: the FDB dump uplink_bridge_port already
-	-- takes of this bridge carries every socket's hosts too, so each socket's
-	-- mac_table below is served from it rather than forking a `bridge fdb show
-	-- dev <socket>` of its own.
+	-- takes of this bridge carries the hosts of every socket ENSLAVED TO IT
+	-- too, so those sockets are served from it rather than forking a
+	-- `bridge fdb show dev <socket>` of its own.
+	--
+	-- "Enslaved to it" is the load-bearing half, and this was read as "every
+	-- socket" -- which is true right up until openUF moves one. A socket the
+	-- controller assigns to a port VLAN is moved out of the management bridge
+	-- into br-openuf<vid> (switchvlan.dsa_apply), and asking the UPLINK
+	-- bridge's FDB about it finds nothing, because it is not a port of that
+	-- bridge any more. The socket then published an empty mac_table and the
+	-- controller credited its client to whatever else had seen the MAC -- the
+	-- gateway, which sees everything. Each socket is asked about its own
+	-- bridge in the port loop below.
 	local uplink_bridge = nil
 	if not next(sw.ports) then
 		local lan = cfg and cfg.net and cfg.net.lan_cpueth
@@ -1467,8 +1477,22 @@ function M.build_json(st, cfg, ufhw)
 			-- flagged is_uplink, since that port faces the controller's own
 			-- network, not an end host.
 			if not entry.is_uplink then
+				-- This socket's bridge, which is the uplink's for every socket
+				-- openUF has not moved. bridge_of is TTL-cached and
+				-- bridge_fdb_ports is memoized per bridge NAME for the pass,
+				-- so the common case resolves to the same string and reuses
+				-- the dump already taken -- no extra fork. A socket in
+				-- br-openuf<vid> costs one dump of that bridge instead.
+				--
+				-- nil (not a bridge port at all) is passed through rather than
+				-- papered over with the uplink's: mac_table then forks
+				-- `bridge fdb show dev <socket>`, which is the right answer
+				-- for an unbridged socket and an empty one for a bridged
+				-- socket looked up in the wrong bridge.
+				local ok_sb, sock_bridge = pcall(M._sysinfo.bridge_of, p.ifname)
 				entry.mac_table = arr(_filter_hosts(
-					M._sysinfo.mac_table, p.ifname, uplink_bridge, self_macs, station_macs))
+					M._sysinfo.mac_table, p.ifname, ok_sb and sock_bridge or nil,
+					self_macs, station_macs))
 			end
 		end
 		port_table[#port_table + 1] = entry
@@ -2849,6 +2873,10 @@ function M.handle_response(json_str, st, cfg)
 						M._switchvlan.apply(sw, cfg, st, wireless_vlans,
 							uplink_phys, uplink_ifname)
 					end
+					-- Either branch may have moved a socket into or out of a
+					-- VLAN bridge, which is the one thing bridge_of's 300 s TTL
+					-- cannot notice on its own.
+					M._sysinfo.forget_uplink_cache()
 				end)
 			end
 		end

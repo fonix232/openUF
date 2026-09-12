@@ -219,6 +219,9 @@ local DSA_CFG = {
 -- build() for a DSA board: no swconfig output at all (there is no such
 -- binary), so everything comes from sysfs per socket plus the bridge FDB.
 -- opts.fdb overrides the captured `bridge fdb show br br-lan`.
+-- opts.master maps an ifname to the bridge it is enslaved to, for the one case
+-- where they are not all in br-lan: a socket openUF has moved into a VLAN
+-- bridge. opts.fdb_by_br gives that bridge its own FDB dump.
 -- Commands the last build_dsa() run forked, by kind. Lets a test assert on the
 -- COST of a payload, not only its content -- which is the only way to pin that
 -- build_json actually threads the shared FDB dump down to the port loop.
@@ -226,7 +229,7 @@ local dsa_forks = {}
 
 local function build_dsa(opts)
 	opts = opts or {}
-	dsa_forks = {fdb_br = 0, fdb_dev = 0, uptime = 0}
+	dsa_forks = {fdb_br = 0, fdb_dev = 0, uptime = 0, fdb_br_names = {}}
 	inject_sysinfo(false, false, false, false)
 	local base_read = inform._sysinfo._read_file
 	local base_cmd  = inform._sysinfo._run_cmd
@@ -240,12 +243,20 @@ local function build_dsa(opts)
 		if cmd:find("ip route") then
 			return "default via 192.168.200.1 dev br-lan \n"
 		end
+		local rl = cmd:match("readlink /sys/class/net/(%S+)/master")
+		if rl then
+			local br = (opts.master or {})[rl] or "br-lan"
+			return "../../../../../../../../virtual/net/" .. br .. "\n"
+		end
 		if cmd:find("readlink") then
 			return "../../../../../../../../virtual/net/br-lan\n"
 		end
 		local fdb = opts.fdb or fixture("bridge_fdb_br_dsa.txt")
-		if cmd:find("bridge fdb show br", 1, true) then
+		local br = cmd:match("bridge fdb show br (%S+)")
+		if br then
 			dsa_forks.fdb_br = dsa_forks.fdb_br + 1
+			dsa_forks.fdb_br_names[br] = (dsa_forks.fdb_br_names[br] or 0) + 1
+			if br ~= "br-lan" then return (opts.fdb_by_br or {})[br] or "" end
 			return fdb
 		end
 		-- `bridge fdb show dev <socket>`: on DSA each socket is its own
@@ -1617,6 +1628,38 @@ return {
 			assert_eq(#p[3].mac_table, 1, "the host plugged into lan3")
 			assert_eq(p[3].mac_table[1].mac, "aa:bb:cc:dd:ee:01", "its mac")
 			assert_eq(#p[2].mac_table, 0, "and nothing on the empty socket")
+		end
+	},
+	{
+		name = "inform json: a socket moved to a VLAN bridge still reports its hosts",
+		fn = function()
+			-- The socket the controller assigned to a port VLAN is not a port
+			-- of the management bridge any more -- switchvlan.dsa_apply moved
+			-- it into br-openuf<vid>. Asking the uplink bridge about it (which
+			-- is what the port loop used to do for EVERY socket) finds nothing,
+			-- the port publishes an empty mac_table, and the controller credits
+			-- the client to the gateway instead of to this AP's port 2.
+			local d = build_dsa({
+				master   = {lan2 = "br-openuf10"},
+				fdb_by_br = {["br-openuf10"] =
+					"00:00:5e:00:53:07 dev lan2 master br-openuf10 \n"},
+				fdb = fixture("bridge_fdb_br_dsa.txt")
+					.. "00:00:5e:00:53:08 dev lan3 master br-lan \n",
+			})
+			local p = by_idx(d.port_table)
+			assert_eq(#p[2].mac_table, 1, "the host behind the moved socket")
+			assert_eq(p[2].mac_table[1].mac, "00:00:5e:00:53:07", "its mac")
+			-- The sockets still in the management bridge are unchanged, and
+			-- the uplink question is still answered from that bridge's dump.
+			assert_eq(#p[3].mac_table, 1, "a socket still in br-lan reports as before")
+			assert_eq(p[3].mac_table[1].mac, "00:00:5e:00:53:08", "its mac")
+			assert_true(p[1].is_uplink, "and the uplink is still detected")
+			-- One dump per BRIDGE, not one per socket: three sockets live in
+			-- br-lan and share its dump, the fourth costs one dump of its own.
+			assert_eq(dsa_forks.fdb_br, 2, "one FDB dump per distinct bridge")
+			assert_eq(dsa_forks.fdb_br_names["br-lan"], 1, "br-lan dumped once")
+			assert_eq(dsa_forks.fdb_br_names["br-openuf10"], 1, "the VLAN bridge once")
+			assert_eq(dsa_forks.fdb_dev, 0, "and still no per-socket fork")
 		end
 	},
 	{
