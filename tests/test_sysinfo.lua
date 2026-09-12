@@ -309,6 +309,86 @@ return {
 		end
 	},
 	{
+		name = "sysinfo: nft_tap_macs() buckets the learning tap's set by socket",
+		fn = function()
+			-- Fixture is the verbatim output of `nft list set` on the real
+			-- board (nftables v1.1.6), not a hand-written approximation --
+			-- the continuation-line indentation and the `expires` suffix are
+			-- exactly what the parser has to survive.
+			with_fixtures({},
+				{["nft list set"] = fixture("nft_list_set_openuf_learn.txt")},
+				function()
+					local by_port = sysinfo.nft_tap_macs()
+					assert_eq(#by_port["lan2"], 2, "two hosts seen on lan2")
+					assert_eq(by_port["lan2"][1], "00:00:5e:00:53:07", "sorted, first")
+					assert_eq(by_port["lan2"][2], "00:00:5e:00:53:09", "sorted, second")
+					assert_eq(#by_port["lan3"], 1, "one on lan3")
+					assert_eq(by_port["lan3"][1], "00:00:5e:00:53:08", "its mac")
+					-- The set's own `type ifname . ether_addr` line sits right
+					-- above the elements and would be a tempting false match
+					-- for a looser pattern.
+					assert_true(by_port["ether_addr"] == nil, "the type line is not an element")
+				end
+			)
+		end
+	},
+	{
+		name = "sysinfo: nft_tap_macs() is empty when no tap is installed",
+		fn = function()
+			-- `nft list set` on a missing table writes to stderr and prints
+			-- nothing, which _run_cmd returns as "".
+			with_fixtures({}, {["nft list set"] = ""}, function()
+				assert_eq(next(sysinfo.nft_tap_macs()), nil, "no tap, no hosts")
+			end)
+		end
+	},
+	{
+		name = "sysinfo: mac_table() falls back to the tap only when asked, and only when the FDB is silent",
+		fn = function()
+			sysinfo._mac_first_seen = {}
+			with_fixtures(
+				{["/proc/net/arp"] = fixture("proc_net_arp.txt")},
+				{
+					["bridge fdb show"] = "",
+					["nft list set"] = fixture("nft_list_set_openuf_learn.txt"),
+				},
+				function()
+					-- Off by default: a board with no moved socket must never
+					-- fork `nft`, so the fallback is opt-in per socket.
+					assert_eq(#sysinfo.mac_table("lan2"), 0, "no tap without allow_tap")
+					local hosts = sysinfo.mac_table("lan2", nil, true)
+					assert_eq(#hosts, 2, "the tap's hosts for this socket")
+					assert_eq(hosts[1].mac, "00:00:5e:00:53:07", "first mac")
+					-- Same row shape as the FDB path: the ARP join and the
+					-- uptime bookkeeping are shared, not reimplemented.
+					assert_eq(hosts[1].age, 0, "age matches the FDB source's contract")
+					assert_not_nil(hosts[1].uptime, "and uptime is filled in")
+				end
+			)
+		end
+	},
+	{
+		name = "sysinfo: mac_table() prefers the FDB over the tap",
+		fn = function()
+			-- The tap is a fallback for a socket the kernel cannot answer for,
+			-- never a second opinion about one it can. If both are populated
+			-- the FDB wins, or a socket that regained learning would report
+			-- whatever the tap had not expired yet.
+			sysinfo._mac_first_seen = {}
+			with_fixtures({},
+				{
+					["bridge fdb show"] = "00:00:5e:00:53:0b dev lan2 master br-lan \n",
+					["nft list set"] = fixture("nft_list_set_openuf_learn.txt"),
+				},
+				function()
+					local hosts = sysinfo.mac_table("lan2", nil, true)
+					assert_eq(#hosts, 1, "the FDB's answer, not the tap's two")
+					assert_eq(hosts[1].mac, "00:00:5e:00:53:0b", "from the FDB")
+				end
+			)
+		end
+	},
+	{
 		name = "sysinfo: mac_table() returns empty table for nil ifname",
 		fn = function()
 			with_fixtures({}, {}, function()

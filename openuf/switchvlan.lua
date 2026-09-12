@@ -864,6 +864,99 @@ function M.dsa_apply(sw, cfg, st, uplink_ifname)
 	if not changed then return false end
 	cursor:commit("network")
 	M._exec("/etc/init.d/network reload 2>/dev/null")
+	-- After the commit, so tapped_sockets reads what was just written.
+	M.reconcile_mac_taps(cursor)
+	return true
+end
+
+-- === Getting the hosts back that `learning '0'` took away ==================
+--
+-- dsa_apply has to turn MAC learning off on every socket it moves into a VLAN
+-- bridge, or the ASIC hardware-drops the replies (the measurement is in the
+-- comment above). The bill for that arrives in the inform payload: the socket's
+-- hosts vanish from `bridge fdb`, port_table publishes an empty mac_table, and
+-- the controller credits the client to whoever else saw the MAC -- the gateway,
+-- which sees everything. Seen in production: a wired IoT device on an assigned
+-- socket listed under the gateway at the gateway's link speed.
+--
+-- There is no way to keep the software half of learning and drop the hardware
+-- half. One BR_LEARNING flag per bridge port, mirrored into the driver by DSA;
+-- the ASIC entry cannot be deleted (ENOENT) or flushed (EOPNOTSUPP) and is
+-- re-learned on the client's next frame anyway. The switch-level fix is to make
+-- the switch VLAN-aware (`vlan_filtering` + `config bridge-vlan`), which would
+-- restore learning AND hardware offload -- PROTOCOL-VALIDATION.md records why
+-- that is not what this does.
+--
+-- So openUF observes the socket somewhere the FDB is not: a bridge-family
+-- prerouting rule that files each frame's source address into a dynamic set.
+-- The socket is in a bridge whose other member is a software device, so it
+-- cannot be hardware-offloaded and every one of its frames reaches the CPU --
+-- which is the same fact that makes this tap see everything the FDB used to.
+--
+-- One set and one rule for all tapped sockets, keyed `ifname . ether_addr`: a
+-- flat element list beats one set per socket to parse, and sysinfo.nft_tap_macs
+-- reads it in a single `nft list set`. The 5m timeout mirrors the bridge's own
+-- FDB ageing so an unplugged client expires the way it used to.
+local NFT_LEARN_TABLE = "bridge openuf_learn"
+local NFT_LEARN_SET   = "portmacs"
+local NFT_LEARN_TTL   = "5m"
+
+-- Which sockets currently have learning off, read back from the `config device`
+-- sections dsa_apply writes rather than from a second record of openUF's own.
+-- Those sections ARE the record: they exist exactly while the override does, so
+-- this is safe to call at startup with no state to consult.
+function M.tapped_sockets(cursor)
+	local out = {}
+	cursor:foreach("network", "device", function(s)
+		local sec = s[".name"]
+		if sec and sec:match("^" .. OPENUF_BRPORT_PREFIX .. "%d+_")
+			and tostring(s.learning or "") == "0"
+			and type(s.name) == "string" and s.name ~= "" then
+			out[#out + 1] = s.name
+		end
+	end)
+	table.sort(out)
+	return out
+end
+
+-- Rebuild the tap to exactly match the sockets that have learning off.
+--
+-- Same delete-and-recreate shape as firewall.reconcile: idempotent, and the
+-- teardown path is this function with nothing to tap (the table goes and
+-- nothing replaces it). Called after every dsa_apply/dsa_restore and once at
+-- startup, because nftables state does not survive a reboot and a tap that is
+-- not reinstalled fails silently -- as an empty mac_table, which is precisely
+-- the bug it exists to fix.
+--
+-- Returns true when a tap is now installed.
+function M.reconcile_mac_taps(cursor)
+	local c = cursor or get_uci().cursor()
+	local sockets = M.tapped_sockets(c)
+
+	M._exec("nft delete table " .. NFT_LEARN_TABLE .. " 2>/dev/null")
+	if #sockets == 0 then return false end
+
+	-- Socket names reach here from the modelmap by way of UCI. They are
+	-- `lan2`/`wan`-shaped and always have been, but they are interpolated into
+	-- a shell command, so sanitise rather than trust -- the same discipline
+	-- brport_section applies for libuci's sake.
+	local quoted = {}
+	for _, ifname in ipairs(sockets) do
+		quoted[#quoted + 1] = '"' .. ifname:gsub("[^%w._-]", "_") .. '"'
+	end
+
+	M._exec("nft add table " .. NFT_LEARN_TABLE)
+	M._exec("nft add set " .. NFT_LEARN_TABLE .. " " .. NFT_LEARN_SET
+		.. " '{ type ifname . ether_addr; flags dynamic,timeout; timeout "
+		.. NFT_LEARN_TTL .. "; }'")
+	-- priority -300 (dstnat) puts this ahead of anything else openUF hooks in
+	-- the bridge family; policy accept and a rule with no verdict mean it
+	-- observes and never decides.
+	M._exec("nft add chain " .. NFT_LEARN_TABLE .. " learn"
+		.. " '{ type filter hook prerouting priority -300; policy accept; }'")
+	M._exec("nft add rule " .. NFT_LEARN_TABLE .. " learn"
+		.. " 'iifname { " .. table.concat(quoted, ", ") .. " }"
+		.. " update @" .. NFT_LEARN_SET .. " { iifname . ether saddr }'")
 	return true
 end
 
@@ -922,6 +1015,9 @@ function M.dsa_restore(st, cfg)
 	if changed then
 		cursor:commit("network")
 		M._exec("/etc/init.d/network reload 2>/dev/null")
+		-- The overrides are gone, so the tap has nothing left to watch and
+		-- this tears the table down.
+		M.reconcile_mac_taps(cursor)
 	end
 	return changed
 end

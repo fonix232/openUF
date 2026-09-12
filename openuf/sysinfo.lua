@@ -758,28 +758,58 @@ end
 -- was re-dumping a strict subset of it. On the AX3000T's four sockets that was
 -- four forks per heartbeat for data already in hand. Without a bridge (every
 -- direct caller, and the tests) it forks per socket exactly as before.
-function M.mac_table(ifname, bridge)
-	if not ifname then return {} end
-	local macs
-	if bridge then
-		macs = hosts_by_port(M.bridge_fdb_ports(bridge))[ifname]
-	else
-		local fdb_out = M._run_cmd("bridge fdb show dev " .. ifname)
-		macs = {}
-		for line in fdb_out:gmatch("[^\n]+") do
-			if not line:find("self") and not line:find("permanent") and line:find("master") then
-				local mac = line:match("^(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)")
-				if mac then
-					local first_octet = tonumber(mac:sub(1, 2), 16)
-					if first_octet and first_octet % 2 == 0 then
-						macs[#macs + 1] = mac
-					end
-				end
+-- The MACs an nftables tap has seen ingressing each socket, as
+-- {[ifname] = {mac, ...}}, from one `nft list set`.
+--
+-- This exists because of a hardware fact, not a software preference. A socket
+-- openUF moves into a VLAN bridge must have MAC learning turned OFF or the
+-- switch ASIC hardware-drops the replies coming back to it (switchvlan.lua's
+-- dsa_apply documents the measurement). Learning off empties the bridge FDB for
+-- that socket, and the FDB is where every other wired-host answer comes from --
+-- so for exactly those sockets there is no kernel table left to read, and the
+-- hosts behind them stopped being reported at all.
+--
+-- The tap is the observation point that survives: switchvlan installs a bridge
+-- prerouting rule that files `ether saddr` into a dynamic set with a timeout
+-- matching the bridge's own FDB ageing, so an unplugged client expires the way
+-- it used to. Set elements print as
+--     elements = { "lan2" . 00:00:5e:00:53:07 expires 4m59s990ms,
+--                  "lan3" . 00:00:5e:00:53:08 expires 4m59s990ms }
+-- (captured from nftables v1.1.6 on the real board, not guessed -- the quoted
+-- ifname is what makes the pattern unambiguous against the `type ifname .
+-- ether_addr` line above it).
+--
+-- One dump per pass, and only asked for at all when a caller knows it has a
+-- socket in this position -- see mac_table's `allow_tap`.
+M.NFT_LEARN_SET = "bridge openuf_learn portmacs"
+
+function M.nft_tap_macs()
+	return pass_memo("nft_tap", function()
+		local by_port = {}
+		local out = M._run_cmd("nft list set " .. M.NFT_LEARN_SET)
+		if not out or out == "" then return by_port end
+		for ifname, mac in
+			out:gmatch('"([^"]+)"%s*%.%s*(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)') do
+			-- Same multicast-bit filter the FDB and ARL sources apply. A
+			-- source address can never be multicast, so this only ever
+			-- rejects a malformed dump -- kept for the same reason it is
+			-- kept there.
+			local first_octet = tonumber(mac:sub(1, 2), 16)
+			if first_octet and first_octet % 2 == 0 then
+				local bucket = by_port[ifname]
+				if not bucket then bucket = {}; by_port[ifname] = bucket end
+				bucket[#bucket + 1] = mac:lower()
 			end
 		end
-	end
-	if not macs or #macs == 0 then return {} end
+		for _, bucket in pairs(by_port) do table.sort(bucket) end
+		return by_port
+	end)
+end
 
+-- MACs -> the {mac, ip, hostname, age, uptime} rows port_table publishes.
+-- Shared by both of mac_table's sources so the tap's rows are indistinguishable
+-- from the FDB's: same ARP/lease join, same _note_seen-derived uptime.
+local function hosts_from_macs(ifname, macs)
 	local ip_by_mac       = M._ip_by_mac()
 	local hostname_by_mac = M._hostname_by_mac()
 
@@ -800,6 +830,38 @@ function M.mac_table(ifname, bridge)
 		}
 	end
 	return hosts
+end
+
+-- `allow_tap` opts this socket into the nft fallback above, and is the caller's
+-- job because only the caller knows a socket is in the position that needs it
+-- (its bridge is not the uplink's -- i.e. openUF moved it). Left off, a board
+-- with no assigned socket never forks `nft` at all. The FDB always wins: the
+-- tap is consulted only when the kernel had nothing to say.
+function M.mac_table(ifname, bridge, allow_tap)
+	if not ifname then return {} end
+	local macs
+	if bridge then
+		macs = hosts_by_port(M.bridge_fdb_ports(bridge))[ifname]
+	else
+		local fdb_out = M._run_cmd("bridge fdb show dev " .. ifname)
+		macs = {}
+		for line in fdb_out:gmatch("[^\n]+") do
+			if not line:find("self") and not line:find("permanent") and line:find("master") then
+				local mac = line:match("^(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)")
+				if mac then
+					local first_octet = tonumber(mac:sub(1, 2), 16)
+					if first_octet and first_octet % 2 == 0 then
+						macs[#macs + 1] = mac
+					end
+				end
+			end
+		end
+	end
+	if (not macs or #macs == 0) and allow_tap then
+		macs = M.nft_tap_macs()[ifname]
+	end
+	if not macs or #macs == 0 then return {} end
+	return hosts_from_macs(ifname, macs)
 end
 
 -- === swconfig: what the CPU netdev cannot tell you =========================

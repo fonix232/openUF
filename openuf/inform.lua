@@ -509,11 +509,12 @@ end
 -- that are never wired clients of this AP -- its own netdev MACs, and the
 -- stations currently associated to its radios (a wireless client bridged into
 -- br-lan genuinely shows up in the bridge FDB and the switch ARL too).
--- `source` is sysinfo.mac_table(ifname) or sysinfo.switch_mac_table(phys, arl);
--- a failing source yields no hosts rather than aborting the payload.
-local function _filter_hosts(source, a, b, self_macs, station_macs)
+-- `source` is sysinfo.mac_table(ifname, bridge, allow_tap) or
+-- sysinfo.switch_mac_table(phys, arl), so it takes up to three arguments; a
+-- failing source yields no hosts rather than aborting the payload.
+local function _filter_hosts(source, a, b, c, self_macs, station_macs)
 	local hosts = {}
-	local ok, found = pcall(source, a, b)
+	local ok, found = pcall(source, a, b, c)
 	if not ok or type(found) ~= "table" then return hosts end
 	for _, host in ipairs(found) do
 		if not self_macs[host.mac] and not station_macs[host.mac] then
@@ -1430,7 +1431,8 @@ function M.build_json(st, cfg, ufhw)
 			-- host there is not reachable on the LAN it would be listed in.
 			if not is_uplink and (link.pvid == nil or link.pvid == mgmt_vlan) then
 				entry.mac_table = arr(_filter_hosts(
-					M._sysinfo.switch_mac_table, phys, sw.arl, self_macs, station_macs))
+					M._sysinfo.switch_mac_table, phys, sw.arl, nil,
+					self_macs, station_macs))
 			end
 		else
 			-- Netdev-only: no switch, no swconfig, or no identifiable uplink.
@@ -1490,8 +1492,16 @@ function M.build_json(st, cfg, ufhw)
 				-- for an unbridged socket and an empty one for a bridged
 				-- socket looked up in the wrong bridge.
 				local ok_sb, sock_bridge = pcall(M._sysinfo.bridge_of, p.ifname)
+				if not ok_sb then sock_bridge = nil end
+				-- A socket in a bridge that is not the uplink's is one openUF
+				-- moved, which is the only case where MAC learning is off and
+				-- the FDB has nothing to say -- so it is the only case allowed
+				-- to fall back to switchvlan's nft tap. Every other board never
+				-- forks `nft` at all.
+				local allow_tap = (uplink_bridge ~= nil and sock_bridge ~= nil
+					and sock_bridge ~= uplink_bridge)
 				entry.mac_table = arr(_filter_hosts(
-					M._sysinfo.mac_table, p.ifname, ok_sb and sock_bridge or nil,
+					M._sysinfo.mac_table, p.ifname, sock_bridge, allow_tap,
 					self_macs, station_macs))
 			end
 		end
@@ -3644,6 +3654,12 @@ function M.run(cfg, ufhw)
 	-- Per-port byte counters are a switch-driver setting that some boards ship
 	-- switched off; without it every socket reports 0 B in the Ports view.
 	if M._switchvlan then pcall(M._switchvlan.enable_mib_polling, cfg) end
+	-- nftables state does not survive a reboot, so the per-socket MAC tap is
+	-- reinstalled here from the UCI sections that record which sockets have
+	-- learning off -- the same discipline _firewall.reconcile uses for the
+	-- blocklist. A tap that is not reinstalled fails silently, as an empty
+	-- mac_table, which is the bug it exists to fix.
+	if M._switchvlan then pcall(M._switchvlan.reconcile_mac_taps) end
 
 	local socket = require("socket")
 	local ctx = {
