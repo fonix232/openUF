@@ -654,11 +654,11 @@ return {
 				{["bridge fdb show br"] = fixture("bridge_fdb_br_dsa.txt")},
 				function()
 					local ports = sysinfo.bridge_fdb_ports("br-lan")
-					assert_eq(ports["5a:d6:1f:40:e2:f6"], "wan", "gateway is on wan")
-					assert_eq(ports["00:04:4b:86:81:77"], "wan", "a host is on wan")
+					assert_eq(ports["00:00:5e:00:53:12"], "wan", "gateway is on wan")
+					assert_eq(ports["00:00:5e:00:53:1c"], "wan", "a host is on wan")
 					-- The board's own port MAC arrives only on "permanent"
 					-- lines, so it is not a host and must not be in the map.
-					assert_true(ports["d4:53:2a:38:80:cf"] == nil,
+					assert_true(ports["00:00:5e:00:53:16"] == nil,
 						"the port's own permanent address is not a learned host")
 				end)
 			-- No bridge, or a bridge the command knows nothing about.
@@ -673,7 +673,7 @@ return {
 		fn = function()
 			local cmds = {
 				["bridge fdb show br"] = fixture("bridge_fdb_br_dsa.txt"),
-				["ip route"] = "default via 192.168.200.1 dev br-lan \n",
+				["ip route"] = "default via 192.0.2.1 dev br-lan \n",
 			}
 			with_fixtures({["/proc/net/arp"] = fixture("proc_net_arp_dsa.txt")}, cmds,
 				function()
@@ -684,11 +684,11 @@ return {
 			-- Same board, cable moved to another socket: the answer has to
 			-- follow the FDB, not a constant. (Synthetic -- only one socket
 			-- was cabled on the real board at capture time.)
-			local moved = "5a:d6:1f:40:e2:f6 dev lan3 master br-lan \n"
-				.. "00:04:4b:86:81:77 dev lan3 master br-lan \n"
+			local moved = "00:00:5e:00:53:12 dev lan3 master br-lan \n"
+				.. "00:00:5e:00:53:1c dev lan3 master br-lan \n"
 			with_fixtures({["/proc/net/arp"] = fixture("proc_net_arp_dsa.txt")},
 				{["bridge fdb show br"] = moved,
-				 ["ip route"] = "default via 192.168.200.1 dev br-lan \n"},
+				 ["ip route"] = "default via 192.0.2.1 dev br-lan \n"},
 				function()
 					assert_eq(sysinfo.uplink_bridge_port("br-lan"), "lan3",
 						"uplink socket followed the cable")
@@ -708,14 +708,14 @@ return {
 			-- Default route whose gateway has not been ARP-resolved yet.
 			with_fixtures({["/proc/net/arp"] = fixture("proc_net_arp_dsa.txt")},
 				{["bridge fdb show br"] = fdb,
-				 ["ip route"] = "default via 192.168.200.254 dev br-lan \n"},
+				 ["ip route"] = "default via 192.0.2.254 dev br-lan \n"},
 				function()
 					assert_true(sysinfo.uplink_bridge_port("br-lan") == nil,
 						"gateway not in arp -> nil")
 				end)
 			-- Gateway resolved but the bridge has not learned it.
 			with_fixtures({["/proc/net/arp"] = fixture("proc_net_arp_dsa.txt")},
-				{["ip route"] = "default via 192.168.200.1 dev br-lan \n"},
+				{["ip route"] = "default via 192.0.2.1 dev br-lan \n"},
 				function()
 					assert_true(sysinfo.uplink_bridge_port("br-lan") == nil,
 						"gateway not in the FDB -> nil")
@@ -1266,7 +1266,7 @@ return {
 						"aa:bb:cc:dd:ee:01 dev lan2 master br-lan ",
 						"aa:bb:cc:dd:ee:02 dev lan3 master br-lan ",
 						"01:00:5e:00:00:01 dev lan3 master br-lan ",   -- multicast
-						"d4:53:2a:b2:03:3c dev lan2 master br-lan permanent",
+						"00:00:5e:00:53:20 dev lan2 master br-lan permanent",
 						"aa:bb:cc:dd:ee:02 dev lan3 self ",
 					}, "\n") .. "\n"
 				elseif cmd:find("bridge fdb show dev", 1, true) then
@@ -1290,7 +1290,7 @@ return {
 			-- `permanent` is the socket's OWN address; counting it would put
 			-- this device's socket in its own client list.
 			for _, h in ipairs(l2) do
-				assert_true(h.mac ~= "d4:53:2a:b2:03:3c", "never the port's own address")
+				assert_true(h.mac ~= "00:00:5e:00:53:20", "never the port's own address")
 			end
 
 			-- The uplink question and the host lists share the one dump.
@@ -1377,7 +1377,7 @@ return {
 			sysinfo._time = function() return clock end
 			sysinfo._uplink_cache = {}
 			local readlinks, routes = 0, 0
-			local gw = "192.168.200.1"
+			local gw = "192.0.2.1"
 			sysinfo._run_cmd = function(cmd)
 				if cmd:find("readlink") then
 					readlinks = readlinks + 1
@@ -1393,7 +1393,7 @@ return {
 				if path == "/proc/net/arp" then
 					arp_reads = arp_reads + 1
 					return gw .. " 0x1 0x2 aa:bb:cc:00:00:01 * br-lan\n"
-						.. "192.168.200.9 0x1 0x2 aa:bb:cc:00:00:09 * br-lan\n"
+						.. "192.0.2.9 0x1 0x2 aa:bb:cc:00:00:09 * br-lan\n"
 				end
 				return nil
 			end

@@ -241,7 +241,7 @@ local function build_dsa(opts)
 	inform._sysinfo._run_cmd = function(cmd)
 		if cmd:find("swconfig") then return "" end   -- no such binary on DSA
 		if cmd:find("ip route") then
-			return "default via 192.168.200.1 dev br-lan \n"
+			return "default via 192.0.2.1 dev br-lan \n"
 		end
 		local rl = cmd:match("readlink /sys/class/net/(%S+)/master")
 		if rl then
@@ -291,8 +291,8 @@ local function build_dsa(opts)
 	end
 	local st = {
 		authkey = state.DEFAULT_KEY, adopted = true, cfgversion = "",
-		inform_url = "http://192.168.200.1:8080/inform",
-		mac = "d4:53:2a:38:80:cf", ip = "192.168.200.4", hostname = "testap",
+		inform_url = "http://192.0.2.1:8080/inform",
+		mac = "00:00:5e:00:53:16", ip = "192.0.2.4", hostname = "testap",
 	}
 	local ok, out = pcall(function()
 		return cjson.decode(inform.build_json(st, opts.cfg or DSA_CFG, ufhw))
@@ -1374,10 +1374,10 @@ return {
 				{bssid = "aa:bb:cc:dd:ee:01", channel = 6, band = "ng",
 				 signal = -70, seen_at = os.time()},
 				-- one only the client could see
-				{bssid = "84:78:48:a4:fb:21", channel = 1, band = "ng",
+				{bssid = "00:00:5e:00:53:11", channel = 1, band = "ng",
 				 signal = -73, seen_at = os.time()},
 				-- and one on the other band, which belongs to no radio here
-				{bssid = "54:af:97:55:14:78", channel = 48, band = "na",
+				{bssid = "00:00:5e:00:53:17", channel = 48, band = "na",
 				 signal = -80, seen_at = os.time()},
 			}
 			local ok, d = pcall(build, {with_uci = true, with_scan = true})
@@ -1395,14 +1395,14 @@ return {
 			assert_eq(seen["aa:bb:cc:dd:ee:01"].essid, "NeighborNet",
 				"the scanned record wins over the beacon report")
 			assert_eq(seen["aa:bb:cc:dd:ee:01"].signal, -55, "and keeps its own signal")
-			local added = seen["84:78:48:a4:fb:21"]
+			local added = seen["00:00:5e:00:53:11"]
 			assert_not_nil(added, "the client-only neighbour reached the payload")
 			assert_eq(added.channel, 1, "on the channel the client reported")
 			assert_eq(added.signal, -73, "with the RCPI-derived signal")
 			-- Without `band` the Environment tab filters the row out upstream
 			-- of every visible filter, with no error and no visible cause.
 			assert_eq(added.band, "ng", "band set or the row silently vanishes")
-			assert_nil(seen["54:af:97:55:14:78"],
+			assert_nil(seen["00:00:5e:00:53:17"],
 				"a 5 GHz sighting is not filed under the 2.4 GHz radio")
 		end
 	},
@@ -1413,7 +1413,7 @@ return {
 			-- the rogue-AP list, so carrying one is payload nobody reads.
 			local prev = inform._rrm_neighbours
 			inform._rrm_neighbours = {
-				{bssid = "84:78:48:a4:fb:21", channel = 1, band = "ng",
+				{bssid = "00:00:5e:00:53:11", channel = 1, band = "ng",
 				 signal = -73, seen_at = os.time() - 120},
 			}
 			local ok, d = pcall(build, {with_uci = true, with_scan = true})
@@ -1576,7 +1576,7 @@ return {
 			-- Cable moved to lan3. Nothing in the modelmap changed.
 			local moved = build_dsa({
 				live = "lan3",
-				fdb  = "5a:d6:1f:40:e2:f6 dev lan3 master br-lan \n"
+				fdb  = "00:00:5e:00:53:12 dev lan3 master br-lan \n"
 					.. "aa:bb:cc:dd:ee:01 dev lan3 master br-lan \n",
 			})
 			local q = by_idx(moved.port_table)
@@ -1604,7 +1604,7 @@ return {
 				},
 			}
 			local d = build_dsa({cfg = cfg,
-				fdb = "5a:d6:1f:40:e2:f6 dev tap0 master br-lan \n"})
+				fdb = "00:00:5e:00:53:12 dev tap0 master br-lan \n"})
 			local p = by_idx(d.port_table)
 			assert_true(p[1].is_uplink, "fell back to the modelmap's own flag")
 			assert_false(p[2].is_uplink, "and only that one")

@@ -2768,14 +2768,14 @@ return {
 			-- with nothing on the device to explain it. Observed for real.
 			local out = with_stderr(function()
 				local warned = inform._warn_identity_change(
-					"e8:de:27:5f:62:7a",
-					{adopted = true, mac = "e8:de:27:5f:62:77"},
+					"00:00:5e:00:53:1a",
+					{adopted = true, mac = "00:00:5e:00:53:19"},
 					{net = {lan_cpueth = "eth0"}})
 				assert_true(warned, "warns")
 			end)
 			assert_contains(out, "IDENTITY MAC CHANGED", "names the problem")
-			assert_contains(out, "e8:de:27:5f:62:7a", "the MAC it was adopted as")
-			assert_contains(out, "e8:de:27:5f:62:77", "the MAC it now reports")
+			assert_contains(out, "00:00:5e:00:53:1a", "the MAC it was adopted as")
+			assert_contains(out, "00:00:5e:00:53:19", "the MAC it now reports")
 			assert_contains(out, "eth0", "and which setting decides it")
 			assert_contains(out, "re-adopt", "says how to fix it")
 		end

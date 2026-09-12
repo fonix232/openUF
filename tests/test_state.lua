@@ -265,12 +265,12 @@ return {
 			local ok, err = pcall(function()
 				state.save({
 					adopted = true, authkey = "f00d",
-					mac = "d4:53:2a:38:80:cf", led_enabled = false,
+					mac = "00:00:5e:00:53:16", led_enabled = false,
 					locating = true, locate_prev_trigger = "phy0tpt",
 					ip_mode = "static", swvlan_backup = {["10"] = "0t 2 3"},
 				})
 				local st = state.load()
-				assert_eq(st.mac, "d4:53:2a:38:80:cf", "identity mac survives")
+				assert_eq(st.mac, "00:00:5e:00:53:16", "identity mac survives")
 				assert_false(st.led_enabled, "led_enabled survives as false, not nil")
 				assert_true(st.locating, "locating survives")
 				assert_eq(st.locate_prev_trigger, "phy0tpt", "the LED's trigger survives")
