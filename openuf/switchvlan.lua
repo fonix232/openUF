@@ -900,12 +900,30 @@ end
 -- cannot be hardware-offloaded and every one of its frames reaches the CPU --
 -- which is the same fact that makes this tap see everything the FDB used to.
 --
--- One set and one rule for all tapped sockets, keyed `ifname . ether_addr`: a
--- flat element list beats one set per socket to parse, and sysinfo.nft_tap_macs
--- reads it in a single `nft list set`. The 5m timeout mirrors the bridge's own
--- FDB ageing so an unplugged client expires the way it used to.
+-- Two sets, one rule each, covering every tapped socket at once; a flat element
+-- list beats one set per socket to parse, and sysinfo reads both in a single
+-- `nft list table`. The 5m timeouts mirror the bridge's own FDB ageing so an
+-- unplugged client expires the way it used to.
+--
+--   portmacs  ifname . ether_addr                WHO is behind the socket.
+--   portips   ifname . ether_addr . ipv4_addr    and WHICH ADDRESS they have.
+--
+-- portips is not a nicety. The controller classifies a wired client into a
+-- network by the IP the reporting device puts in `mac_table[].ip`, NOT by the
+-- port's native VLAN -- verified against a live UCG Ultra, where every wired
+-- client carrying a reported IP landed in that IP's subnet and the one without
+-- fell back to the reporting AP's own network. An assigned socket is on a VLAN
+-- the AP holds no address on, so /proc/net/arp can never answer for it and the
+-- IP would be absent: the port would be right and the network label wrong.
+--
+-- Sources are ARP and IPv4 alike, because either one identifies the sender and
+-- a device that only ever ARPs still has to be reported. 0.0.0.0 is excluded on
+-- both: a DHCP DISCOVER and an ARP probe both carry it, and neither is an
+-- address the host actually holds.
 local NFT_LEARN_TABLE = "bridge openuf_learn"
+local NFT_LEARN_CHAIN = "learn"
 local NFT_LEARN_SET   = "portmacs"
+local NFT_LEARN_IPSET = "portips"
 local NFT_LEARN_TTL   = "5m"
 
 -- Which sockets currently have learning off, read back from the `config device`
@@ -940,6 +958,39 @@ function M.reconcile_mac_taps(cursor)
 	local c = cursor or get_uci().cursor()
 	local sockets = M.tapped_sockets(c)
 
+	-- Leave a tap that already covers exactly these sockets alone. Everything
+	-- the sets hold was learned from traffic that has already happened, so
+	-- rebuilding empties them and the socket reports NO clients until each host
+	-- next speaks -- and a host reported before its address is known is a host
+	-- the controller files under the wrong network. openUF restarts far more
+	-- often than an assignment changes, and the startup reconcile exists for
+	-- the reboot case, where there is nothing to preserve anyway.
+	local live = tostring(M._popen("nft list chain " .. NFT_LEARN_TABLE
+		.. " " .. NFT_LEARN_CHAIN) or "")
+	if #sockets > 0 and live:find("@" .. NFT_LEARN_SET, 1, true)
+		and live:find("@" .. NFT_LEARN_IPSET, 1, true) then
+		local have, n = {}, 0
+		for line in live:gmatch("[^\n]+") do
+			-- Each rule reads `iifname <selector> ... update @<set> {...}`, and
+			-- nft prints the selector as a bare "lan2" for one socket or as
+			-- { "lan2", "lan3" } for several. Taking the text before the first
+			-- `update` covers both without caring which.
+			local sel = line:match("^%s*iifname%s+(.-)%s+update")
+			if sel then
+				for ifn in sel:gmatch('"([^"]+)"') do
+					if not have[ifn] then have[ifn] = true; n = n + 1 end
+				end
+			end
+		end
+		if n == #sockets then
+			local same = true
+			for _, ifn in ipairs(sockets) do
+				if not have[ifn] then same = false break end
+			end
+			if same then return true end
+		end
+	end
+
 	M._exec("nft delete table " .. NFT_LEARN_TABLE .. " 2>/dev/null")
 	if #sockets == 0 then return false end
 
@@ -952,18 +1003,31 @@ function M.reconcile_mac_taps(cursor)
 		quoted[#quoted + 1] = '"' .. ifname:gsub("[^%w._-]", "_") .. '"'
 	end
 
+	local socket_set = "iifname { " .. table.concat(quoted, ", ") .. " }"
+
 	M._exec("nft add table " .. NFT_LEARN_TABLE)
 	M._exec("nft add set " .. NFT_LEARN_TABLE .. " " .. NFT_LEARN_SET
 		.. " '{ type ifname . ether_addr; flags dynamic,timeout; timeout "
 		.. NFT_LEARN_TTL .. "; }'")
+	M._exec("nft add set " .. NFT_LEARN_TABLE .. " " .. NFT_LEARN_IPSET
+		.. " '{ type ifname . ether_addr . ipv4_addr; flags dynamic,timeout;"
+		.. " timeout " .. NFT_LEARN_TTL .. "; }'")
 	-- priority -300 (dstnat) puts this ahead of anything else openUF hooks in
-	-- the bridge family; policy accept and a rule with no verdict mean it
+	-- the bridge family; policy accept and rules with no verdict mean it
 	-- observes and never decides.
-	M._exec("nft add chain " .. NFT_LEARN_TABLE .. " learn"
+	M._exec("nft add chain " .. NFT_LEARN_TABLE .. " " .. NFT_LEARN_CHAIN
 		.. " '{ type filter hook prerouting priority -300; policy accept; }'")
-	M._exec("nft add rule " .. NFT_LEARN_TABLE .. " learn"
-		.. " 'iifname { " .. table.concat(quoted, ", ") .. " }"
+	M._exec("nft add rule " .. NFT_LEARN_TABLE .. " " .. NFT_LEARN_CHAIN
+		.. " '" .. socket_set
 		.. " update @" .. NFT_LEARN_SET .. " { iifname . ether saddr }'")
+	M._exec("nft add rule " .. NFT_LEARN_TABLE .. " " .. NFT_LEARN_CHAIN
+		.. " '" .. socket_set .. " arp saddr ip != 0.0.0.0"
+		.. " update @" .. NFT_LEARN_IPSET
+		.. " { iifname . ether saddr . arp saddr ip }'")
+	M._exec("nft add rule " .. NFT_LEARN_TABLE .. " " .. NFT_LEARN_CHAIN
+		.. " '" .. socket_set .. " ip saddr != 0.0.0.0"
+		.. " update @" .. NFT_LEARN_IPSET
+		.. " { iifname . ether saddr . ip saddr }'")
 	return true
 end
 

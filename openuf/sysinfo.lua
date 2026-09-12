@@ -769,47 +769,104 @@ end
 -- so for exactly those sockets there is no kernel table left to read, and the
 -- hosts behind them stopped being reported at all.
 --
--- The tap is the observation point that survives: switchvlan installs a bridge
--- prerouting rule that files `ether saddr` into a dynamic set with a timeout
--- matching the bridge's own FDB ageing, so an unplugged client expires the way
--- it used to. Set elements print as
---     elements = { "lan2" . 00:00:5e:00:53:07 expires 4m59s990ms,
---                  "lan3" . 00:00:5e:00:53:08 expires 4m59s990ms }
--- (captured from nftables v1.1.6 on the real board, not guessed -- the quoted
--- ifname is what makes the pattern unambiguous against the `type ifname .
--- ether_addr` line above it).
+-- The tap is the observation point that survives: switchvlan installs bridge
+-- prerouting rules that file each frame's source address into dynamic sets with
+-- timeouts matching the bridge's own FDB ageing, so an unplugged client expires
+-- the way it used to. Two sets, read from one dump of the table:
+--
+--     set portmacs {
+--         elements = { "lan2" . 00:00:5e:00:53:07 expires 4m59s990ms }
+--     }
+--     set portips {
+--         elements = { "lan2" . 00:00:5e:00:53:07 . 192.0.2.20 expires 5m }
+--     }
+--
+-- Captured verbatim from nftables v1.1.6 on the real board, not guessed. The
+-- quoted ifname is what makes the pattern unambiguous against the `type ifname
+-- . ether_addr` lines and the `iifname { "lan2" }` rules in the same dump, and
+-- the presence of a third `. <dotted quad>` component is what tells the two
+-- sets' elements apart without tracking which set block we are inside.
+--
+-- The address half is what keeps the controller's network label right: it
+-- classifies a wired client by the IP its reporter supplies, and an assigned
+-- socket is on a VLAN this AP holds no address on, so /proc/net/arp will never
+-- answer for it.
 --
 -- One dump per pass, and only asked for at all when a caller knows it has a
 -- socket in this position -- see mac_table's `allow_tap`.
-M.NFT_LEARN_SET = "bridge openuf_learn portmacs"
+M.NFT_LEARN_TABLE = "bridge openuf_learn"
 
-function M.nft_tap_macs()
+-- Seconds left on a dynamic element, from the `expires 4m59s980ms` suffix nft
+-- prints. Every element carries the same timeout, so what is left is a direct
+-- proxy for how recently the tap last saw that host -- which is how a MAC that
+-- has held two addresses inside one timeout window resolves to the current one.
+-- Note `ms` must be tested before `m`/`s`, or 980ms reads as 980 minutes.
+local function nft_expires_secs(rest)
+	local t = rest:match("expires%s+(%S+)")
+	if not t then return nil end
+	local secs = 0
+	for n, unit in t:gmatch("(%d+)(%a+)") do
+		local mult = (unit == "ms" and 0.001) or (unit == "s" and 1)
+			or (unit == "m" and 60) or (unit == "h" and 3600)
+			or (unit == "d" and 86400) or 0
+		secs = secs + tonumber(n) * mult
+	end
+	return secs
+end
+
+-- {macs = {[ifname] = {mac, ...}}, ips = {[ifname] = {[mac] = ip}}} from one
+-- `nft list table`. One table rather than two return values on purpose:
+-- pass_memo caches a single value, so a second result would be silently lost
+-- on every call after the first of a pass.
+function M.nft_tap()
 	return pass_memo("nft_tap", function()
-		local by_port = {}
-		local out = M._run_cmd("nft list set " .. M.NFT_LEARN_SET)
-		if not out or out == "" then return by_port end
-		for ifname, mac in
-			out:gmatch('"([^"]+)"%s*%.%s*(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)') do
+		local macs, ips, fresh = {}, {}, {}
+		local out = M._run_cmd("nft list table " .. M.NFT_LEARN_TABLE)
+		if not out or out == "" then return {macs = macs, ips = ips} end
+		for ifname, mac, rest in
+			out:gmatch('"([^"]+)"%s*%.%s*(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)([^,\n]*)') do
 			-- Same multicast-bit filter the FDB and ARL sources apply. A
 			-- source address can never be multicast, so this only ever
 			-- rejects a malformed dump -- kept for the same reason it is
 			-- kept there.
 			local first_octet = tonumber(mac:sub(1, 2), 16)
 			if first_octet and first_octet % 2 == 0 then
-				local bucket = by_port[ifname]
-				if not bucket then bucket = {}; by_port[ifname] = bucket end
-				bucket[#bucket + 1] = mac:lower()
+				mac = mac:lower()
+				local ip = rest:match("^%s*%.%s*(%d+%.%d+%.%d+%.%d+)")
+				if ip then
+					local seen = ips[ifname]
+					if not seen then
+						seen = {}; ips[ifname] = seen; fresh[ifname] = {}
+					end
+					local age = nft_expires_secs(rest) or 0
+					local best = fresh[ifname][mac]
+					-- Freshest wins, and on a tie the lower address, so the
+					-- payload cannot flip between two live answers from one
+					-- heartbeat to the next.
+					if best == nil or age > best
+						or (age == best and ip < seen[mac]) then
+						seen[mac], fresh[ifname][mac] = ip, age
+					end
+				else
+					local bucket = macs[ifname]
+					if not bucket then bucket = {}; macs[ifname] = bucket end
+					bucket[#bucket + 1] = mac
+				end
 			end
 		end
-		for _, bucket in pairs(by_port) do table.sort(bucket) end
-		return by_port
+		for _, bucket in pairs(macs) do table.sort(bucket) end
+		return {macs = macs, ips = ips}
 	end)
 end
 
 -- MACs -> the {mac, ip, hostname, age, uptime} rows port_table publishes.
 -- Shared by both of mac_table's sources so the tap's rows are indistinguishable
 -- from the FDB's: same ARP/lease join, same _note_seen-derived uptime.
-local function hosts_from_macs(ifname, macs)
+-- `tap_ips` is {[mac] = ip} for this socket, used only where the ARP cache has
+-- nothing: /proc/net/arp is the AP's own L3 view and is authoritative wherever
+-- it can answer, but it can never answer for a socket on a VLAN the AP holds no
+-- address on -- which is exactly the socket the tap exists for.
+local function hosts_from_macs(ifname, macs, tap_ips)
 	local ip_by_mac       = M._ip_by_mac()
 	local hostname_by_mac = M._hostname_by_mac()
 
@@ -819,7 +876,8 @@ local function hosts_from_macs(ifname, macs)
 		local first_seen = M._note_seen(ifname .. " " .. mac, now)
 		hosts[#hosts + 1] = {
 			mac      = mac,
-			ip       = ip_by_mac[mac:lower()],
+			ip       = ip_by_mac[mac:lower()]
+				or (tap_ips and tap_ips[mac:lower()]) or nil,
 			hostname = hostname_by_mac[mac:lower()],
 			-- age: seconds since last observed on this fdb -- 0 since this
 			-- call just observed it fresh (matches TtZhv's use of `age` to
@@ -857,11 +915,13 @@ function M.mac_table(ifname, bridge, allow_tap)
 			end
 		end
 	end
-	if (not macs or #macs == 0) and allow_tap then
-		macs = M.nft_tap_macs()[ifname]
+	local tap
+	if allow_tap then
+		tap = M.nft_tap()
+		if not macs or #macs == 0 then macs = tap.macs[ifname] end
 	end
 	if not macs or #macs == 0 then return {} end
-	return hosts_from_macs(ifname, macs)
+	return hosts_from_macs(ifname, macs, tap and tap.ips[ifname] or nil)
 end
 
 -- === swconfig: what the CPU netdev cannot tell you =========================

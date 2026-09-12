@@ -1663,6 +1663,34 @@ return {
 		end
 	},
 	{
+		name = "inform json: a host behind a VLAN-assigned socket is labelled with that VLAN",
+		fn = function()
+			-- The field that decides which NETWORK the controller files the
+			-- client under. It walks the site's layer-2 networks and keeps a
+			-- reported host only where the network's VLAN equals the row's
+			-- `vlan`, defaulting to 1 -- so without this every host landed in
+			-- the untagged network no matter which socket reported it, and the
+			-- IoT device on an assigned socket was listed under the management
+			-- LAN while its port, its IP and the controller's own Native VLAN
+			-- column all said otherwise.
+			local d = build_dsa({
+				master   = {lan2 = "br-openuf10"},
+				fdb_by_br = {["br-openuf10"] =
+					"00:00:5e:00:53:07 dev lan2 master br-openuf10 \n"},
+				fdb = fixture("bridge_fdb_br_dsa.txt")
+					.. "00:00:5e:00:53:08 dev lan3 master br-lan \n",
+			})
+			local p = by_idx(d.port_table)
+			assert_eq(p[2].mac_table[1].vlan, 10,
+				"the VLAN read off the bridge openUF moved the socket into")
+			-- A socket still in the management bridge carries no vlan at all:
+			-- the controller drops a vlan of 1 on arrival, so sending it says
+			-- nothing and costs bytes every heartbeat.
+			assert_true(p[3].mac_table[1].vlan == nil,
+				"a socket on the management VLAN is left unlabelled")
+		end
+	},
+	{
 		name = "inform json: a DSA payload dumps the bridge FDB once, not once per socket",
 		fn = function()
 			-- build_json already dumps the whole bridge FDB to find the uplink

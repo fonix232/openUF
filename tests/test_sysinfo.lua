@@ -309,36 +309,47 @@ return {
 		end
 	},
 	{
-		name = "sysinfo: nft_tap_macs() buckets the learning tap's set by socket",
+		name = "sysinfo: nft_tap() parses both of the learning tap's sets",
 		fn = function()
-			-- Fixture is the verbatim output of `nft list set` on the real
-			-- board (nftables v1.1.6), not a hand-written approximation --
-			-- the continuation-line indentation and the `expires` suffix are
-			-- exactly what the parser has to survive.
+			-- Fixture is the verbatim output of `nft list table` on the real
+			-- board (nftables v1.1.6), not a hand-written approximation: the
+			-- continuation-line indentation, the `size 65535` nft adds itself,
+			-- the `expires` suffixes and the rules in the same dump are all
+			-- things the parser has to survive.
 			with_fixtures({},
-				{["nft list set"] = fixture("nft_list_set_openuf_learn.txt")},
+				{["nft list table"] = fixture("nft_list_table_openuf_learn.txt")},
 				function()
-					local by_port = sysinfo.nft_tap_macs()
-					assert_eq(#by_port["lan2"], 2, "two hosts seen on lan2")
-					assert_eq(by_port["lan2"][1], "00:00:5e:00:53:07", "sorted, first")
-					assert_eq(by_port["lan2"][2], "00:00:5e:00:53:09", "sorted, second")
-					assert_eq(#by_port["lan3"], 1, "one on lan3")
-					assert_eq(by_port["lan3"][1], "00:00:5e:00:53:08", "its mac")
-					-- The set's own `type ifname . ether_addr` line sits right
-					-- above the elements and would be a tempting false match
-					-- for a looser pattern.
-					assert_true(by_port["ether_addr"] == nil, "the type line is not an element")
+					local tap = sysinfo.nft_tap()
+					assert_eq(#tap.macs["lan2"], 2, "two hosts seen on lan2")
+					assert_eq(tap.macs["lan2"][1], "00:00:5e:00:53:07", "sorted, first")
+					assert_eq(tap.macs["lan2"][2], "00:00:5e:00:53:09", "sorted, second")
+					assert_eq(#tap.macs["lan3"], 1, "one on lan3")
+					-- The three-component elements are the address set and must
+					-- not be counted as hosts a second time.
+					assert_eq(tap.ips["lan2"]["00:00:5e:00:53:07"], "192.0.2.20",
+						"the address learned for that host")
+					-- Two addresses are live for one MAC; the one refreshed
+					-- most recently (largest `expires`) is the current one.
+					assert_eq(tap.ips["lan2"]["00:00:5e:00:53:09"], "192.0.2.22",
+						"the freshest of two live addresses wins")
+					-- The `type ifname . ether_addr` lines and the
+					-- `iifname "lan2"` rules sit in the same dump and are
+					-- tempting false matches for a looser pattern.
+					assert_true(tap.macs["ether_addr"] == nil, "the type line is not an element")
+					assert_eq(#tap.macs["lan2"], 2, "and the rules added no hosts")
 				end
 			)
 		end
 	},
 	{
-		name = "sysinfo: nft_tap_macs() is empty when no tap is installed",
+		name = "sysinfo: nft_tap() is empty when no tap is installed",
 		fn = function()
-			-- `nft list set` on a missing table writes to stderr and prints
+			-- `nft list table` on a missing table writes to stderr and prints
 			-- nothing, which _run_cmd returns as "".
-			with_fixtures({}, {["nft list set"] = ""}, function()
-				assert_eq(next(sysinfo.nft_tap_macs()), nil, "no tap, no hosts")
+			with_fixtures({}, {["nft list table"] = ""}, function()
+				local tap = sysinfo.nft_tap()
+				assert_eq(next(tap.macs), nil, "no tap, no hosts")
+				assert_eq(next(tap.ips), nil, "and no addresses")
 			end)
 		end
 	},
@@ -346,11 +357,10 @@ return {
 		name = "sysinfo: mac_table() falls back to the tap only when asked, and only when the FDB is silent",
 		fn = function()
 			sysinfo._mac_first_seen = {}
-			with_fixtures(
-				{["/proc/net/arp"] = fixture("proc_net_arp.txt")},
+			with_fixtures({},
 				{
 					["bridge fdb show"] = "",
-					["nft list set"] = fixture("nft_list_set_openuf_learn.txt"),
+					["nft list table"] = fixture("nft_list_table_openuf_learn.txt"),
 				},
 				function()
 					-- Off by default: a board with no moved socket must never
@@ -359,10 +369,52 @@ return {
 					local hosts = sysinfo.mac_table("lan2", nil, true)
 					assert_eq(#hosts, 2, "the tap's hosts for this socket")
 					assert_eq(hosts[1].mac, "00:00:5e:00:53:07", "first mac")
-					-- Same row shape as the FDB path: the ARP join and the
-					-- uptime bookkeeping are shared, not reimplemented.
+					-- Same row shape as the FDB path: the uptime bookkeeping is
+					-- shared, not reimplemented.
 					assert_eq(hosts[1].age, 0, "age matches the FDB source's contract")
 					assert_not_nil(hosts[1].uptime, "and uptime is filled in")
+				end
+			)
+		end
+	},
+	{
+		name = "sysinfo: the tap supplies an address the ARP cache cannot",
+		fn = function()
+			-- The whole point of the address half. An assigned socket is on a
+			-- VLAN the AP holds no address on, so /proc/net/arp will never
+			-- answer for a host behind it -- and without an ip the controller
+			-- files that client under the untagged network.
+			sysinfo._mac_first_seen = {}
+			with_fixtures({},
+				{
+					["bridge fdb show"] = "",
+					["nft list table"] = fixture("nft_list_table_openuf_learn.txt"),
+				},
+				function()
+					local hosts = sysinfo.mac_table("lan2", nil, true)
+					assert_eq(hosts[1].ip, "192.0.2.20", "address from the tap")
+				end
+			)
+		end
+	},
+	{
+		name = "sysinfo: the ARP cache outranks the tap where it can answer",
+		fn = function()
+			-- /proc/net/arp is the AP's own L3 view: where it has an entry it
+			-- is the better source, and the tap is the fallback for the socket
+			-- it cannot see.
+			sysinfo._mac_first_seen = {}
+			with_fixtures(
+				{["/proc/net/arp"] =
+					"IP address  HW type  Flags  HW address         Mask  Device\n"
+					.. "192.0.2.77  0x1      0x2    00:00:5e:00:53:07  *     br-lan\n"},
+				{
+					["bridge fdb show"] = "",
+					["nft list table"] = fixture("nft_list_table_openuf_learn.txt"),
+				},
+				function()
+					local hosts = sysinfo.mac_table("lan2", nil, true)
+					assert_eq(hosts[1].ip, "192.0.2.77", "the ARP answer, not the tap's")
 				end
 			)
 		end
@@ -378,7 +430,7 @@ return {
 			with_fixtures({},
 				{
 					["bridge fdb show"] = "00:00:5e:00:53:0b dev lan2 master br-lan \n",
-					["nft list set"] = fixture("nft_list_set_openuf_learn.txt"),
+					["nft list table"] = fixture("nft_list_table_openuf_learn.txt"),
 				},
 				function()
 					local hosts = sysinfo.mac_table("lan2", nil, true)

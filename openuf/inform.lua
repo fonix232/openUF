@@ -512,7 +512,25 @@ end
 -- `source` is sysinfo.mac_table(ifname, bridge, allow_tap) or
 -- sysinfo.switch_mac_table(phys, arl), so it takes up to three arguments; a
 -- failing source yields no hosts rather than aborting the payload.
-local function _filter_hosts(source, a, b, c, self_macs, station_macs)
+--
+-- `vlan` stamps every row with the VLAN the socket carries, and is what decides
+-- which NETWORK the controller files these clients under. It walks the site's
+-- layer-2 networks and keeps a reported host only where the network's VLAN id
+-- equals the row's `vlan`, defaulting to 1:
+--
+--     if (network.getVlan() != host.getInt("vlan", 1)) continue;
+--
+-- (confirmed in the 10.6 controller's wired-client processor). Omitted, every
+-- host defaults to 1 and lands in the untagged network no matter which socket
+-- reported it -- so a client on a socket openUF assigned to a VLAN was filed
+-- under the management LAN while its port, IP and the Ports view's own Native
+-- VLAN column all said otherwise. It is also half of the controller's dedup key
+-- for these rows (`mac` .. `vlan`), so one host reachable on two VLANs stays two
+-- rows rather than collapsing into one.
+--
+-- Left nil for the management VLAN: the controller drops a `vlan` of 1 on
+-- arrival, so sending it says nothing and costs bytes on every heartbeat.
+local function _filter_hosts(source, a, b, c, vlan, self_macs, station_macs)
 	local hosts = {}
 	local ok, found = pcall(source, a, b, c)
 	if not ok or type(found) ~= "table" then return hosts end
@@ -524,6 +542,7 @@ local function _filter_hosts(source, a, b, c, self_macs, station_macs)
 				hostname = host.hostname,
 				age      = host.age,
 				uptime   = host.uptime,
+				vlan     = vlan,
 			}
 		end
 	end
@@ -1431,7 +1450,7 @@ function M.build_json(st, cfg, ufhw)
 			-- host there is not reachable on the LAN it would be listed in.
 			if not is_uplink and (link.pvid == nil or link.pvid == mgmt_vlan) then
 				entry.mac_table = arr(_filter_hosts(
-					M._sysinfo.switch_mac_table, phys, sw.arl, nil,
+					M._sysinfo.switch_mac_table, phys, sw.arl, nil, nil,
 					self_macs, station_macs))
 			end
 		else
@@ -1500,9 +1519,19 @@ function M.build_json(st, cfg, ufhw)
 				-- forks `nft` at all.
 				local allow_tap = (uplink_bridge ~= nil and sock_bridge ~= nil
 					and sock_bridge ~= uplink_bridge)
+				-- Which VLAN this socket carries, read off the bridge openUF
+				-- moved it into rather than plumbed down from the push: that
+				-- bridge IS the VLAN (ucihelper names it br-openuf<vid>), so
+				-- the socket's own enslavement is the most direct statement of
+				-- it available, and it cannot disagree with where the frames
+				-- actually go. nil for a socket still in the management
+				-- bridge, which is the same thing as VLAN 1.
+				local port_vlan = sock_bridge
+					and tonumber(sock_bridge:match("^br%-openuf(%d+)$")) or nil
+				if port_vlan == mgmt_vlan then port_vlan = nil end
 				entry.mac_table = arr(_filter_hosts(
 					M._sysinfo.mac_table, p.ifname, sock_bridge, allow_tap,
-					self_macs, station_macs))
+					port_vlan, self_macs, station_macs))
 			end
 		end
 		port_table[#port_table + 1] = entry
