@@ -578,6 +578,7 @@ end
 -- the socket members. Neither touches the other's.
 
 local OPENUF_BRDEV_PREFIX = "openuf_brdev"
+local OPENUF_BRPORT_PREFIX = "openuf_brport"
 
 -- Which netdev a UniFi port_idx is on a DSA board, or nil plus a reason.
 --
@@ -661,6 +662,22 @@ end
 -- The bridge device section a VLAN's L2 lives in, matching the names
 -- ucihelper.ensure_vlan_network writes.
 local function brdev_section(vid) return OPENUF_BRDEV_PREFIX .. tostring(vid) end
+
+-- The `config device` section carrying one moved SOCKET's bridge-port options.
+--
+-- Deliberately a different shape from ucihelper's `openuf_brport<vid>`, which
+-- names the tagged UPLINK sub-device: that one is per-VLAN and there is exactly
+-- one of it, this one is per-socket and there may be several in the same VLAN.
+-- The `_` keeps the two apart under ucihelper's `^openuf_brport(%d+)$` sweep.
+--
+-- UCI section names accept only [A-Za-z0-9_], and libuci discards a section
+-- with an invalid name while reporting success on both set() and commit() --
+-- silently, which is how an SSID with a hyphen once provisioned nothing at all.
+-- Socket netdevs here are `lan2`/`wan`-shaped, but sanitise rather than trust.
+local function brport_section(vid, ifname)
+	return OPENUF_BRPORT_PREFIX .. tostring(vid) .. "_"
+		.. tostring(ifname):gsub("[^%w_]", "_")
+end
 
 -- Read a UCI list option that may come back as a bare string.
 local function as_list(v)
@@ -783,6 +800,67 @@ function M.dsa_apply(sw, cfg, st, uplink_ifname)
 		end
 	end
 
+	-- MAC learning OFF on every socket openUF moves into a VLAN bridge.
+	--
+	-- Same hardware fact as the tagged uplink's override in
+	-- ucihelper.ensure_vlan_network, reached from the other side. On a DSA
+	-- board br-openuf<vid> is a SOFTWARE bridge: `wan.10` is an 8021q device
+	-- the switch knows nothing about, so the VLAN bridge exists only above the
+	-- CPU port. The moved socket, though, is still a real port on the same
+	-- ASIC as the uplink, and that ASIC has ONE address table. With learning
+	-- on it files the attached device against `lan2`:
+	--     00:00:5e:00:53:03 dev lan2 self
+	-- A reply arriving VLAN-tagged on the physical uplink port then HITS that
+	-- entry, and `lan2` is not in the uplink's bridge port matrix any more --
+	-- so the switch resolves the frame in hardware and drops it instead of
+	-- punting it to the CPU, where the software bridge would have delivered
+	-- it. With no entry the same frame is unknown unicast, floods to the CPU,
+	-- and arrives.
+	--
+	-- Measured on an AX3000T (2026-09-12) with an IKEA Trådfri hub on port 2,
+	-- captured at all three points at once. Learning ON: four DHCP DISCOVERs
+	-- leave `lan2`, reach `wan.10`, leave the uplink correctly tagged, and
+	-- NOTHING comes back -- not even on the physical port, because a
+	-- hardware-dropped frame never reaches the CPU to be captured. Learning
+	-- OFF: DISCOVER -> OFFER -> REQUEST -> ACK in 2 ms. Outbound is perfect in
+	-- both, which is what makes this so hard to see: every counter and every
+	-- log line says the port move worked.
+	--
+	-- Cost: the socket's hosts stop appearing in `bridge fdb show dev <sock>`,
+	-- so inform's port_table no longer reports who is behind this port and the
+	-- controller stops crediting the client to it. Connectivity is worth more
+	-- than an attribution row, and only assigned sockets pay it.
+	--
+	-- NOTE a live reassignment still converges slowly: an entry learned while
+	-- the socket was in br-lan is already in the ASIC, cannot be deleted
+	-- (`bridge fdb del ... self` answers ENOENT, `bridge fdb flush` EOPNOTSUPP)
+	-- and does not clear on a link bounce. It ages out on its own -- measured
+	-- at ~140 s -- and the port works from that moment. Nothing to do but wait.
+	for vid in pairs(vids) do
+		for _, p in ipairs((cfg and cfg.net and cfg.net.ports) or {}) do
+			local ifname = p.ifname
+			if ifname and managed[ifname] then
+				local sec = brport_section(vid, ifname)
+				if assigned[ifname] == vid then
+					if cursor:get("network", sec, "name") ~= ifname
+						or tostring(cursor:get("network", sec, "learning") or "") ~= "0" then
+						cursor:set("network", sec, "device")
+						cursor:set("network", sec, "name", ifname)
+						cursor:set("network", sec, "learning", "0")
+						changed = true
+					end
+				elseif cursor:get("network", sec, "name") then
+					-- Going home to br-lan, or to a different VLAN: the
+					-- override must not outlive the assignment that needed
+					-- it, or the socket returns with learning still off and
+					-- silently stops reporting its hosts.
+					cursor:delete("network", sec)
+					changed = true
+				end
+			end
+		end
+	end
+
 	if not changed then return false end
 	cursor:commit("network")
 	M._exec("/etc/init.d/network reload 2>/dev/null")
@@ -813,6 +891,21 @@ function M.dsa_restore(st, cfg)
 		end
 		if diff then cursor:set("network", s[".name"], "ports", out); changed = true end
 	end)
+
+	-- The per-socket learning overrides go with the assignment that needed
+	-- them. Collected first and deleted after the walk: deleting inside
+	-- cursor:foreach mutates the list being iterated.
+	local doomed = {}
+	cursor:foreach("network", "device", function(s)
+		local name = s[".name"]
+		if name and name:match("^" .. OPENUF_BRPORT_PREFIX .. "%d+_") then
+			doomed[#doomed + 1] = name
+		end
+	end)
+	for _, name in ipairs(doomed) do
+		cursor:delete("network", name)
+		changed = true
+	end
 
 	-- Derived, not hardcoded: dsa_apply names this bridge from the modelmap,
 	-- and a restore that looked for a different one would silently put nothing

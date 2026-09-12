@@ -1011,4 +1011,82 @@ return {
 			end)
 		end
 	},
+	{
+		name = "switchvlan/dsa: a moved socket gets MAC learning turned off",
+		fn = function()
+			-- The ASIC has one address table shared with br-lan's uplink. Let
+			-- it learn the attached device against the moved socket and a
+			-- reply arriving tagged on the uplink resolves in hardware to a
+			-- port that is no longer in the uplink's bridge, so the switch
+			-- drops it instead of punting it to the CPU. Outbound stays
+			-- perfect throughout, which is why nothing else catches this.
+			local u = dsa_board()
+			with_capture(function()
+				switchvlan._uci = u.mock
+				switchvlan.apply(dsa_push(3, 10), DSA_CFG, {}, {}, nil, "wan")
+				local sec = u.db.network["openuf_brport10_lan3"]
+				assert_true(sec ~= nil, "the socket has a bridge-port section")
+				assert_eq(sec.name, "lan3", "naming the socket")
+				assert_eq(sec.learning, "0", "with MAC learning off")
+				assert_true(u.db.network["openuf_brport10"] == nil,
+					"and it does not collide with ucihelper's uplink override")
+			end)
+		end
+	},
+	{
+		name = "switchvlan/dsa: the learning override does not re-dirty a steady push",
+		fn = function()
+			-- Same reasoning as the bridge lists above: a write that looks
+			-- like a change on every inform reloads the network every ~10 s.
+			local u = dsa_board()
+			with_capture(function(cmds)
+				switchvlan._uci = u.mock
+				local st = {}
+				switchvlan.apply(dsa_push(3, 10), DSA_CFG, st, {}, nil, "wan")
+				local n = #cmds
+				assert_false(switchvlan.apply(dsa_push(3, 10), DSA_CFG, st, {}, nil, "wan"),
+					"second identical push is a no-op")
+				assert_eq(#cmds, n, "and issues no reload")
+				assert_eq(u.db.network["openuf_brport10_lan3"].learning, "0",
+					"the override is still there, just not rewritten")
+			end)
+		end
+	},
+	{
+		name = "switchvlan/dsa: a socket sent home loses its learning override",
+		fn = function()
+			-- An override that outlives the assignment leaves a port back in
+			-- br-lan with learning off, which silently costs that port its
+			-- host list in port_table -- a regression with no symptom.
+			local u = dsa_board()
+			with_capture(function()
+				switchvlan._uci = u.mock
+				local st = {}
+				switchvlan.apply(dsa_push(3, 10), DSA_CFG, st, {}, nil, "wan")
+				assert_true(u.db.network["openuf_brport10_lan3"] ~= nil, "applied")
+				switchvlan.apply({enabled = true, vlans = {}, ports = {}},
+					DSA_CFG, st, {}, nil, "wan")
+				assert_eq(joined(u, "brlan"), "lan2,lan4,wan,lan3", "lan3 came home")
+				assert_true(u.db.network["openuf_brport10_lan3"] == nil,
+					"and its learning override went with it")
+			end)
+		end
+	},
+	{
+		name = "switchvlan/dsa: restore leaves no learning override behind",
+		fn = function()
+			local u = dsa_board()
+			with_capture(function()
+				switchvlan._uci = u.mock
+				local st = {}
+				switchvlan.apply(dsa_push(3, 10), DSA_CFG, st, {}, nil, "wan")
+				assert_true(u.db.network["openuf_brport10_lan3"] ~= nil, "applied")
+				switchvlan.restore(st, DSA_CFG)
+				assert_true(u.db.network["openuf_brport10_lan3"] == nil,
+					"teardown removed it")
+				assert_eq(joined(u, "brlan"), "lan2,lan3,lan4,wan",
+					"and br-lan is back as the board shipped it")
+			end)
+		end
+	},
 }

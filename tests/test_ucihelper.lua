@@ -396,6 +396,51 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: prune_vlan_networks also takes switchvlan's per-socket overrides",
+		fn = function()
+			-- switchvlan writes `openuf_brport<vid>_<socket>` for every wired
+			-- socket it moves into the VLAN bridge. Deleting the VLAN sends
+			-- those sockets back to br-lan, and an override left behind would
+			-- keep MAC learning off on a port no openUF bridge owns -- which
+			-- costs that port its host list in port_table and says nothing.
+			with_ucihelper(function(db)
+				local c = ucihelper._uci.cursor()
+				c:set("network", "br_lan", "device")
+				c:set("network", "br_lan", "name", "br-lan")
+				c:set("network", "br_lan", "type", "bridge")
+				ucihelper.ensure_vlan_network("wan", 10)
+				c:set("network", "openuf_brport10_lan2", "device")
+				c:set("network", "openuf_brport10_lan2", "name", "lan2")
+				c:set("network", "openuf_brport10_lan2", "learning", "0")
+
+				ucihelper.prune_vlan_networks({})
+				assert_eq(db.network.openuf_brport10_lan2, nil,
+					"the socket override went with the bridge")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: a surviving VLAN keeps its per-socket overrides",
+		fn = function()
+			-- The sweep is per-VLAN, not a blanket prefix delete: pruning one
+			-- VLAN must not disarm another's sockets.
+			with_ucihelper(function(db)
+				local c = ucihelper._uci.cursor()
+				c:set("network", "br_lan", "device")
+				c:set("network", "br_lan", "name", "br-lan")
+				c:set("network", "br_lan", "type", "bridge")
+				ucihelper.ensure_vlan_network("wan", 10)
+				c:set("network", "openuf_brport10_lan2", "device")
+				c:set("network", "openuf_brport10_lan2", "name", "lan2")
+				c:set("network", "openuf_brport10_lan2", "learning", "0")
+
+				ucihelper.prune_vlan_networks({[10] = true})
+				assert_true(db.network.openuf_brport10_lan2 ~= nil,
+					"VLAN 10 is still wanted, so its socket override stays")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: ensure_vlan_network uses pre-21.02 bridge syntax when that is what the box speaks",
 		fn = function()
 			-- No `config device` section and no interface carrying `device`

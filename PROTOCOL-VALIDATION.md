@@ -124,8 +124,8 @@ on the controller's own subnet and its informs are landing perfectly. On the Ado
 gateway opened three SSH connections to the AP within 20 seconds:
 
 ```
-dropbear[3746]: Child connection from 192.168.200.1:33114
-dropbear[3746]: Login attempt for nonexistent user from 192.168.200.1:33114
+dropbear[3746]: Child connection from 192.0.2.1:33114
+dropbear[3746]: Login attempt for nonexistent user from 192.0.2.1:33114
 ```
 
 and, failing them, parked the device at **Connection Interrupted** while the inform loop kept
@@ -285,7 +285,7 @@ openUF now does that once at startup when the attribute exists and reads 0
 
 ## A tagged SSID's trunk deafened every wired client on the AP — FIXED
 
-2026-08-02, same two APs. The user reported a printer at a static `192.168.200.11`, cabled
+2026-08-02, same two APs. The user reported a printer at a static `192.0.2.11`, cabled
 into the Bedroom AP, that nothing could reach and that never appeared in the controller UI.
 It was an openUF bug, and the printer was only the visible half of it — a second host on
 another socket had been dead the same way, unnoticed.
@@ -948,7 +948,7 @@ show, because they are all swconfig and all 802.11n on 2.4 GHz.
 
 ### Verified working on the board
 
-Adoption over L3 (identity MAC `d4:53:2a:38:80:cf`, the board's label MAC, `use_gcm: true`),
+Adoption over L3 (identity MAC `00:00:5e:00:53:01`, the board's label MAC, `use_gcm: true`),
 LLDP topology (`cid_interface='wan'` → Parent Device *Cloud Gateway Ultra, Port 2*),
 per-socket `port_table` including a genuine FE/GbE split and wired clients on the right
 sockets, both radios on air, Locate and the LED toggle on the real case LED, and the
@@ -991,11 +991,60 @@ applied something, which is proof the controller was sending `switch.*` until no
 reachable only inside `type(sys_raw) == "string"`, so a noop response can never trigger it,
 and `restore()` spends the ledger so it cannot flap.
 
-What the client does next is its own business: an IKEA Trådfri hub kept the Home LAN lease
-it already held (the link never drops when a port changes bridge), and after a link bounce
-re-sent DISCOVER once a minute for fifteen minutes without ever accepting an offer. Scope
-on DSA is the Native VLAN — a bridge gives a port one untagged home — and a tagged-only
-port is refused out loud rather than half-applied.
+An attached client keeps the lease it already held, because the link never drops when a
+port changes bridge; a link bounce is what makes it re-DHCP. Scope on DSA is the Native
+VLAN — a bridge gives a port one untagged home — and a tagged-only port is refused out
+loud rather than half-applied.
+
+### The moved socket must stop learning, or the port is a one-way street
+
+**Correction to this section (2026-09-12).** It previously recorded that an IKEA Trådfri
+hub "re-sent DISCOVER once a minute for fifteen minutes without ever accepting an offer"
+and filed it under what the client does being its own business. That was openUF's bug, not
+the client's.
+
+`br-openuf<vid>` is a software bridge — `wan.10` is an 8021q device the ASIC knows nothing
+about — but the moved socket is still a real port on the same ASIC as the uplink, and that
+ASIC has one address table. With learning on it files the hub against `lan2`:
+
+```
+00:00:5e:00:53:03 dev lan2 self
+```
+
+A reply arriving VLAN-tagged on the physical uplink port then *hits that entry*. `lan2` is
+no longer in the uplink's bridge port matrix, so the switch resolves the frame in hardware
+and drops it instead of punting it to the CPU, where the software bridge would have
+delivered it. Exactly the one-FDB hazard that cost the wired clients their gateway in the
+`wan.10` case above, reached from the other side.
+
+Captured at three points at once on the AX3000T, hub on port 2:
+
+| | learning on | learning off |
+|---|---|---|
+| DISCOVER on `lan2` | 4 | 1 |
+| same frame on `wan.10` | 4 | 1 |
+| same frame on `wan`, tagged | 4 | 1 |
+| **any reply, anywhere** | **0** | OFFER + ACK, 2 ms |
+
+**Outbound is perfect in both columns.** That is what makes this class so expensive: the
+`/proc/net/dev` counter identity that was offered above as the honest proof of a port move
+*passes* while the port is dead, every log line is clean, and the controller shows a
+correct config. And a hardware-dropped frame never reaches the CPU, so it is absent from a
+capture on the physical port too — the evidence looks like the gateway never answered.
+
+Fixed in `switchvlan.dsa_apply`, which now writes `openuf_brport<vid>_<socket>` with
+`learning '0'` for each socket it moves, the same shape `ucihelper` uses for the tagged
+uplink. `strings /sbin/netifd` carries `brport/learning`, and the persistence was measured
+rather than assumed: forcing `bridge link set dev lan2 learning on` and then reloading the
+network put it back to `0`, while the unassigned `lan4` stayed at `1`.
+
+Two costs, both accepted deliberately:
+
+- the socket's hosts leave `bridge fdb show dev <socket>`, so `port_table` stops reporting
+  who is behind an assigned port;
+- an entry the ASIC learned *before* the move cannot be deleted (`bridge fdb del … self` →
+  `No such file or directory`, `bridge fdb flush` → `Not supported`) and survives a link
+  bounce. It ages out in ~140 s, and the port works from that moment.
 
 ### `radio.<n>.ieee_mode` carries a width, not a PHY generation
 

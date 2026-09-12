@@ -669,13 +669,46 @@ back verbatim and returns the sockets from the VLAN bridges.
 > **Reassigning a port does not re-address the device plugged into it.** Moving a socket
 > between bridges is invisible to the attached host: its link never drops, so it keeps the
 > lease it already had — now on the wrong subnet — and simply goes quiet. Bounce the port
-> (`ip link set lan2 down; ip link set lan2 up`) to make it re-DHCP, and be aware that some
-> devices still will not: an IKEA Trådfri hub, moved to an IoT VLAN this way, re-sent a
-> DHCP DISCOVER roughly once a minute for fifteen minutes without ever taking the offer,
-> and needed the port put back. Verify the move by watching the counters rather than by
-> waiting for the client to reappear — `cat /proc/net/dev` should show the socket's rx
-> bytes and the tagged uplink's tx bytes climb by *the same amount*, which is the whole
-> path proving itself. Power-cycle the attached device if it does not settle.
+> (`ip link set lan2 down; ip link set lan2 up`) to make it re-DHCP. Verify the move by
+> watching the counters rather than by waiting for the client to reappear —
+> `cat /proc/net/dev` should show the socket's rx bytes and the tagged uplink's tx bytes
+> climb by *the same amount*, which is the whole path proving itself.
+
+**openUF turns MAC learning off on every socket it moves**, with a `config device` section
+named `openuf_brport<vid>_<socket>`. This is not a tuning knob; without it the port is a
+one-way street.
+
+`br-openuf<vid>` is a *software* bridge — `wan.10` is an 8021q device the switch knows
+nothing about — but the moved socket is still a real port on the same ASIC as the uplink,
+and that ASIC has **one** address table. Let it learn the attached device against `lan2`
+and a reply arriving VLAN-tagged on the uplink port *hits that entry*; since `lan2` is no
+longer in the uplink's bridge port matrix, the switch resolves the frame in hardware and
+drops it rather than passing it to the CPU, where the software bridge would have delivered
+it. It is the same one-FDB hazard as the tagged uplink's own `learning '0'`, reached from
+the other side.
+
+The failure is brutal to diagnose because **outbound is perfect throughout**. Captured on
+an AX3000T with an IKEA Trådfri hub on port 2, learning on: four DHCP DISCOVERs leave the
+socket, arrive on `wan.10`, leave the uplink correctly tagged — and nothing comes back, not
+even on the physical port, because a frame dropped in hardware never reaches the CPU to be
+captured. Every counter, every log line and the controller all say the port move worked.
+With learning off: DISCOVER → OFFER → REQUEST → ACK in 2 ms.
+
+Two consequences worth knowing:
+
+- The socket's hosts stop showing up in `bridge fdb show dev <socket>`, so `port_table` no
+  longer reports who is behind that port and the controller stops crediting the client to
+  it. Only assigned sockets pay this, and connectivity is worth more than an attribution row.
+- **A live reassignment converges slowly.** An entry the ASIC learned while the socket was
+  still in `br-lan` is already there, cannot be deleted (`bridge fdb del … self` answers
+  `No such file or directory`, `bridge fdb flush` answers `Not supported`) and does not
+  clear on a link bounce. It ages out on its own — measured at ~140 s — and the port works
+  from that moment. If a freshly moved port looks dead, wait three minutes before
+  suspecting anything else.
+
+> Some attached devices still need a power cycle afterwards. A Trådfri hub put through
+> several link bounces during this investigation stopped transmitting entirely — zero
+> packets in 60 s on a live 100 Mbps link — and only a power cycle brought it back.
 
 Three things must line up or the port is skipped rather than guessed at:
 

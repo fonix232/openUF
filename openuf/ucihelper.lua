@@ -750,6 +750,12 @@ function M.prune_vlan_networks(wanted)
 	-- The uplink port's learning override goes with the bridge it qualified;
 	-- left behind it would keep learning off on a port no openUF bridge owns.
 	sweep("device",    "^" .. OPENUF_PREFIX .. "brport(%d+)$")
+	-- ...and switchvlan's per-SOCKET overrides on the same bridge
+	-- (`openuf_brport<vid>_<socket>`), which the anchored pattern above
+	-- deliberately does not match. A VLAN going away takes its moved sockets
+	-- back to br-lan, and an override left behind would keep learning off on a
+	-- port no openUF bridge owns -- silently costing that port its host list.
+	sweep("device",    "^" .. OPENUF_PREFIX .. "brport(%d+)_")
 
 	if #doomed == 0 then return false end
 	for _, name in ipairs(doomed) do

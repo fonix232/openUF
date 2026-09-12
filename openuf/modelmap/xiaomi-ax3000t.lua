@@ -25,7 +25,9 @@
 
 	So this map carries the netdev port shape and NO dev.conf.vlan: there is
 	no swconfig port numbering to map, and inventing one would be a guess.
-	Per-port VLAN assignment is therefore inert here — see the note below.
+	That absence is load-bearing rather than a gap: switchvlan detects the DSA
+	backend from it and moves the assigned socket between bridges instead of
+	programming a switch table. Per-port VLAN is implemented and verified here.
 ]]--
 
 local dev = {}
@@ -39,9 +41,9 @@ dev.conf = {}
 --
 -- lan_cpueth = "wan" is not a typo. It names the uplink SOCKET, which is what
 -- the three things that read it actually need:
---   • the identity MAC — d4:53:2a:38:80:cf here, which is also the board's
+--   • the identity MAC — 00:00:5e:00:53:01 here, which is also the board's
 --     label MAC (board.json's label_macaddr). The other netdevs share
---     eth0's d4:53:2a:b2:03:3c, so this is the more stable, more honest one.
+--     eth0's 00:00:5e:00:53:02, so this is the more stable, more honest one.
 --   • the parent of a VLAN-tagged SSID's sub-device (`wan.<vid>`, built by
 --     ucihelper.ensure_vlan_network). It has to be the socket the tag arrives
 --     on, not the bridge and not the DSA conduit.
