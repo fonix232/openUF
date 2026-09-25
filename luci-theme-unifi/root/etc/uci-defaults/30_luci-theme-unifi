@@ -1,0 +1,27 @@
+#!/bin/sh
+
+# Register the theme and its two fixed-scheme variants. "UniFi" follows the
+# browser's colour scheme and offers a toggle in the top bar; "UniFiDark" and
+# "UniFiLight" pin one scheme for everybody and hide the toggle.
+changed=0
+
+set_opt() {
+	if ! uci -q get "luci.$1" >/dev/null; then
+		uci set "luci.$1=$2"
+		changed=1
+	fi
+}
+
+set_opt themes.UniFi /luci-static/unifi
+set_opt themes.UniFiDark /luci-static/unifi-dark
+set_opt themes.UniFiLight /luci-static/unifi-light
+
+# Installing a theme is asking to use it, so switch to it on a fresh install,
+# but leave the choice alone on an upgrade.
+if [ "$PKG_UPGRADE" != 1 ] && [ $changed = 1 ]; then
+	uci set luci.main.mediaurlbase=/luci-static/unifi
+fi
+
+[ $changed = 1 ] && uci commit luci
+
+exit 0
