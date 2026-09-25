@@ -64,7 +64,7 @@ local function inject_sysinfo(with_clients, with_wired, with_scan, with_radio_ca
 		if with_radio_caps and cmd:find("dev wlan0 info") then
 			return fixture("iw_dev_info.txt")
 		end
-		if with_radio_caps and cmd:find("phy phy0 info") then
+		if with_radio_caps and cmd:find("phy#0 info", 1, true) then
 			return fixture("iw_phy_info_5g.txt")
 		end
 		return ""
@@ -1185,7 +1185,7 @@ return {
 			inject_sysinfo(false, false, false, true)
 			inform._sysinfo._run_cmd = function(cmd)
 				if cmd:find("dev wlan0 info") then return fixture("iw_dev_info_5g.txt") end
-				if cmd:find("phy phy0 info") then return fixture("iw_phy_info_5g.txt") end
+				if cmd:find("phy#0 info", 1, true) then return fixture("iw_phy_info_5g.txt") end
 				return ""
 			end
 			local real_uci = dofile("openuf/ucihelper.lua")

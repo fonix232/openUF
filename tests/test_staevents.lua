@@ -70,14 +70,52 @@ return {
 		fn = function()
 			ev._reset()
 			local old = ev.MAX_QUEUE
-			ev.MAX_QUEUE = 3
+			ev.MAX_QUEUE = 2
 			ev.observe({}, 0, 0)
-			ev.observe({[A] = {vap = "v", uptime = 1}, [B] = {vap = "v", uptime = 1}}, 10, 10)
-			assert_eq(ev.pending(), 3, "capped")
+			local C = "aa:bb:cc:00:00:03"
+			ev.observe({[A] = {vap = "v", uptime = 1}, [B] = {vap = "v", uptime = 1},
+				[C] = {vap = "v", uptime = 1}}, 10, 10, {[A] = true, [B] = true, [C] = true})
+			assert_eq(ev.pending(), 2, "capped")
 			assert_eq(ev.peek().event_type, "success", "oldest dropped first")
-			ev.pop()
-			assert_eq(ev.pending(), 2, "popped")
 			ev.MAX_QUEUE = old
+			ev._reset()
+		end
+	},
+	{
+		name = "staevents: success waits for a DNS answer; yes when seen, N/A after the wait",
+		fn = function()
+			ev._reset()
+			ev.observe({}, 0, 0)
+			ev.observe({[A] = {vap = "v", uptime = 1}, [B] = {vap = "v", uptime = 1}}, 100, 100, {})
+			assert_eq(ev.pending(), 2, "associations go out at once, successes are held")
+			ev.pop(); ev.pop()
+			ev.observe({[A] = {vap = "v", uptime = 11}, [B] = {vap = "v", uptime = 11}}, 110, 110, {[A] = true})
+			assert_eq(ev.pending(), 1, "A's DNS answer seen")
+			local e = ev.pop()
+			assert_eq(e.mac, A, "A")
+			assert_eq(e.event_type, "success", "success")
+			assert_eq(e.dns_resp_seen, "yes", "verified")
+			ev.observe({[B] = {vap = "v", uptime = 51}}, 150, 150, {})
+			assert_eq(ev.peek().event_type, "sta_leave", "A left")
+			ev.pop()
+			assert_eq(ev.pending(), 0, "B still waiting")
+			ev.observe({[B] = {vap = "v", uptime = 61}}, 160, 160, {})
+			local b = ev.pop()
+			assert_eq(b.mac, B, "B after the wait")
+			assert_eq(b.dns_resp_seen, "N/A", "unverified, and says so")
+			ev._reset()
+		end
+	},
+	{
+		name = "staevents: a client that leaves before its DNS answer gets no success",
+		fn = function()
+			ev._reset()
+			ev.observe({}, 0, 0)
+			ev.observe({[A] = {vap = "v", uptime = 1}}, 10, 10, {})
+			ev.pop()
+			ev.observe({}, 20, 20, {[A] = true})
+			assert_eq(ev.pending(), 1, "only the sta_leave")
+			assert_eq(ev.pop().event_type, "sta_leave", "leave")
 			ev._reset()
 		end
 	},

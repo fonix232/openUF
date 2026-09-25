@@ -24,10 +24,12 @@
 	notification stream is dominated by probe requests). Resolution is one
 	heartbeat for departures; associations are dated exactly.
 
-	Deliberately NOT claimed: DNS/ARP/DHCP observations (dns_resp_seen and
-	arp_reply_gw_seen are "N/A"), per-phase latencies and failure counts. The
-	controller then records the connection without counting it as a verified
-	success, which is honest: openUF cannot see those phases.
+	The controller stores a `success` only when the device saw the client get a
+	DNS answer (dns_resp_seen "yes"); an unverified one is held and dropped. So
+	`success` waits until dnswatch.lua has seen a DNS answer go to the client
+	(then "yes"), or SUCCESS_WAIT seconds (then "N/A", honestly unverified).
+	Not claimed at all: ARP/DHCP observations, per-phase latencies, failure
+	counts.
 ]]--
 
 local M = {}
@@ -37,9 +39,12 @@ M.MESSAGE_TYPE = "STA_ASSOC_TRACKER"
 -- controller that is down must not turn the queue into a memory leak.
 M.MAX_QUEUE    = 200
 M.MAX_PER_TICK = 8
+-- How long a join's `success` waits for a DNS answer to be seen.
+M.SUCCESS_WAIT = 60
 
 M._prev  = nil    -- {uptime = n, stas = {mac -> {vap, signal, uptime, idle}}}
 M._queue = {}
+M._held  = {}     -- mac -> {ev = success event, at = when it was held}
 
 local function event_id(mac, kind, ts)
 	-- Unique per event, stable for a retry of the same one.
@@ -122,12 +127,39 @@ function M.diff(prev, cur, now, prev_uptime)
 	return out
 end
 
+local function enqueue(e)
+	if #M._queue >= M.MAX_QUEUE then table.remove(M._queue, 1) end
+	M._queue[#M._queue + 1] = e
+end
+
 -- Feed one heartbeat's snapshot; queues whatever changed since the last.
-function M.observe(stas, now, uptime)
+-- dns_seen: {mac -> true} for clients a DNS answer was seen going to
+-- (dnswatch.seen); nil when that is unavailable.
+function M.observe(stas, now, uptime, dns_seen)
 	local evs = M.diff(M._prev and M._prev.stas, stas, now, M._prev and M._prev.uptime)
 	for _, e in ipairs(evs) do
-		if #M._queue >= M.MAX_QUEUE then table.remove(M._queue, 1) end
-		M._queue[#M._queue + 1] = e
+		if e.event_type == "success" then
+			M._held[e.mac] = {ev = e, at = now}
+		else
+			if e.event_type == "sta_leave" then M._held[e.mac] = nil end
+			enqueue(e)
+		end
+	end
+	local macs = {}
+	for mac in pairs(M._held) do macs[#macs + 1] = mac end
+	table.sort(macs)
+	for _, mac in ipairs(macs) do
+		local h = M._held[mac]
+		if type(stas) ~= "table" or not stas[mac] then
+			M._held[mac] = nil                     -- gone before it was proven
+		elseif dns_seen and dns_seen[mac] then
+			h.ev.dns_resp_seen = "yes"
+			enqueue(h.ev)
+			M._held[mac] = nil
+		elseif now - h.at >= M.SUCCESS_WAIT then
+			enqueue(h.ev)                          -- stays "N/A"
+			M._held[mac] = nil
+		end
 	end
 	M._prev = {stas = stas, uptime = uptime}
 	return #evs
@@ -156,7 +188,7 @@ function M.notif_payload(identity, ev)
 end
 
 function M._reset()
-	M._prev, M._queue = nil, {}
+	M._prev, M._queue, M._held = nil, {}, {}
 end
 
 return M

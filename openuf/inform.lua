@@ -68,6 +68,7 @@ local unhandled = _require_sibling("unhandled")
 local sysconf   = _require_sibling("sysconf")
 local l2guard   = _require_sibling("l2guard")
 local staevents = _require_sibling("staevents")
+local dnswatch  = _require_sibling("dnswatch")
 
 local M = {}
 
@@ -94,6 +95,7 @@ M._unhandled  = unhandled
 M._sysconf    = sysconf
 M._l2guard    = l2guard
 M._staevents  = staevents
+M._dnswatch   = dnswatch
 
 -- In-memory only: 802.11k beacon-report neighbours, keyed by BSSID, plus the
 -- flat list build_json merges from. Clients report asynchronously and only
@@ -4233,8 +4235,17 @@ function M._tick(st, cfg, ufhw, ctx)
 	-- Client connection events (staevents.lua): queue whatever changed since
 	-- the last heartbeat; they go out after this inform succeeds.
 	if st.adopted and not (cfg and cfg.config and cfg.config.sta_events == false) then
-		pcall(M._staevents.observe, M._last_sta_snapshot or {}, M._time(),
-			M._last_identity and M._last_identity.uptime)
+		-- The DNS-answer table (dnswatch.lua), re-created every few minutes
+		-- in case a reboot or a flush took it.
+		local now = M._time()
+		if M._dnswatch and now >= (M._dnswatch_next or 0) then
+			M._dnswatch_next = now + 300
+			pcall(M._dnswatch.ensure)
+		end
+		local ok_d, dns = false, nil
+		if M._dnswatch then ok_d, dns = pcall(M._dnswatch.seen) end
+		pcall(M._staevents.observe, M._last_sta_snapshot or {}, now,
+			M._last_identity and M._last_identity.uptime, ok_d and dns or nil)
 	end
 
 	local ok_p, pkt = pcall(M.build_packet, json_str, st)  -- use_gcm read from st.use_gcm

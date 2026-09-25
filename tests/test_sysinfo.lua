@@ -916,7 +916,7 @@ return {
 		fn = function()
 			with_fixtures({}, {
 				["dev wlan0 info"] = fixture("iw_dev_info.txt"),
-				["phy phy0 info"]  = fixture("iw_phy_info_2g.txt"),
+				["phy#0 info"]  = fixture("iw_phy_info_2g.txt"),
 			}, function()
 				local caps = sysinfo.radio_caps("wlan0")
 				assert_false(caps.is_11ac, "2.4GHz has no VHT Capabilities section")
@@ -950,7 +950,7 @@ return {
 			}, "\n")
 			with_fixtures({}, {
 				["dev wlan0 info"] = "Interface wlan0\n\twiphy 1\n\tchannel 6 (2437 MHz)\n",
-				["phy phy1 info"]  = ht_only,
+				["phy#1 info"]  = ht_only,
 			}, function()
 				local caps = sysinfo.radio_caps("wlan0")
 				assert_eq(caps.nss, 3, "MCS 0-23 is three spatial streams, not one")
@@ -965,7 +965,7 @@ return {
 			-- authoritative. ("0-15, 32" -> floor(15/8)+1 = 2, same answer.)
 			with_fixtures({}, {
 				["dev wlan0 info"] = fixture("iw_dev_info.txt"),
-				["phy phy0 info"]  = fixture("iw_phy_info_2g.txt"),
+				["phy#0 info"]  = fixture("iw_phy_info_2g.txt"),
 			}, function()
 				assert_eq(sysinfo.radio_caps("wlan0").nss, 2, "explicit line wins, and agrees")
 			end)
@@ -1050,7 +1050,7 @@ return {
 			-- hardware was really at 23 dBm (5GHz) / 17 dBm (2.4GHz).
 			with_fixtures({}, {
 				["dev wlan0 info"] = fixture("iw_dev_info.txt"),
-				["phy phy0 info"]  = fixture("iw_phy_info_2g.txt"),
+				["phy#0 info"]  = fixture("iw_phy_info_2g.txt"),
 			}, function()
 				local caps = sysinfo.radio_caps("wlan0")
 				assert_eq(caps.tx_power, 20, "live txpower from 'txpower 20.00 dBm'")
@@ -1066,7 +1066,7 @@ return {
 			-- when the driver can't be asked.
 			with_fixtures({}, {
 				["dev wlan0 info"] = "Interface wlan0\n\twiphy 0\n\tchannel 6 (2437 MHz)\n",
-				["phy phy0 info"]  = fixture("iw_phy_info_2g.txt"),
+				["phy#0 info"]  = fixture("iw_phy_info_2g.txt"),
 			}, function()
 				assert_nil(sysinfo.radio_caps("wlan0").tx_power, "no txpower line -> nil")
 			end)
@@ -1077,7 +1077,7 @@ return {
 		fn = function()
 			with_fixtures({}, {
 				["dev wlan0 info"] = fixture("iw_dev_info.txt"):gsub("wiphy 0", "wiphy 1"),
-				["phy phy1 info"]  = fixture("iw_phy_info_5g.txt"),
+				["phy#1 info"]  = fixture("iw_phy_info_5g.txt"),
 			}, function()
 				local caps = sysinfo.radio_caps("wlan0")
 				assert_true(caps.is_11ac, "VHT Capabilities present")
@@ -1096,7 +1096,7 @@ return {
 			local phy_info = fixture("iw_phy_info_5g.txt"):gsub("HT TX Max spatial streams: 2\n", "")
 			with_fixtures({}, {
 				["dev wlan0 info"] = fixture("iw_dev_info.txt"),
-				["phy phy0 info"]  = phy_info,
+				["phy#0 info"]  = phy_info,
 			}, function()
 				local caps = sysinfo.radio_caps("wlan0")
 				assert_eq(caps.nss, 2, "max of the 'N streams: MCS ...' lines (1 and 2 both supported)")

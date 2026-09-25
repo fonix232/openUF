@@ -637,7 +637,11 @@ function M._phy_info(phy)
 	local now = M._time()
 	local c = M._phy_info_cache[phy]
 	if c and (now - c.at) < M.PHY_INFO_TTL then return c.text, c.caps end
-	local text = M._run_cmd("iw phy phy" .. phy .. " info")
+	-- By index ("phy#1"), not by the default name "phy1": boards rename their
+	-- phys (an E8450's are wl0/wl1), and `iw phy phy1 info` then answers
+	-- nothing -- every radio reported no capabilities at all and the
+	-- controller offered 20/40 MHz only on a 4x4 HE160 radio.
+	local text = M._run_cmd("iw phy#" .. phy .. " info")
 	if not text or text == "" then return text, nil end
 	local caps = parse_phy_info(text)
 	M._phy_info_cache[phy] = {text = text, caps = caps, at = now}
