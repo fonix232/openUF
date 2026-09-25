@@ -4236,6 +4236,9 @@ function M._tick(st, cfg, ufhw, ctx)
 				io.stderr:write("inform: pending adoption (HTTP 404 until adopted in the controller)\n")
 				M._logged_pending = true
 			end
+			-- The controller answered: the daemon is alive and talking to it,
+			-- which is what the status file's readers (openuf-update) ask.
+			pcall(M._write_status, st, {last_ok = M._time(), last_type = "pending"})
 			ctx.backoff = ctx.interval
 			return ctx.interval
 		end
