@@ -69,7 +69,8 @@ payload() {
 	cp -R "$here/ucode/." "$stage/usr/share/ucode/luci/"
 	cp -R "$here/root/." "$stage/"
 
-	tar -C "$stage" -cf - www usr etc
+	# COPYFILE_DISABLE keeps macOS tar from adding ._* metadata files.
+	COPYFILE_DISABLE=1 tar -C "$stage" -cf - www usr etc
 }
 
 run() {
