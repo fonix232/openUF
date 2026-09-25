@@ -40,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0          # the release number is the commit count
+          fetch-depth: 0          # the build stamp names the nearest tag (git describe)
 
       - name: Build with the OpenWrt SDK
         run: |

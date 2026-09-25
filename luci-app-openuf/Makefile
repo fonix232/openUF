@@ -8,7 +8,10 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-openuf
 PKG_VERSION:=0.10.0
-PKG_RELEASE:=$(shell git -C $(CURDIR) rev-list --count HEAD 2>/dev/null || echo 1)
+# The commit's UTC date (YYYYMMDDHHMM): it only goes up however a change
+# reaches main -- merge, squash or rebase -- where a commit count would drop
+# after a squash. 1 outside a git checkout.
+PKG_RELEASE:=$(or $(shell TZ=UTC git -C $(CURDIR) log -1 --format=%cd --date=format-local:%Y%m%d%H%M 2>/dev/null),1)
 
 PKG_MAINTAINER:=fonix232
 PKG_LICENSE:=MIT
