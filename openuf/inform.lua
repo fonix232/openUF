@@ -1680,7 +1680,16 @@ function M.build_json(st, cfg, ufhw)
 		cfgversion_effective = st.cfgversion_effective,
 		-- Identity detail real firmware reports and the controller stores on
 		-- the device record.
-		netmask          = st.netmask,
+		--
+		-- netmask only once adopted. The controller builds the device's subnet
+		-- from ip + netmask, and when its own address falls inside it (an AP on
+		-- the gateway's LAN) it adopts over SSH with the default ubnt/ubnt login
+		-- instead of delivering the key over the inform channel -- which fails
+		-- on OpenWrt ("SSH adopt failed ... loginfail", then ADOPT_FAILED and
+		-- every inform rejected). Without a netmask the subnet is unknown and a
+		-- device discovered by inform is adopted over L3. Confirmed on 10.6.106
+		-- (devmgr XtugNwLHsUnnZrF, hyFnQ.getSubnetInfo).
+		netmask          = st.adopted and st.netmask or nil,
 		architecture     = M._uname_info().machine,
 		kernel_version   = M._uname_info().release,
 		uptime           = uptime,

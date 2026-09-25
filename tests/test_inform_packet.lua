@@ -3722,6 +3722,18 @@ return {
 		end
 	},
 	{
+		name = "inform: netmask is withheld until adopted (it makes the controller adopt over SSH)",
+		fn = function()
+			local ufhw = {uap = {model = "U6IW", fw = {ver = "6.8.2.1"}}}
+			local st = sample_state({adopted = false, netmask = "255.255.254.0"})
+			local d = cjson.decode(inform.build_json(st, nil, ufhw))
+			assert_nil(d.netmask, "unadopted: no subnet, so L3 adoption over inform")
+			st.adopted = true
+			d = cjson.decode(inform.build_json(st, nil, ufhw))
+			assert_eq(d.netmask, "255.255.254.0", "adopted: reported")
+		end
+	},
+	{
 		name = "inform: an authkey rotation is accepted over the adopted channel only",
 		fn = function()
 			local key1, key2 = string.rep("1", 32), string.rep("2", 32)
