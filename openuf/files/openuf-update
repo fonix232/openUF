@@ -22,7 +22,10 @@ if command -v apk >/dev/null 2>&1; then
 	refresh()   { apk update >/dev/null 2>&1; }
 	current()   { apk list -I "$1" 2>/dev/null | sed -n "s/^$1-\([0-9][^ ]*\) .*/\1/p" | head -1; }
 	newest()    { apk list -a "$1" 2>/dev/null | sed -n "s/^$1-\([0-9][^ ]*\) .*/\1/p" | sort -V | tail -1; }
-	upgrade()   { apk add --upgrade "$@"; }
+	# `apk upgrade <names>`, not `apk add --upgrade`: the latter upgrades the
+	# whole dependency tree too (luci-base, libopenssl...), which is not this
+	# tool's call to make.
+	upgrade()   { apk upgrade "$@"; }
 	downgrade() { apk add "$1=$2"; }
 else
 	refresh()   { opkg update >/dev/null 2>&1; }
