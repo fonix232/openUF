@@ -1,0 +1,177 @@
+// openUF status for LuCI (luci-app-openuf).
+//
+// Read-only: everything comes from files openUF already keeps -- the
+// heartbeat (/tmp/openuf-status), state.json, the auto-derived identity and
+// port map, conf.lua -- plus a process check. The adoption key and anything
+// else secret in state.json is never returned.
+
+'use strict';
+
+import { readfile, access, stat, lsdir } from 'fs';
+import { connect } from 'ubus';
+
+const OPENUF = '/opt/openuf';
+const STATE  = '/etc/openuf';
+
+function json_file(path) {
+	const raw = readfile(path);
+	if (!raw)
+		return null;
+	try { return json(raw); } catch (e) { return null; }
+}
+
+// key=value lines (the daemon's heartbeat file).
+function kv_file(path) {
+	const out = {};
+	for (let line in split(readfile(path) ?? '', '\n')) {
+		const m = match(line, /^([a-z_]+)=(.*)$/);
+		if (m)
+			out[m[1]] = m[2];
+	}
+	return out;
+}
+
+// Is a `lua <script>` process running? /proc/<pid>/cmdline separates the
+// arguments with NUL bytes, so compare the argument list, not a pattern.
+function running(script) {
+	for (let pid in lsdir('/proc') ?? []) {
+		if (!match(pid, /^[0-9]+$/))
+			continue;
+		const argv = split(readfile(`/proc/${pid}/cmdline`) ?? '', '\u0000');
+		if (length(argv) >= 2 && match(argv[0], /(^|\/)lua$/) && argv[1] == script)
+			return true;
+	}
+	return false;
+}
+
+// The handful of conf.lua options worth showing, read as text: conf.lua is a
+// Lua program (its model map runs board detection), not data.
+function conf_options() {
+	const src = readfile(`${OPENUF}/conf.lua`) ?? '';
+	const out = {};
+	const mm = match(src, /\ndev = dofile\("modelmap\/([^"]+)\.lua"\)/);
+	out.modelmap = mm ? mm[1] : null;
+	for (let key in [ 'use_only_unifi_wlan', 'own_config', 'l2_announce', 'bridge_backend',
+			'bridge_takeover', 'bridge_rollback_timeout', 'sta_events', 'controller_system',
+			'l2guard', 'rrm_enrichment', 'stun', 'upgrade_mode', 'advertise_updates',
+			'country_override', 'debug_dump_file', 'inform_url' ]) {
+		const m = match(src, regexp('\n[ \t]*' + key + '[ \t]*=[ \t]*([^,\n]+)'));
+		if (m) {
+			let v = trim(m[1]);
+			v = replace(v, /[ \t]*--.*$/, '');
+			v = replace(v, /^"(.*)"$/, '$1');
+			out[key] = (v == 'nil') ? null : v;
+		}
+	}
+	return out;
+}
+
+// Catalogue entry for a model code: its product name, SKU, system id and
+// current firmware (ufmodel/catalog.lua, one entry spread over three lines).
+function catalogue(model) {
+	if (!model || !match(model, /^[A-Za-z0-9_-]+$/))
+		return null;
+	const src = readfile(`${OPENUF}/ufmodel/catalog.lua`) ?? '';
+	const at = index(src, `{model = "${model}",`);
+	if (at < 0)
+		return null;
+	const entry = substr(src, at, 600);
+	const head = match(entry, /sku = "([^"]*)", name = "([^"]*)", sysid = (0x[0-9a-f]+), platform = "([^"]*)"/);
+	if (!head)
+		return null;
+	const fw = match(entry, /fw = "([^"]*)"/);
+	return { sku: head[1], name: head[2], sysid: head[3], platform: head[4], fw: fw ? fw[1] : null };
+}
+
+// The management interface's live address, from netifd: state.json only holds
+// the copy saved at the daemon's last write.
+function live_address() {
+	const conn = connect();
+	if (!conn)
+		return null;
+	const st = conn.call('network.interface.lan', 'status');
+	conn.disconnect();
+	const a = st?.['ipv4-address']?.[0];
+	return a ? { ip: a.address, mask: a.mask, proto: st.proto } : null;
+}
+
+function size_of(path) {
+	const s = stat(path);
+	return s ? s.size : null;
+}
+
+const methods = {
+	status: {
+		call: function() {
+			const st = json_file(`${STATE}/state.json`) ?? {};
+			const hb = kv_file('/tmp/openuf-status');
+			const ufm = json_file(`${STATE}/ufmodel-auto.json`);
+			const map = json_file(`${STATE}/modelmap-auto.json`);
+			const conf = conf_options();
+			const model = ufm?.model;
+			const addr = live_address();
+
+			return {
+				now: time(),
+				service: {
+					installed: !!access(`${OPENUF}/inform.lua`),
+					enabled: !!access('/etc/rc.d/S99openuf'),
+					running: running('inform.lua'),
+					announcing: running('announce.lua'),
+					build: trim(readfile(`${OPENUF}/BUILD`) ?? '') || null
+				},
+				heartbeat: {
+					last_ok: +(hb.last_ok ?? 0),
+					last_type: hb.last_type || null,
+					last_fail: +(hb.last_fail ?? 0),
+					last_fail_msg: hb.last_fail_msg || null
+				},
+				controller: {
+					inform_url: st.inform_url ?? conf.inform_url,
+					adopted: !!st.adopted,
+					cfgversion: st.cfgversion || null,
+					cfgversion_effective: st.cfgversion_effective || null,
+					stun_url: st.stun_url || null,
+					fw_version: st.fw_version || null,
+					upgrade_requested: st.upgrade_requested_version || null
+				},
+				identity: {
+					model: model,
+					catalogue: catalogue(model),
+					mac: st.mac || map?.identity_mac,
+					ip: addr ? `${addr.ip}/${addr.mask}` : (st.ip || null),
+					addressing: addr?.proto,
+					hostname: st.hostname || null
+				},
+				hardware: {
+					modelmap: conf.modelmap,
+					uplink: map?.uplink,
+					ports: map?.ports ?? [],
+					radios: map?.radios ?? [],
+					led: map?.led
+				},
+				network: {
+					applied: st.netmodel_applied || null,
+					pending: st.netmodel_pending || null,
+					failed: st.netmodel_failed || null,
+					removed: st.netmodel_removed ?? [],
+					network_backup: !!access(`${STATE}/network.pre-openuf`),
+					wireless_backup: !!access(`${STATE}/wireless.pre-openuf`)
+				},
+				upgrade: {
+					bootstrap: !!access('/etc/init.d/openuf-bootstrap'),
+					bootstrap_enabled: !!access('/etc/rc.d/S98openuf-bootstrap'),
+					cached_build: size_of(`${STATE}/dist/openuf.tar.gz`),
+					conf_backup: !!access(`${STATE}/conf.lua.last`)
+				},
+				diagnostics: {
+					unhandled: length(keys(json_file(`${STATE}/unhandled.json`)?.entries ?? {})),
+					blocked_clients: length(st.blocked_stas ?? [])
+				},
+				config: conf
+			};
+		}
+	}
+};
+
+return { 'luci.openuf': methods };

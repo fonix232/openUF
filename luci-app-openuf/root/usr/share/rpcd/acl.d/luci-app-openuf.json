@@ -1,0 +1,10 @@
+{
+	"luci-app-openuf": {
+		"description": "Grant access to the openUF status page",
+		"read": {
+			"ubus": {
+				"luci.openuf": [ "status" ]
+			}
+		}
+	}
+}

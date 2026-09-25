@@ -1,0 +1,13 @@
+{
+	"admin/services/openuf": {
+		"title": "openUF",
+		"order": 60,
+		"action": {
+			"type": "view",
+			"path": "openuf/status"
+		},
+		"depends": {
+			"acl": [ "luci-app-openuf" ]
+		}
+	}
+}

@@ -63,10 +63,11 @@ chmod +x "$STAGE/etc/init.d/openuf" "$STAGE/hook/syswrapper.sh" \
 
 # A build stamp naming this checkout, so `openuf-update --check` and the
 # daemon's status file can say what is running.
-printf '%s %s\n' "$(git describe --tags --always --dirty 2>/dev/null || echo unknown)" \
+printf '%s %s\n' "${OPENUF_BUILD:-$(git describe --tags --always --dirty 2>/dev/null || echo unknown)}" \
 	"$(date -u +%Y-%m-%dT%H:%MZ)" > "$STAGE/BUILD"
 
 cp install.sh update.sh LICENSE "$BUILD/"
+cp -r luci-app-openuf "$BUILD/"
 
 # ── Verify ──────────────────────────────────────────────────────────────────
 # README.md/USAGE.md are deliberately not shipped: ~21 KB transferred to and
@@ -123,7 +124,7 @@ fi
 
 # ── Package ─────────────────────────────────────────────────────────────────
 rm -f "$TARBALL"
-tar czf "$TARBALL" -C "$BUILD" openuf install.sh update.sh LICENSE
+tar czf "$TARBALL" -C "$BUILD" openuf install.sh update.sh LICENSE luci-app-openuf
 
 before=$(find openuf -type f -exec cat {} + | wc -c | tr -d ' ')
 after=$(find "$STAGE" -type f -exec cat {} + | wc -c | tr -d ' ')

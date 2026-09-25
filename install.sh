@@ -215,7 +215,7 @@ case "$ACTION" in
 		# needed for the code itself.
 		mkdir -p "$STATE_DIR/dist"
 		_files=""
-		for _f in openuf install.sh update.sh LICENSE; do
+		for _f in openuf install.sh update.sh LICENSE luci-app-openuf; do
 			[ -e "$_f" ] && _files="$_files $_f"
 		done
 		# shellcheck disable=SC2086
@@ -346,6 +346,15 @@ case "$ACTION" in
 				|| echo "WARNING: failed to install a full wpad build -- BSS Transition and Band Steering will not function (wpad-basic-* lacks 802.11v support)."
 		fi
 
+		# The LuCI status page (Services -> openUF), when LuCI is installed.
+		# rpcd re-reads plugins and ACLs on reload, keeping its sessions.
+		if [ -d luci-app-openuf ] && [ -d /usr/share/luci/menu.d ] && [ -d /www/luci-static ]; then
+			cp -r luci-app-openuf/root/* / && cp -r luci-app-openuf/htdocs/* /www/
+			rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache 2>/dev/null
+			/etc/init.d/rpcd reload 2>/dev/null
+			echo "Installed the LuCI page (Services -> openUF)."
+		fi
+
 		# Enable and start services
 		"$INIT_SCRIPT" enable 2>/dev/null
 		"$INIT_SCRIPT" start
@@ -451,6 +460,15 @@ case "$ACTION" in
 
 		# Remove symlink
 		rm -f "$BIN_LINK" /usr/bin/openuf-update
+
+		# The LuCI page.
+		if [ -f /usr/share/luci/menu.d/luci-app-openuf.json ]; then
+			rm -f /usr/share/luci/menu.d/luci-app-openuf.json \
+				/usr/share/rpcd/acl.d/luci-app-openuf.json \
+				/usr/share/rpcd/ucode/luci.openuf
+			rm -rf /www/luci-static/resources/view/openuf /tmp/luci-indexcache* /tmp/luci-modulecache
+			/etc/init.d/rpcd reload 2>/dev/null
+		fi
 
 		# The upgrade bootstrap and its copy of the build: left in place they
 		# would reinstall openUF on the next boot.
