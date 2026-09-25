@@ -313,6 +313,47 @@ return {
 		end
 	},
 	{
+		name = "netmodel: a DHCP management interface keeps its lease and asks for its address",
+		fn = function()
+			local u = bifrost_uci()
+			local fs = new_fs()
+			netmodel._uci = u.mock
+			stub_io(fs)
+			local sys = fixture("system_cfg_10_6_vlans.txt")
+			netmodel.converge(netmodel.parse(sys), inform_switch_parse(sys), e8450_cfg(), {},
+				{identity_mac = "00:00:5e:00:53:3e", current_ip = "10.0.0.3"})
+			local c = u.cursor
+			assert_eq(c:get("network", "lan", "proto"), "dhcp", "still DHCP")
+			assert_eq(c:get("network", "lan", "norelease"), "1", "no release on restart")
+			assert_eq(c:get("network", "lan", "ipaddr"), "10.0.0.3", "asks for the address it had")
+			netmodel._uci = nil
+		end
+	},
+	{
+		name = "netmodel: repair_default_route restores a route netifd has and the kernel lost",
+		fn = function()
+			local cmds = {}
+			local orig_run, orig_log = netmodel._run_cmd, netmodel._log
+			local kernel_route = ""
+			netmodel._log = function() end
+			netmodel._run_cmd = function(cmd)
+				cmds[#cmds + 1] = cmd
+				if cmd:find("ubus call network.interface.lan status", 1, true) then
+					return '{"up":true,"l3_device":"br-lan.1","route":[{"target":"0.0.0.0","mask":0,'
+						.. '"nexthop":"10.0.0.1","source":"10.0.0.4/32"}]}'
+				elseif cmd == "ip -4 route show default" then
+					return kernel_route
+				end
+				return ""
+			end
+			assert_true(netmodel.repair_default_route("lan"), "repaired")
+			assert_eq(cmds[#cmds], "ip -4 route replace default via 10.0.0.1 dev br-lan.1", "route put back")
+			kernel_route = "default via 10.0.0.1 dev br-lan.1\n"
+			assert_false(netmodel.repair_default_route("lan"), "nothing to do when the kernel has it")
+			netmodel._run_cmd, netmodel._log = orig_run, orig_log
+		end
+	},
+	{
 		name = "netmodel: converge is idempotent -- a steady-state push changes nothing",
 		fn = function()
 			local u = bifrost_uci()

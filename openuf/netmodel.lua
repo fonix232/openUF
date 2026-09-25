@@ -629,9 +629,15 @@ function M.write(cursor, plan)
 	changed = put(cursor, m.iface, "ifname", nil) or changed
 	if m.proto == "dhcp" then
 		changed = put(cursor, m.iface, "proto", "dhcp") or changed
-		for _, o in ipairs({"ipaddr", "netmask", "gateway", "dns"}) do
+		for _, o in ipairs({"netmask", "gateway", "dns"}) do
 			changed = put(cursor, m.iface, o, nil) or changed
 		end
+		-- Keep the lease when the interface restarts. OpenWrt's DHCP client
+		-- releases on stop by default, so every rebuild of the bridge gave the
+		-- address back and the AP came up on a new one (seen live: 10.0.0.3
+		-- -> 10.0.1.88). `ipaddr` is only a hint on a DHCP interface (the
+		-- address udhcpc asks for, -r), set by converge() before a reload.
+		changed = put(cursor, m.iface, "norelease", "1") or changed
 	elseif m.proto == "static" then
 		changed = put(cursor, m.iface, "proto", "static") or changed
 		changed = put(cursor, m.iface, "ipaddr", m.ipaddr) or changed
@@ -720,6 +726,14 @@ function M.converge(model, sw, cfg, st, opts)
 		return false, plan
 	end
 
+	-- The network is about to reload: a DHCP management interface asks for
+	-- the address it has now, so the rebuild does not renumber the AP.
+	local cur_ip = opts.current_ip
+	if plan.mgmt.proto == "dhcp" and type(cur_ip) == "string"
+		and cur_ip:match("^%d+%.%d+%.%d+%.%d+$") and cur_ip ~= "0.0.0.0" then
+		cursor:set("network", plan.mgmt.iface, "ipaddr", cur_ip)
+	end
+
 	if before and not M._read_file(M.PRISTINE_FILE) then
 		M._write_file(M.PRISTINE_FILE, before)
 	end
@@ -775,6 +789,33 @@ function M.on_start(st)
 end
 
 -- Put the board's own network config back (uninstall / manual escape hatch).
+-- netifd can believe an interface has its default route while the kernel
+-- does not: deleting one of two DHCP interfaces that both installed a default
+-- route took the survivor's kernel route with it (seen live after own_config
+-- removed a leftover vpn_se), and without a route the AP finds no gateway, so
+-- no uplink port, and reports everything upstream as its own wired clients.
+-- Puts the route back when netifd has one the kernel lacks. Returns true then.
+function M.repair_default_route(iface)
+	local ok_j, cjson = pcall(require, "cjson")
+	if not ok_j then return false end
+	local raw = M._run_cmd("ubus call network.interface." .. tostring(iface) .. " status")
+	local ok, st = pcall(cjson.decode, raw or "")
+	if not ok or type(st) ~= "table" or not st.up then return false end
+	local dev = st.l3_device or st.device
+	local via
+	for _, r in ipairs(st.route or {}) do
+		if r.target == "0.0.0.0" and tonumber(r.mask) == 0 and r.nexthop then via = r.nexthop end
+	end
+	if not (dev and via and via:match("^%d+%.%d+%.%d+%.%d+$") and dev:match("^[%w%.%-_]+$")) then
+		return false
+	end
+	if (M._run_cmd("ip -4 route show default") or ""):match("%S") then return false end
+	M._run_cmd("ip -4 route replace default via " .. via .. " dev " .. dev)
+	M._log("restored the default route via " .. via .. " on " .. dev
+		.. " (netifd had it, the kernel did not)")
+	return true
+end
+
 function M.restore_pristine(st)
 	local saved = M._read_file(M.PRISTINE_FILE)
 	if not saved then return false end

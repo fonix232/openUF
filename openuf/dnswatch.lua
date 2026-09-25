@@ -40,7 +40,7 @@ table bridge openuf_ev {
 		flags dynamic,timeout
 		timeout 30m
 	}
-	chain fwd {
+	chain dns_answers {
 		type filter hook forward priority 0; policy accept;
 		udp sport 53 add @dnsok { ether daddr }
 		tcp sport 53 add @dnsok { ether daddr }

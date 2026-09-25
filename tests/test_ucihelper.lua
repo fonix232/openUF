@@ -68,6 +68,11 @@ local function new_mock_uci()
 
 	function cursor:get(config, section, option)
 		local s = db[config] and db[config][section]
+		-- Two arguments: the section's type, as libuci returns it.
+		if option == nil then
+			if s then return s[".type"] end
+			return nil, "Entry not found"
+		end
 		local v = s and s[option]
 		-- Real libuci returns (nil, "Entry not found") for a miss, and that
 		-- second value is a live hazard: tonumber(cursor:get(...)) without
@@ -431,6 +436,38 @@ return {
 				assert_eq(db.network.br_lan.macaddr, "00:00:5e:00:53:01",
 					"the bridge now carries the MAC openUF identifies as")
 				assert_true(ucihelper._network_dirty, "and netifd must be told")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: the uplink socket carries the identity MAC and is LLDP's chassis interface",
+		fn = function()
+			with_ucihelper(function(db)
+				local c = ucihelper._uci.cursor()
+				c:set("lldpd", "config", "lldpd")
+				c:set("lldpd", "config", "cid_interface", "br-lan")
+				ucihelper._popen = function() return "../../virtual/net/br-lan" end
+				ucihelper._read_file = function(path)
+					if path:match("/lan4/address") then return "00:00:5e:00:53:3f\n" end
+				end
+				local net_c, lldp_c
+				silently(function()
+					net_c, lldp_c = ucihelper.ensure_lldp_identity(
+						{net = {lan_cpueth = "lan4", identity_mac = "00:00:5E:00:53:3E"}})
+				end)
+				assert_true(net_c, "port MAC pinned")
+				assert_eq(db.network.openuf_uplink.name, "lan4", "on the uplink socket")
+				assert_eq(db.network.openuf_uplink.macaddr, "00:00:5e:00:53:3e", "to the identity")
+				assert_true(lldp_c, "lldpd changed")
+				assert_eq(db.lldpd.config.cid_interface, "lan4", "chassis from the uplink port")
+				-- Already right: nothing to do.
+				ucihelper._read_file = function(path)
+					if path:match("/lan4/address") then return "00:00:5e:00:53:3e\n" end
+				end
+				net_c, lldp_c = ucihelper.ensure_lldp_identity(
+					{net = {lan_cpueth = "lan4", identity_mac = "00:00:5e:00:53:3e"}})
+				assert_false(net_c, "no network change")
+				assert_false(lldp_c, "no lldpd change")
 			end)
 		end
 	},

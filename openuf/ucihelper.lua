@@ -875,6 +875,57 @@ end
 -- on a DHCP-addressed board the new L2 identity means a new lease and possibly
 -- a new address; openUF reports the change on the next inform and the adoption
 -- is unaffected, but that is why this is loud rather than silent.
+-- LLDP must announce the MAC openUF is adopted under, or the controller cannot
+-- place the AP in its topology (it matches the neighbour's chassis ID against
+-- its devices). OpenWrt's lldpd init resolves a bridge in cid_interface down
+-- to its member PORTS, and lldpd only ever takes a chassis MAC from a port --
+-- so pointing it at the bridge announced some port's MAC (heimdall: ...:3b
+-- for ...:3a), a random one (a WAX220's eth0), or none at all ("local
+-- bifrost"). So: the uplink socket carries the identity MAC -- as a Linux
+-- bridge's uplink port normally does -- and is lldpd's chassis interface.
+-- Only for an uplink that is a bridge port. Returns network_changed,
+-- lldpd_changed.
+function M.ensure_lldp_identity(cfg)
+	local up = cfg and cfg.net and cfg.net.lan_cpueth
+	local pinned = cfg and cfg.net and cfg.net.identity_mac
+	local want = type(pinned) == "string" and pinned:lower() or nil
+	if not (up and want and master_of(up)) then return false, false end
+	local cursor = get_uci().cursor()
+
+	local net_changed = false
+	if (mac_of(up) or ""):lower() ~= want then
+		local sec
+		cursor:foreach("network", "device", function(s)
+			if s.name == up and s.type ~= "bridge" then sec = s[".name"] end
+		end)
+		if not sec then
+			sec = "openuf_uplink"
+			cursor:set("network", sec, "device")
+			cursor:set("network", sec, "name", up)
+		end
+		if tostring(cursor:get("network", sec, "macaddr") or ""):lower() ~= want then
+			cursor:set("network", sec, "macaddr", want)
+			cursor:commit("network")
+			io.stderr:write(("ucihelper: uplink %s takes the identity MAC %s, so LLDP "
+				.. "announces what the controller adopted\n"):format(up, want))
+			M._network_dirty = true
+			net_changed = true
+		end
+	end
+
+	local lldp_changed = false
+	if cursor:get("lldpd", "config") then
+		local cur = cursor:get("lldpd", "config", "cid_interface")
+		if type(cur) == "table" then cur = table.concat(cur, " ") end
+		if cur ~= up then
+			cursor:set("lldpd", "config", "cid_interface", up)
+			cursor:commit("lldpd")
+			lldp_changed = true
+		end
+	end
+	return net_changed, lldp_changed
+end
+
 function M.ensure_bridge_identity(cfg)
 	local cpueth = cfg and cfg.net and cfg.net.lan_cpueth
 	local pinned = cfg and cfg.net and cfg.net.identity_mac

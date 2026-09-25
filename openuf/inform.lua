@@ -3151,7 +3151,7 @@ function M.handle_response(json_str, st, cfg)
 					end
 					local ok_nm, changed, plan = pcall(nm.converge, model,
 						M._parse_switch_system_cfg(sys_raw), cfg, st,
-						{uplink_ifname = up, identity_mac = st.mac})
+						{uplink_ifname = up, identity_mac = st.mac, current_ip = st.ip})
 					if not ok_nm then
 						io.stderr:write("inform: netmodel: " .. tostring(changed) .. "\n")
 						apply_ok = false
@@ -4189,6 +4189,11 @@ function M._tick(st, cfg, ufhw, ctx)
 	elseif now >= ctx.next_netinfo then
 		ctx.next_netinfo = now + 300
 		pcall(M._populate_net_info, st, cfg)
+		if M._netmodel and st.netmodel_applied then
+			local ok_r, fixed = pcall(M._netmodel.repair_default_route,
+				(cfg and cfg.net and cfg.net.lan_name) or "lan")
+			if ok_r and fixed then pcall(M._sysinfo.forget_uplink_cache) end
+		end
 	end
 	-- The L2 hardening a push could not apply because the VAPs were not up yet.
 	if M._l2guard_retry and type(st.l2guard) == "table" then
@@ -4375,6 +4380,7 @@ function M._netmodel_check(st, cfg, ok)
 		if res == "rolled_back" then st.cfgversion_effective = before or nil end
 		M._state.save(st)
 		if res == "rolled_back" then pcall(M._sysinfo.forget_uplink_cache) end
+		pcall(M._netmodel.repair_default_route, (cfg and cfg.net and cfg.net.lan_name) or "lan")
 		-- Either way the management address may have moved (a Management
 		-- VLAN is a new subnet), and `ip` in the payload is what the
 		-- controller shows and connects to.
@@ -4433,6 +4439,23 @@ function M.run(cfg, ufhw)
 			M._sysinfo._run_cmd("/etc/init.d/network reload 2>/dev/null")
 			M._populate_net_info(st, cfg)  -- the address may have moved with it
 		end
+	end
+	-- LLDP's chassis ID must be the identity MAC (ucihelper.ensure_lldp_identity).
+	if M._ucihelper and M._ucihelper.ensure_lldp_identity then
+		local ok_l, net_c, lldp_c = pcall(M._ucihelper.ensure_lldp_identity, cfg)
+		if ok_l then
+			if net_c then
+				M._ucihelper._network_dirty = false
+				M._sysinfo._run_cmd("/etc/init.d/network reload 2>/dev/null")
+			end
+			if net_c or lldp_c then
+				M._sysinfo._run_cmd("/etc/init.d/lldpd restart 2>/dev/null")
+			end
+		end
+	end
+	-- A default route netifd holds but the kernel lost (netmodel.lua).
+	if M._netmodel and st.netmodel_applied then
+		pcall(M._netmodel.repair_default_route, (cfg and cfg.net and cfg.net.lan_name) or "lan")
 	end
 	M._sync_bootstrap_account(st.adopted, cfg and cfg.config and cfg.config.bootstrap_adopt_user)
 	-- Blocked-client nft rules are live kernel state, not persisted UCI --
