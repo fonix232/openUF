@@ -134,7 +134,8 @@ local function bifrost_uci()
 	c:set("network", "switch", "name", "switch")
 	c:set("network", "switch", "type", "bridge")
 	c:set("network", "switch", "ports", {"lan1", "lan2", "lan3", "lan4", "wan"})
-	c:set("network", "switch", "vlan_filtering", "1")
+	-- No vlan_filtering option, exactly as on the real AP: netifd filters any
+	-- bridge a bridge-vlan section names.
 	for _, v in ipairs({{"lan_vlan", "1", {"lan1", "lan2", "lan3", "lan4", "wan"}},
 			{"guest_vlan", "2", {"lan1:t", "lan2:t", "lan3:t", "lan4:t", "wan:t"}},
 			{"iot_vlan", "3", {"lan1:t", "lan2:t", "lan3:t", "lan4:t", "wan:t"}},
@@ -246,6 +247,9 @@ return {
 			assert_eq(netmodel.backend(e8450_cfg(), plain.cursor), "bridges", "stock br-lan")
 			assert_eq(netmodel.backend(e8450_cfg({bridge_backend = "vlan_filtering"}), plain.cursor),
 				"vlan_filtering", "explicit choice wins")
+			local flagged = bifrost_uci()
+			flagged.cursor:set("network", "switch", "vlan_filtering", "1")
+			assert_eq(netmodel.backend(e8450_cfg(), flagged.cursor), "vlan_filtering", "explicit option")
 			local sw = e8450_cfg()
 			sw.vlan = {ports = {}}
 			assert_eq(netmodel.backend(sw, u.cursor), "bridges", "swconfig boards never")

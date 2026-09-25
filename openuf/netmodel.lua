@@ -292,8 +292,16 @@ function M.backend(cfg, cursor)
 	if c:get("network", M.SECTION_PREFIX .. "br") then return "vlan_filtering" end
 	local up = cfg and cfg.net and cfg.net.lan_cpueth
 	local br = up and uci_bridge_of(c, up)
-	if br and tostring(br.vlan_filtering or "0") == "1" then return "vlan_filtering" end
-	return "bridges"
+	if not br then return "bridges" end
+	if tostring(br.vlan_filtering or "0") == "1" then return "vlan_filtering" end
+	-- netifd turns filtering on for any bridge a `bridge-vlan` section names,
+	-- with no vlan_filtering option in sight -- the usual hand-written DSA AP
+	-- layout looks exactly like that.
+	local filtered = false
+	c:foreach("network", "bridge-vlan", function(s)
+		if br.name and s.device == br.name then filtered = true end
+	end)
+	return filtered and "vlan_filtering" or "bridges"
 end
 
 -- ─── Planning ────────────────────────────────────────────────────────────────

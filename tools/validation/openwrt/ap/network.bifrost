@@ -12,7 +12,6 @@ config device 'switch'
 	list ports 'wan'
 	list ports 'lan1'
 	list ports 'lan2'
-	option vlan_filtering '1'
 
 config bridge-vlan 'lan_vlan'
 	option device 'switch'
