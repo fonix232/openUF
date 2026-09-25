@@ -100,7 +100,36 @@ function size_of(path) {
 	return s ? s.size : null;
 }
 
+// The unhandled-message ledger (openuf/unhandled.lua): everything the
+// controller sent that openUF did not act on, newest first. The daemon already
+// redacts secrets by field name and bounds every payload before writing it.
+function unhandled() {
+	const doc = json_file(`${STATE}/unhandled.json`) ?? {};
+	const out = [];
+	for (let id, e in doc.entries ?? {}) {
+		if (type(e) != 'object')
+			continue;
+		push(out, {
+			category: e.category,
+			key: e.key,
+			count: +(e.count ?? 0),
+			first_seen: e.first_seen,
+			last_seen: e.last_seen,
+			last_ts: +(e.last_ts ?? 0),
+			payload: (e.payload != null) ? sprintf('%.2J', e.payload) : null
+		});
+	}
+	sort(out, (a, b) => b.last_ts - a.last_ts);
+	return { updated: doc.updated, entries: out };
+}
+
 const methods = {
+	unhandled: {
+		call: function() {
+			return unhandled();
+		}
+	},
+
 	status: {
 		call: function() {
 			const st = json_file(`${STATE}/state.json`) ?? {};

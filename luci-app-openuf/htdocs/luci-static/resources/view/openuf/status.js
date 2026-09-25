@@ -32,12 +32,18 @@ function badge(ok, yes, no) {
 	}, ok ? yes : no);
 }
 
+// Values from state files and conf.lua are inserted as text, never as markup
+// (LuCI's E() treats a string child as HTML).
+function T(s) {
+	return document.createTextNode(String(s));
+}
+
 function yesno(v) {
 	return v ? _('yes') : _('no');
 }
 
 function value(v, fallback) {
-	return (v === null || v === undefined || v === '') ? E('em', {}, fallback || _('not set')) : String(v);
+	return (v === null || v === undefined || v === '') ? E('em', {}, fallback || _('not set')) : T(v);
 }
 
 function section(title, rows) {
@@ -85,35 +91,35 @@ return view.extend({
 				[ _('Start at boot'), yesno(svc.enabled) ],
 				[ _('L2 discovery broadcasts'), svc.announcing ? _('on') : _('off') ],
 				[ _('Build'), value(svc.build) ],
-				[ _('Last controller contact'), hb.last_ok ? '%s (%s)'.format(ago(now, hb.last_ok), hb.last_type || '-') : _('never') ],
-				hb.last_fail ? [ _('Last failure'), '%s: %s'.format(ago(now, hb.last_fail), hb.last_fail_msg || '-') ] : null
+				[ _('Last controller contact'), T(hb.last_ok ? '%s (%s)'.format(ago(now, hb.last_ok), hb.last_type || '-') : _('never')) ],
+				hb.last_fail ? [ _('Last failure'), T('%s: %s'.format(ago(now, hb.last_fail), hb.last_fail_msg || '-')) ] : null
 			]),
 
 			section(_('Controller'), [
 				[ _('Inform URL'), value(ctl.inform_url) ],
 				[ _('Adopted'), badge(ctl.adopted, _('adopted'), _('pending adoption')) ],
 				[ _('Configuration'), ctl.cfgversion
-					? E('span', {}, [ badge(applied, _('applied'), _('not applied')), ' ', ctl.cfgversion ])
+					? E('span', {}, [ badge(applied, _('applied'), _('not applied')), ' ', T(ctl.cfgversion) ])
 					: E('em', {}, _('none received yet')) ],
-				(!applied && ctl.cfgversion_effective) ? [ _('Last applied configuration'), ctl.cfgversion_effective ] : null,
+				(!applied && ctl.cfgversion_effective) ? [ _('Last applied configuration'), T(ctl.cfgversion_effective) ] : null,
 				[ _('Wake-up (STUN)'), value(ctl.stun_url) ],
-				ctl.upgrade_requested ? [ _('Upgrade requested'), ctl.upgrade_requested ] : null
+				ctl.upgrade_requested ? [ _('Upgrade requested'), T(ctl.upgrade_requested) ] : null
 			]),
 
 			section(_('Identity'), [
-				[ _('Presented as'), cat.name ? '%s (%s, %s)'.format(cat.name, cat.sku, id.model) : value(id.model) ],
-				cat.sysid ? [ _('System ID'), cat.sysid ] : null,
+				[ _('Presented as'), cat.name ? T('%s (%s, %s)'.format(cat.name, cat.sku, id.model)) : value(id.model) ],
+				cat.sysid ? [ _('System ID'), T(cat.sysid) ] : null,
 				[ _('Reported firmware'), value(ctl.fw_version || cat.fw) ],
 				[ _('Identity MAC'), value(id.mac) ],
-				[ _('Management address'), id.ip ? (id.addressing ? '%s (%s)'.format(id.ip, id.addressing === 'dhcp' ? _('DHCP') : _('static')) : id.ip) : value(null) ],
+				[ _('Management address'), id.ip ? T(id.addressing ? '%s (%s)'.format(id.ip, id.addressing === 'dhcp' ? _('DHCP') : _('static')) : id.ip) : value(null) ],
 				[ _('Hostname'), value(id.hostname) ]
 			]),
 
 			section(_('Hardware'), [
 				[ _('Model map'), value(hw.modelmap) ],
 				[ _('Uplink socket'), value(hw.uplink) ],
-				[ _('Ports'), ports.length ? E('span', {}, ports.map(function(p) { return E('div', {}, p); })) : E('em', {}, _('none')) ],
-				[ _('Radios'), (hw.radios || []).join(', ') || E('em', {}, _('none')) ],
+				[ _('Ports'), ports.length ? E('span', {}, ports.map(function(p) { return E('div', {}, T(p)); })) : E('em', {}, _('none')) ],
+				[ _('Radios'), (hw.radios || []).length ? T(hw.radios.join(', ')) : E('em', {}, _('none')) ],
 				[ _('Locate LED'), value(hw.led) ]
 			]),
 
@@ -122,8 +128,8 @@ return view.extend({
 				[ _('Controller owns interfaces and SSIDs'), yesno(conf.own_config !== 'false') ],
 				[ _('Applied network plan'), value(net.applied, _('none')) ],
 				net.pending ? [ _('Rollback window'), _('open: the plan is rolled back unless the controller answers') ] : null,
-				net.failed ? [ _('Rolled-back plan'), net.failed ] : null,
-				(net.removed || []).length ? [ _('Removed interfaces'), net.removed.join(', ') ] : null,
+				net.failed ? [ _('Rolled-back plan'), T(net.failed) ] : null,
+				(net.removed || []).length ? [ _('Removed interfaces'), T(net.removed.join(', ')) ] : null,
 				[ _('Original config saved'), [
 					net.network_backup ? _('network') : null,
 					net.wireless_backup ? _('wireless') : null
@@ -132,7 +138,7 @@ return view.extend({
 
 			section(_('Firmware upgrades'), [
 				[ _('Reinstall on new images'), badge(up.bootstrap && up.bootstrap_enabled, _('ready'), _('not set up')) ],
-				[ _('Kept copy of this build'), up.cached_build ? '%1024.1mB'.format(up.cached_build) : E('em', {}, _('none')) ],
+				[ _('Kept copy of this build'), up.cached_build ? T('%1024.1mB'.format(up.cached_build)) : E('em', {}, _('none')) ],
 				[ _('Kept copy of conf.lua'), yesno(up.conf_backup) ],
 				[ _('Controller upgrades'), conf.upgrade_mode === 'owut' ? _('run an attended sysupgrade (owut)') : _('recorded only') ]
 			]),
@@ -143,13 +149,13 @@ return view.extend({
 				[ _('Controller time, NTP and cron'), yesno(conf.controller_system !== 'false') ],
 				[ _('L2 hardening'), yesno(conf.l2guard !== 'false') ],
 				[ _('802.11k neighbour reports'), yesno(conf.rrm_enrichment !== 'false') ],
-				conf.country_override ? [ _('Regulatory override'), conf.country_override ] : null,
-				conf.debug_dump_file ? [ _('Debug capture'), conf.debug_dump_file ] : null
+				conf.country_override ? [ _('Regulatory override'), T(conf.country_override) ] : null,
+				conf.debug_dump_file ? [ _('Debug capture'), T(conf.debug_dump_file) ] : null
 			]),
 
 			section(_('Diagnostics'), [
-				[ _('Unhandled controller messages'), _('%d kinds (/etc/openuf/unhandled.json)').format(diag.unhandled || 0) ],
-				[ _('Blocked clients'), String(diag.blocked_clients || 0) ]
+				[ _('Unhandled controller messages'), T(_('%d kinds (/etc/openuf/unhandled.json)').format(diag.unhandled || 0)) ],
+				[ _('Blocked clients'), T(diag.blocked_clients || 0) ]
 			])
 		]);
 	},
