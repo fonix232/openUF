@@ -149,6 +149,7 @@ local test_files = {
 	"tests/test_unhandled.lua",
 	"tests/test_sysconf.lua",
 	"tests/test_l2guard.lua",
+	"tests/test_staevents.lua",
 	"tests/test_modelmap.lua",
 }
 

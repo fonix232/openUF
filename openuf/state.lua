@@ -82,6 +82,7 @@ M.FIELDS = {
 	mac                       = "string",
 	ip                        = "string",
 	hostname                  = "string",
+	netmask                   = "string",
 	-- Controller-pushed IP settings. ip_mode is the "was I static before?"
 	-- guard on the DHCP path, which must not flush a working lease just
 	-- because a steady-state push reaffirmed DHCP.

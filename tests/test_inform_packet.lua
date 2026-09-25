@@ -7,6 +7,7 @@ dofile("openuf/lib/lib.lua")	-- needed by announce (loaded by inform)
 local crypto = dofile("openuf/crypto.lua")
 local state  = dofile("openuf/state.lua")
 local inform = dofile("openuf/inform.lua")
+local cjson  = require("cjson")
 
 -- Redirect state file to /tmp so handle_response tests don't need /etc/openuf
 inform._state._state_file = "/tmp/openuf_test_inform.json"
@@ -3629,6 +3630,95 @@ return {
 			assert_true(txt:find("cfgversion=abc\n", 1, true) ~= nil, "cfgversion")
 			os.remove(file)
 			inform.STATUS_FILE = orig
+		end
+	},
+	{
+		name = "inform: queued connection events go out as notification informs, a failure keeps them",
+		fn = function()
+			local ev = inform._staevents
+			ev._reset()
+			local orig = {post = inform.http_post, build = inform.build_packet,
+				parse = inform.parse_packet, handle = inform.handle_response}
+			local sent, fail = {}, false
+			inform.build_packet = function(js) return js end
+			inform.http_post = function(_, body)
+				if fail then return nil, "down" end
+				sent[#sent + 1] = cjson.decode(body)
+				return "x"
+			end
+			inform.parse_packet = function() return '{"_type":"noop"}' end
+			inform.handle_response = function() return false end
+			inform._last_identity = {mac = "00:11:22:33:44:55", model = "U6IW"}
+			ev.observe({}, 0, 0)
+			ev.observe({["aa:bb:cc:00:00:01"] = {vap = "v0", uptime = 1, signal = -40}}, 10, 10)
+			local st = sample_state({adopted = true})
+			fail = true
+			assert_eq(inform._send_sta_events(st, {}), 0, "controller down: nothing sent")
+			assert_eq(ev.pending(), 2, "and nothing lost")
+			fail = false
+			assert_eq(inform._send_sta_events(st, {}), 2, "both sent")
+			assert_eq(sent[1].inform_as_notif, true, "as notification informs")
+			assert_eq(sent[1].notif_payload.event_type, "association", "in order")
+			assert_eq(sent[2].notif_payload.event_type, "success", "in order")
+			assert_eq(sent[1].model, "U6IW", "with the identity")
+			inform.http_post, inform.build_packet = orig.post, orig.build
+			inform.parse_packet, inform.handle_response = orig.parse, orig.handle
+			ev._reset()
+		end
+	},
+	{
+		name = "inform: a clean push becomes cfgversion_effective",
+		fn = function()
+			local st = sample_state({adopted = true, cfgversion = "new"})
+			assert_true(inform._settle_cfgversion(st, {}, "old", true), "ok")
+			assert_eq(st.cfgversion_effective, "new", "effective")
+			assert_eq(st.cfgversion, "new", "echoed")
+		end
+	},
+	{
+		name = "inform: a failed push reports the old cfgversion a bounded number of times",
+		fn = function()
+			local real = io.stderr
+			io.stderr = {write = function() end}
+			local st = sample_state({adopted = true, cfgversion = "new", cfgversion_effective = "old"})
+			assert_false(inform._settle_cfgversion(st, {}, "old", false), "failed")
+			assert_eq(st.cfgversion, "old", "old version reported: the controller re-pushes")
+			st.cfgversion = "new"
+			inform._settle_cfgversion(st, {}, "old", false)
+			assert_eq(st.cfgversion, "old", "second attempt")
+			st.cfgversion = "new"
+			inform._settle_cfgversion(st, {}, "old", false)
+			assert_eq(st.cfgversion, "new", "then echoed, so it stops cycling")
+			assert_eq(st.cfgversion_effective, "old", "but never reported as applied")
+			local fresh = sample_state({adopted = true, cfgversion = "first"})
+			inform._settle_cfgversion(fresh, {}, nil, false)
+			assert_eq(fresh.cfgversion, "first", "the adoption push is never held back")
+			io.stderr = real
+		end
+	},
+	{
+		name = "inform: the payload carries cfgversion_effective",
+		fn = function()
+			local st = sample_state({adopted = true, cfgversion = "b", cfgversion_effective = "a"})
+			local d = cjson.decode(inform.build_json(st, nil, {uap = {model = "U6IW", fw = {ver = "6.8.2.1"}}}))
+			assert_eq(d.cfgversion, "b", "cfgversion")
+			assert_eq(d.cfgversion_effective, "a", "effective: not applied successfully")
+		end
+	},
+	{
+		name = "inform: the netmask comes from the prefix of the interface holding the address",
+		fn = function()
+			local orig = inform._run_cmd
+			inform._run_cmd = function()
+				return "2: br-lan.1    inet 10.0.0.4/16 brd 10.0.255.255 scope global br-lan.1\n"
+					.. "3: lo    inet 127.0.0.1/8 scope host lo\n"
+			end
+			assert_eq(inform._netmask_of("10.0.0.4"), "255.255.0.0", "/16")
+			assert_eq(inform._netmask_of("127.0.0.1"), "255.0.0.0", "/8")
+			assert_nil(inform._netmask_of("192.0.2.1"), "unknown address")
+			inform._run_cmd = function() return "x inet 10.1.2.3/26 y" end
+			assert_eq(inform._netmask_of("10.1.2.3"), "255.255.255.192", "/26")
+			inform._run_cmd = orig
 		end
 	},
 	{

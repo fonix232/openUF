@@ -67,6 +67,7 @@ local upgrade   = _require_sibling("upgrade")
 local unhandled = _require_sibling("unhandled")
 local sysconf   = _require_sibling("sysconf")
 local l2guard   = _require_sibling("l2guard")
+local staevents = _require_sibling("staevents")
 
 local M = {}
 
@@ -92,6 +93,7 @@ M._upgrade    = upgrade
 M._unhandled  = unhandled
 M._sysconf    = sysconf
 M._l2guard    = l2guard
+M._staevents  = staevents
 
 -- In-memory only: 802.11k beacon-report neighbours, keyed by BSSID, plus the
 -- flat list build_json merges from. Clients report asynchronously and only
@@ -684,6 +686,9 @@ function M.build_json(st, cfg, ufhw)
 	-- wireless client bridged into br-lan (and thus also visible in the
 	-- bridge FDB) is never double-reported as a wired client too.
 	local station_macs = {}
+	-- mac -> {vap, signal, uptime, idle}: what staevents.lua diffs between
+	-- heartbeats into the controller's connection events.
+	local sta_snapshot = {}
 	-- Device-level satisfaction accumulator, filled by the per-VAP station
 	-- loop further down and consumed at payload assembly.
 	local sat_sum_all, sat_count_all = 0, 0
@@ -1132,6 +1137,9 @@ function M.build_json(st, cfg, ufhw)
 			local sta_table = {}
 			for _, sta in ipairs(stas) do
 				station_macs[sta.mac] = true
+				sta_snapshot[sta.mac] = {vap = vap.name, signal = sta.signal,
+					uptime = sta.connected_sec,
+					idle = sta.inactive_ms and math.floor(sta.inactive_ms / 1000) or nil}
 				vap_rx_bytes    = vap_rx_bytes    + (sta.rx_bytes or 0)
 				vap_tx_bytes    = vap_tx_bytes    + (sta.tx_bytes or 0)
 				vap_rx_packets  = vap_rx_packets  + (sta.rx_packets or 0)
@@ -1665,6 +1673,15 @@ function M.build_json(st, cfg, ufhw)
 		ip               = st.ip or "0.0.0.0",
 		inform_url       = st.inform_url,
 		cfgversion       = st.cfgversion,
+		-- The last config this device applied without an error. The controller
+		-- sets the device's last_config_applied_successfully from
+		-- cfgversion_effective == cfgversion (see M._settle_cfgversion).
+		cfgversion_effective = st.cfgversion_effective,
+		-- Identity detail real firmware reports and the controller stores on
+		-- the device record.
+		netmask          = st.netmask,
+		architecture     = M._uname_info().machine,
+		kernel_version   = M._uname_info().release,
 		uptime           = uptime,
 		time             = os.time(),
 		-- Bare firmware version string only -- NOT model-prefixed. The
@@ -1777,6 +1794,12 @@ function M.build_json(st, cfg, ufhw)
 		port_table       = arr(port_table),
 		lldp_table       = arr(lldp_table),
 	}
+
+	-- Kept for staevents: this heartbeat's stations, and the identity fields a
+	-- notification inform repeats.
+	M._last_sta_snapshot = sta_snapshot
+	M._last_identity = {}
+	for _, k in ipairs(M._staevents.IDENTITY_FIELDS) do M._last_identity[k] = payload[k] end
 
 	-- conf.lua debug_caps / debug_payload_extra: RESEARCH ONLY. The rule
 	-- everywhere else in this file is "never claim a bit openUF cannot honour";
@@ -2807,6 +2830,7 @@ local KNOWN_TOP_FIELDS = {
 local KNOWN_CMDS = {
 	["set-locate"] = true, ["unset-locate"] = true, ["block-sta"] = true,
 	["unblock-sta"] = true, ["kick-sta"] = true, ["spectrum-scan"] = true,
+	["quick-scan"] = true,
 }
 
 -- pcall'd: the ledger is a diagnostic and must never cost a heartbeat.
@@ -2826,6 +2850,44 @@ function M._note_unknown_fields(resp)
 			M._ledger("field", tostring(resp._type) .. "." .. tostring(k), {[tostring(k)] = v})
 		end
 	end
+end
+
+-- How many times a config push that failed to apply is asked for again.
+M.CFG_RETRIES = 2
+
+-- Judge a config push once every apply step has run.
+--
+-- The controller re-pushes only while the device reports a cfgversion other
+-- than the one it expects -- cfgversion_effective is displayed, never acted
+-- on -- and it deduplicates identical pushes for ten minutes. So a push that
+-- errored reports the PREVIOUS cfgversion, and the controller sends it again
+-- once that window has passed; after CFG_RETRIES such rounds the new version
+-- is echoed anyway, so a config this device cannot apply stops cycling.
+-- cfgversion_effective always names the last push that applied clean, which
+-- is what the controller's last_config_applied_successfully is computed from.
+-- The very first push (nothing ever applied) is never held back: adoption
+-- must complete.
+function M._settle_cfgversion(st, cfg, cfg_before, ok)
+	local new = st.cfgversion
+	if ok then
+		st.cfgversion_effective = new
+		st.cfg_retry = nil
+		return true
+	end
+	local limit = tonumber(cfg and cfg.config and cfg.config.cfg_retries) or M.CFG_RETRIES
+	local r = type(st.cfg_retry) == "table" and st.cfg_retry.v == new and st.cfg_retry or {v = new, n = 0}
+	r.n = r.n + 1
+	st.cfg_retry = r
+	if st.cfgversion_effective == nil or cfg_before == nil or cfg_before == new or r.n > limit then
+		io.stderr:write(("inform: config %s did not apply cleanly -- reporting it as received "
+			.. "(cfgversion_effective stays %s)\n"):format(tostring(new), tostring(st.cfgversion_effective)))
+		return false
+	end
+	st.cfgversion = cfg_before
+	io.stderr:write(("inform: config %s did not apply cleanly -- still reporting %s so the "
+		.. "controller sends it again (attempt %d of %d)\n"):format(tostring(new),
+		tostring(cfg_before), r.n, limit))
+	return false
 end
 
 -- ─── Response dispatcher ─────────────────────────────────────────────────────
@@ -2868,6 +2930,10 @@ function M.handle_response(json_str, st, cfg)
 		-- confirmed by amd989/unifi-gateway _parse_mgmt_cfg).
 		local mgmt_raw = resp.mgmt_cfg
 		local newly_adopted = false
+		-- What this push is judged on (M._settle_cfgversion): the version we
+		-- reported before it, and whether every apply step ran clean.
+		local cfg_before = st.cfgversion
+		local apply_ok = true
 		if type(mgmt_raw) == "string" then
 			for line in (mgmt_raw .. "\n"):gmatch("([^\n]*)\n") do
 				local k, v = line:match("^([^=]+)=(.*)$")
@@ -3073,6 +3139,7 @@ function M.handle_response(json_str, st, cfg)
 						{uplink_ifname = up, identity_mac = st.mac})
 					if not ok_nm then
 						io.stderr:write("inform: netmodel: " .. tostring(changed) .. "\n")
+						apply_ok = false
 					elseif plan then
 						netplan = plan
 						-- The per-VLAN-bridge ledgers describe a layout that no
@@ -3083,6 +3150,11 @@ function M.handle_response(json_str, st, cfg)
 						ip = nil   -- addressing is part of the plan, as UCI
 						if changed then
 							M._sysinfo.forget_uplink_cache()
+							-- A new plan is only proven once its rollback window
+							-- closes (M._netmodel_check).
+							if type(st.netmodel_pending) == "table" then
+								st.netmodel_pending.effective_before = st.cfgversion_effective
+							end
 							M._state.save(st)
 						end
 					end
@@ -3182,11 +3254,15 @@ function M.handle_response(json_str, st, cfg)
 						if vap.no2ghz_oui then steering_active = true end
 					end
 					M._usteer.set_enabled(steering_active, cfg)
-					pcall(ufuci.apply_config,
+					local ok_ac, err_ac = pcall(ufuci.apply_config,
 						{radio_table = radio_table, vap_table = vap_table, network_table = {}},
 						cfg, {band_steering_active = steering_active,
 							device_name = device_name, keep_vlans = port_vlans,
 							netmodel = netplan})
+					if not ok_ac then
+						io.stderr:write("inform: WiFi config failed: " .. tostring(err_ac) .. "\n")
+						apply_ok = false
+					end
 				end
 			end
 
@@ -3320,6 +3396,9 @@ function M.handle_response(json_str, st, cfg)
 			end
 		end
 
+		if type(sys_raw) == "string" then
+			M._settle_cfgversion(st, cfg, cfg_before, apply_ok)
+		end
 		M._state.save(st)
 		-- Re-inform at once after adopting (new key) and after applying a
 		-- config push: the controller holds the device in PROVISIONING until it
@@ -3464,7 +3543,9 @@ function M.handle_response(json_str, st, cfg)
 			if is_mac(mac) and ufuci and ufuci.disconnect_station then
 				pcall(ufuci.disconnect_station, mac)
 			end
-		elseif cmd == "spectrum-scan" then
+		elseif cmd == "spectrum-scan" or cmd == "quick-scan" then
+			-- quick-scan is the RF Environment view's own "Scan"; openUF runs
+			-- the same sweep for both.
 			-- Trigger a scan per radio (sweeps every channel), then read back
 			-- per-channel survey data and build a spectrum_table entry per
 			-- radio, cached for the next build_json() call.
@@ -3703,6 +3784,34 @@ function M._populate_net_info(st, cfg)
 	-- older announce module without get_hostname degrades to the fallback.
 	local hostname = announce.get_hostname and announce.get_hostname()
 	if hostname then st.hostname = hostname end
+	st.netmask = st.ip and M._netmask_of(st.ip) or nil
+end
+
+-- The dotted netmask of the interface holding `ip`, from `ip -4 -o addr`.
+function M._netmask_of(ip)
+	local out = M._run_cmd("ip -4 -o addr show 2>/dev/null") or ""
+	local plen = nil
+	for a, p in out:gmatch("inet (%d+%.%d+%.%d+%.%d+)/(%d+)") do
+		if a == ip then plen = tonumber(p) break end
+	end
+	if not plen or plen < 0 or plen > 32 then return nil end
+	local parts = {}
+	for i = 1, 4 do
+		local bits = math.max(0, math.min(8, plen - (i - 1) * 8))
+		parts[i] = 256 - 2 ^ (8 - bits)
+	end
+	return string.format("%d.%d.%d.%d", parts[1], parts[2], parts[3], parts[4])
+end
+
+-- `uname -m` / `uname -r`, read once.
+M._uname = nil
+function M._uname_info()
+	if M._uname == nil then
+		local m = (M._run_cmd("uname -m 2>/dev/null") or ""):match("^%s*(%S+)")
+		local r = (M._run_cmd("uname -r 2>/dev/null") or ""):match("^%s*(%S+)")
+		M._uname = {machine = m, release = r}
+	end
+	return M._uname
 end
 
 -- Detects an out-of-process change to the on-disk state file -- written by
@@ -3973,6 +4082,18 @@ end
 M.SCAN_REQUEST_FILE    = "/tmp/openuf-scan-request"
 M.SCAN_REQUEST_MAX_AGE = 600
 
+M.UPGRADE_REQUEST_FILE = "/tmp/openuf-upgrade-request"
+
+function M._upgrade_requested()
+	local f = io.open(M.UPGRADE_REQUEST_FILE, "r")
+	if not f then return false end
+	local raw = f:read("*a") or ""
+	f:close()
+	os.remove(M.UPGRADE_REQUEST_FILE)
+	local at = tonumber(raw:match("%d+"))
+	return at ~= nil and M._time() - at <= M.SCAN_REQUEST_MAX_AGE
+end
+
 function M._scan_requested()
 	local f = io.open(M.SCAN_REQUEST_FILE, "r")
 	if not f then return false end
@@ -4056,6 +4177,15 @@ function M._tick(st, cfg, ufhw, ctx)
 		io.stderr:write("inform: 11k-scan requested -- asking a client for a beacon report now\n")
 		M._rrm_next_request = 0
 	end
+	-- `syswrapper.sh upgrade <url>` over SSH: the same hand-off as an inform
+	-- `upgrade` (upgrade.lua) -- the URL itself is never fetched.
+	if M._upgrade_requested() then
+		local conf = cfg and cfg.config
+		local ok_u, started, why = pcall(M._upgrade.start, conf)
+		io.stderr:write("inform: SSH upgrade requested -- "
+			.. ((ok_u and started) and "owut upgrade started"
+				or ("not upgrading: " .. tostring(ok_u and why or started))) .. "\n")
+	end
 	-- Before build_json, so anything a client reported since the last cycle
 	-- rides out on THIS inform rather than waiting for the next.
 	pcall(M._rrm_tick, cfg)
@@ -4069,6 +4199,13 @@ function M._tick(st, cfg, ufhw, ctx)
 	if not ok_b then
 		io.stderr:write("inform: build_json failed: " .. tostring(json_str) .. "\n")
 		return ctx.interval
+	end
+
+	-- Client connection events (staevents.lua): queue whatever changed since
+	-- the last heartbeat; they go out after this inform succeeds.
+	if st.adopted and not (cfg and cfg.config and cfg.config.sta_events == false) then
+		pcall(M._staevents.observe, M._last_sta_snapshot or {}, M._time(),
+			M._last_identity and M._last_identity.uptime)
 	end
 
 	local ok_p, pkt = pcall(M.build_packet, json_str, st)  -- use_gcm read from st.use_gcm
@@ -4138,6 +4275,7 @@ function M._tick(st, cfg, ufhw, ctx)
 		io.stderr:write("inform: handle_response failed: " .. tostring(applied) .. "\n")
 		return ctx.interval
 	end
+	if st.adopted and M._staevents.pending() > 0 then pcall(M._send_sta_events, st, cfg) end
 	if applied or M._immediate then
 		-- A config push runs `wifi reload`, which takes every hostapd object
 		-- the RRM collector subscribed to away with it and kills the
@@ -4151,17 +4289,47 @@ function M._tick(st, cfg, ufhw, ctx)
 	return M._next_interval or ctx.interval
 end
 
+-- Send queued connection events as notification informs, oldest first, a
+-- bounded number per heartbeat. A failed POST keeps the event for the next
+-- heartbeat; the controller's answer is a normal response and is handled as one.
+function M._send_sta_events(st, cfg)
+	local ev = M._staevents
+	local sent = 0
+	while ev.pending() > 0 and sent < ev.MAX_PER_TICK do
+		local ok_j, js = pcall(function()
+			return M._fix_empty_arrays(cjson.encode(ev.notif_payload(M._last_identity, ev.peek())))
+		end)
+		if not ok_j then
+			ev.pop()
+		else
+			local ok_p, pkt = pcall(M.build_packet, js, st)
+			if not ok_p then break end
+			local body = M.http_post(st.inform_url, pkt)
+			if not body then break end
+			ev.pop()
+			sent = sent + 1
+			local ok_parse, jb = pcall(M.parse_packet, body, st)
+			if ok_parse then pcall(M.handle_response, jb, st, cfg) end
+		end
+	end
+	return sent
+end
+
 -- Feed the vlan_filtering backend's rollback window with the outcome of one
 -- inform. A rollback rewrites /etc/config/network, so the cached uplink/bridge
 -- lookups and the reported address are refreshed with it.
 function M._netmodel_check(st, cfg, ok)
 	if not (M._netmodel and st and st.netmodel_pending) then return nil end
+	local before = type(st.netmodel_pending) == "table" and st.netmodel_pending.effective_before
 	local ok_c, res = pcall(M._netmodel.check, st, ok)
 	if not ok_c then
 		io.stderr:write("inform: netmodel check: " .. tostring(res) .. "\n")
 		return nil
 	end
 	if res then
+		-- A rolled-back plan never took effect: the config it came with is not
+		-- the one this device runs.
+		if res == "rolled_back" then st.cfgversion_effective = before or nil end
 		M._state.save(st)
 		if res == "rolled_back" then pcall(M._sysinfo.forget_uplink_cache) end
 		-- Either way the management address may have moved (a Management

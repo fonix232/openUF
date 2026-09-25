@@ -63,6 +63,7 @@ local function usage()
 		"       syswrapper.sh netmodel-retry     (re-apply a rolled-back network plan)\n" ..
 		"       syswrapper.sh netmodel-restore   (put the pre-openUF network config back)\n" ..
 		"       syswrapper.sh 11k-scan           (the controller's nightly neighbour scan)\n" ..
+		"       syswrapper.sh upgrade <url>      (hand an upgrade to owut; the URL is not fetched)\n" ..
 		"\n" ..
 		"key32hex: exactly 32 hexadecimal characters (16 bytes, AES-128)\n"
 	)
@@ -179,6 +180,24 @@ local function cmd_11k_scan()
 	return true
 end
 
+-- upgrade <url> / upgrade2 <url>
+-- The controller's SSH upgrade verb. The URL is UniFi firmware and is never
+-- fetched; the inform daemon hands the request to owut when
+-- config.upgrade_mode = "owut" (upgrade.lua) and refuses it otherwise.
+local upgrade_request_file = "/tmp/openuf-upgrade-request"
+local function cmd_upgrade(url)
+	local f = io.open(upgrade_request_file, "w")
+	if not f then
+		io.stderr:write("syswrapper: cannot write " .. upgrade_request_file .. "\n")
+		return false
+	end
+	f:write(tostring(os.time()), "\n")
+	f:close()
+	io.stdout:write("syswrapper: upgrade requested (" .. tostring(url)
+		.. " is not fetched; the inform daemon decides)\n")
+	return true
+end
+
 local function main(args)
 	local cmd = args[1]
 	if cmd == "set-adopt" then
@@ -197,6 +216,8 @@ local function main(args)
 		if not cmd_netmodel_restore() then os.exit(1) end
 	elseif cmd == "11k-scan" then
 		if not cmd_11k_scan() then os.exit(1) end
+	elseif cmd == "upgrade" or cmd == "upgrade2" then
+		if not cmd_upgrade(args[2]) then os.exit(1) end
 	else
 		io.stderr:write("syswrapper: unknown command: " .. tostring(cmd) .. "\n")
 		usage()
@@ -218,6 +239,8 @@ return {
 	cmd_reset_inform = cmd_reset_inform,
 	cmd_netmodel_retry = cmd_netmodel_retry,
 	cmd_11k_scan = cmd_11k_scan,
+	cmd_upgrade  = cmd_upgrade,
+	_upgrade_request_file = function(p) upgrade_request_file = p end,
 	_scan_request_file = function(p) scan_request_file = p end,
 	is_hex32 = is_hex32,
 	is_url   = is_url,

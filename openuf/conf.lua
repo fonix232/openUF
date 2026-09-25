@@ -182,6 +182,11 @@ config = {
 	advertise_interval = 6 * 3600,
 	version_scheme     = nil,
 
+	-- Client connection events (staevents.lua): associations and departures
+	-- reported the way UniFi APs do, as notification informs, which is what
+	-- the controller builds client connection and roaming history from.
+	sta_events = true,
+
 	-- The controller's system settings (sysconf.lua): its timezone, its NTP
 	-- servers (the ubnt pool) and its nightly `syswrapper.sh 11k-scan` cron
 	-- job. true applies all three, false none, or pick, e.g.
