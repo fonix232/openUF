@@ -84,6 +84,16 @@ jobs:
           for f in openuf/tools/strip-tree.sh openuf/tools/deploy.sh openuf/tools/globals-check.sh \
                    openuf/files/openuf.uci-defaults openuf/files/openuf.init \
                    openuf/files/openuf-bootstrap.init openuf/src/hook/*.sh \
-                   .github/scripts/sdk-build.sh; do
+                   .github/scripts/sdk-build.sh \
+                   luci-theme-unifi/install.sh luci-theme-unifi/test/*.sh \
+                   luci-theme-unifi/root/etc/uci-defaults/*; do
             sh -n "$f" || exit 1
+          done
+          for f in luci-theme-unifi/test/*.cjs; do
+            node --check "$f" || exit 1
+          done
+          # LuCI evaluates its modules as function bodies (they end in a
+          # top-level return), so parse them the same way.
+          for f in $(find luci-theme-unifi/htdocs -name '*.js'); do
+            node -e 'new Function(require("fs").readFileSync(process.argv[1], "utf8"))' "$f" || exit 1
           done
