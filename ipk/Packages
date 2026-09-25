@@ -1,0 +1,42 @@
+Package: luci-app-openuf
+Version: 0.10.0-r330
+Depends: openuf (>=0), luci-base (>=0), rpcd-mod-ucode (>=0), libc
+Source: /feed/luci-app-openuf
+SourceName: luci-app-openuf
+License: MIT
+Section: luci
+SourceDateEpoch: 1790375589
+URL: https://github.com/fonix232/openUF
+Maintainer: fonix232
+Architecture: all
+Installed-Size: 40960
+Filename: luci-app-openuf_0.10.0-r330_all.ipk
+Size: 10391
+SHA256sum: 5b3d7f615784129e157a7c13526b4a34cdcf2db512fe64f7c021a6d170ba25b8
+Description:  Services -> openUF: the daemon's status, its settings (/etc/config/openuf)
+ and the controller messages it did not act on.
+
+Package: openuf
+Version: 0.10.0-r330
+Depends: lua (>=0), lua-cjson (>=0), luasocket (>=0), lua-openssl (>=0), luabitop (>=0), libuci-lua (>=0), iw (>=0), lldpd (>=0), nftables (>=0), kmod-nft-bridge (>=0), hostapd-utils (>=0), ip-bridge (>=0), libc
+Source: /feed/openuf
+SourceName: openuf
+License: MIT
+LicenseFiles: LICENSE
+Section: net
+SourceDateEpoch: 1790375589
+URL: https://github.com/fonix232/openUF
+Maintainer: fonix232
+Architecture: all
+Installed-Size: 409600
+Filename: openuf_0.10.0-r330_all.ipk
+Size: 95544
+SHA256sum: f3f7086efd04297da5675ee5106c8004dc0d6820eebfd574c1bcf788d6a9e8b3
+Description:  Makes an OpenWrt access point adoptable by a UniFi Network controller: it
+ speaks the controller's inform protocol, applies the WLANs, VLANs, radio
+ and system settings the controller pushes, and reports clients, radios,
+ ports and topology back. Settings: /etc/config/openuf.
+ Optional extras: usteer (band steering), tc-tiny and kmod-sched-act-police
+ (WiFi speed limits), luasec (an https:// inform URL), a full wpad build
+ (BSS transition).
+

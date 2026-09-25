@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>openUF package feed</title>
+<style>
+	:root { --bg: #fff; --fg: #1d1d1f; --muted: #5f6368; --code: #f3f4f6; --link: #0b62c4; }
+	@media (prefers-color-scheme: dark) {
+		:root { --bg: #16181c; --fg: #e8eaed; --muted: #9aa0a6; --code: #23262c; --link: #8ab4f8; }
+	}
+	body { background: var(--bg); color: var(--fg); font: 16px/1.55 system-ui, sans-serif;
+		max-width: 46rem; margin: 2rem auto; padding: 0 16px; }
+	h1 { font-size: 1.6rem; margin-bottom: .2rem; }
+	p.sub { color: var(--muted); margin-top: 0; }
+	pre { background: var(--code); padding: .8rem 1rem; border-radius: 6px; overflow-x: auto; }
+	code { font: .9rem ui-monospace, monospace; }
+	a { color: var(--link); }
+</style>
+</head>
+<body>
+<h1>openUF package feed</h1>
+<p class="sub">UniFi access point emulation for OpenWrt &mdash;
+<a href="https://github.com/fonix232/openUF">github.com/fonix232/openUF</a></p>
+
+<h2>OpenWrt 25.12 and snapshots (apk)</h2>
+<pre><code>wget -O /etc/apk/keys/openuf.pem https://fonix232.github.io/openUF/openuf.pem
+apk add -X https://fonix232.github.io/openUF/apk/packages.adb luci-app-openuf</code></pre>
+
+<h2>OpenWrt 24.10 (opkg)</h2>
+<pre><code>wget -O /etc/opkg/keys/55e48a603d3eb56a https://fonix232.github.io/openUF/55e48a603d3eb56a
+echo "src/gz openuf https://fonix232.github.io/openUF/ipk" &gt;&gt; /etc/opkg/customfeeds.conf
+opkg update &amp;&amp; opkg install luci-app-openuf</code></pre>
+
+<p>Leave out <code>luci-app-openuf</code> and install <code>openuf</code> for a device without LuCI.
+The package adds this feed to the device, so later versions arrive with
+<code>openuf-update</code> (which goes back if a new version cannot reach the controller),
+and it reinstalls itself after a firmware upgrade that keeps settings.</p>
+</body>
+</html>
