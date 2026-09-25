@@ -1669,6 +1669,7 @@ function M.build_json(st, cfg, ufhw)
 		serial           = mac_str:gsub(":", ""),
 		model            = uap.model or "U6IW",
 		platform         = uap.platform or "U6IW",
+		model_display    = uap.model_display,
 		hostname         = st.hostname or "openUF",
 		ip               = st.ip or "0.0.0.0",
 		inform_url       = st.inform_url,

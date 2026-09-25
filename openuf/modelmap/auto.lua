@@ -8,10 +8,14 @@
 	                single-port board), in that order
 	  • uplink      the socket the default gateway's MAC is learned on (bridge
 	                FDB), else board.json's wan device, else the first socket
-	  • numbering   U6IW registry order: the uplink is port 5 ("PoE In +
-	                Data"), the others 1-4 in socket order -- the controller
-	                stores per-port settings against these numbers
-	  • identity    the MAC the network already knows this AP by: the bridge
+	  • identity    the closest UniFi AP (ufmodel/auto.lua: modelmatch.lua
+	                against the controller's own model registry)
+	  • numbering   that model's registry order: a model with a built-in
+	                switch takes its uplink on the LAST port (U6IW: port 5,
+	                "PoE In + Data") and the others from 1 in socket order; a
+	                plain AP takes it on port 1 -- the controller stores
+	                per-port settings against these numbers
+	  • MAC         the MAC the network already knows this AP by: the bridge
 	                the uplink sits in, else board.json's label MAC. NOT the
 	                uplink socket's own MAC, which on some boards (a Netgear
 	                WAX220's eth0) is random on every boot
@@ -64,6 +68,18 @@ local function master_of(ifname)
 	return (m and m ~= "") and m or nil
 end
 
+local function sibling(rel)
+	for _, p in ipairs({rel, "openuf/" .. rel, "/opt/openuf/" .. rel}) do
+		local f = io.open(p, "r")
+		if f then f:close(); return dofile(p) end
+	end
+	return nil
+end
+
+-- The chosen identity (ufmodel/auto.lua persists it), for its port layout.
+local ok_id, identity = pcall(sibling, "ufmodel/auto.lua")
+if not ok_id or type(identity) ~= "table" then identity = {} end
+
 local function derive()
 	local board = decode(read("/etc/board.json")) or {}
 	local net = board.network or {}
@@ -100,14 +116,18 @@ local function derive()
 	-- A board whose one socket IS the uplink needs no detection to be sure.
 	if #sockets == 1 then detected = true end
 
+	-- The uplink's port number comes from the model's registry layout; the
+	-- other sockets fill the remaining numbers in order.
+	local up_idx = tonumber(identity.uplink_idx) or 5
 	local ports, idx = {}, 1
 	for _, s in ipairs(sockets) do
 		if s ~= uplink then
+			if idx == up_idx then idx = idx + 1 end
 			ports[#ports + 1] = {idx = idx, ifname = s}
 			idx = idx + 1
 		end
 	end
-	ports[#ports + 1] = {idx = 5 > idx and 5 or idx, ifname = uplink}
+	ports[#ports + 1] = {idx = up_idx, ifname = uplink}
 
 	local br = master_of(uplink)
 	local identity = (br and mac_of(br))
@@ -167,7 +187,7 @@ end
 dev.conf.led = saved.led
 dev.openuf = {}
 dev.openuf.uap = {
-	ufmodel  = "u6iw",
+	ufmodel  = identity.model and "auto" or "u6iw",
 	hwassign = saved.radios,
 }
 
