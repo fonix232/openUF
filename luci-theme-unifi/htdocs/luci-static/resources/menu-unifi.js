@@ -145,6 +145,13 @@ return baseclass.extend({
 		nav.appendChild(head);
 		nav.appendChild(foot);
 		nav.style.display = '';
+
+		/* On a phone the drawer stacks the pages under the categories;
+		 * cascade.css places them by this height. */
+		if (window.ResizeObserver)
+			new ResizeObserver(() => {
+				document.documentElement.style.setProperty('--uf-drawer-rail-h', `${nav.offsetHeight}px`);
+			}).observe(nav);
 	},
 
 	renderSubMenu(tree, url, title) {
@@ -216,9 +223,16 @@ return baseclass.extend({
 	},
 
 	toggleState(cls, key, value) {
-		const on = document.documentElement.classList.toggle(cls);
+		const root = document.documentElement;
 
-		pref(key, on ? value : null);
+		/* The rail animates its width only while this class is set (see
+		 * cascade.css), so a relayout at any other time never catches it
+		 * mid-transition. */
+		root.classList.add('uf-rail-animating');
+		window.clearTimeout(this.animating);
+		this.animating = window.setTimeout(() => root.classList.remove('uf-rail-animating'), 250);
+
+		pref(key, root.classList.toggle(cls) ? value : null);
 	},
 
 	bindChrome() {
