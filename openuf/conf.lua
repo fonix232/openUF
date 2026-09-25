@@ -40,6 +40,16 @@ config = {
 	-- exactly those and leaves ones you disabled yourself alone.
 	use_only_unifi_wlan = true,
 
+	-- The controller owns the AP's config outright: with use_only_unifi_wlan
+	-- the board's own SSIDs are DELETED rather than disabled, and when the
+	-- controller takes the bridge over (bridge_backend "vlan_filtering") every
+	-- other interface on it -- and any L3 interface left on a socket, like a
+	-- stock wan/wan6 -- is deleted rather than kept. The originals are saved
+	-- once to /etc/openuf/network.pre-openuf and wireless.pre-openuf;
+	-- `syswrapper.sh netmodel-restore` puts both back. false keeps the old
+	-- behaviour (SSIDs disabled and stamped, interfaces re-pointed).
+	own_config = true,
+
 	-- URL the inform loop posts to.  Overwritten at runtime when the controller
 	-- sends a new URL or when syswrapper.sh set-inform is called.
 	-- The value here is used only when state.json carries no URL of its own --

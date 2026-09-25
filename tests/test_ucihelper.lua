@@ -1984,6 +1984,30 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: managed rates switch cell_density off and put it back when released",
+		fn = function()
+			with_ucihelper(function(db)
+				ucihelper._popen = function() return AX3000T_IW_PHY end
+				seed_radios({"radio0"})
+				local c = ucihelper._uci.cursor()
+				c:set("wireless", "radio0", "band", "2g")
+				c:set("wireless", "radio0", "cell_density", "2")
+				ucihelper.rf_config("radio0", nil, nil, nil, nil, nil,
+					{basic_rate = {"1000"}, legacy_rates = "1"})
+				assert_eq(db.wireless.radio0.cell_density, "0",
+					"density off: its supported set would exclude the pushed basic rate")
+				assert_eq(db.wireless.radio0.openuf_cell_density, "2", "board value kept")
+				ucihelper.rf_config("radio0", nil, nil, nil, nil, nil,
+					{basic_rate = {"6000"}, legacy_rates = "0"})
+				assert_eq(db.wireless.radio0.openuf_cell_density, "2", "stamp not overwritten by our own 0")
+				ucihelper.rf_config("radio0", nil, nil, nil, nil, nil, nil)
+				assert_eq(db.wireless.radio0.cell_density, "2", "restored when the controller lets go")
+				assert_nil(db.wireless.radio0.openuf_cell_density, "stamp removed")
+				assert_nil(db.wireless.radio0.basic_rate, "rates torn down")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: raise_htmode/cap_htmode move kind and width independently",
 		fn = function()
 			assert_eq(ucihelper.raise_htmode("HT40", "HE80"), "HE80", "n/40 raised to ax/80")
@@ -2533,7 +2557,7 @@ return {
 		end
 	},
 	{
-		name = "ucihelper: use_only_unifi_wlan disables hand-configured SSIDs, not openuf_ ones",
+		name = "ucihelper: use_only_unifi_wlan with own_config=false disables hand-configured SSIDs, not openuf_ ones",
 		fn = function()
 			with_ucihelper(function(db)
 				local cursor = ucihelper._uci.cursor()
@@ -2546,11 +2570,41 @@ return {
 						 x_passphrase = "hunter22"},
 					},
 				}
-				ucihelper.apply_config(resp, {config = {use_only_unifi_wlan = true}})
+				ucihelper.apply_config(resp, {config = {use_only_unifi_wlan = true, own_config = false}})
 				assert_eq(db.wireless.default_radio0.disabled, "1", "user SSID disabled")
 				assert_eq(db.wireless.default_radio0.openuf_autodisabled, "1", "and stamped")
 				assert_eq(db.wireless.openuf_radio0_corp.disabled, nil,
 					"openUF's own vap is never disabled")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: own_config deletes the board's own AP sections and keeps a pristine copy",
+		fn = function()
+			with_ucihelper(function(db)
+				local cursor = ucihelper._uci.cursor()
+				cursor:set("wireless", "default_radio0", "wifi-iface")
+				cursor:set("wireless", "default_radio0", "ssid", "MyOwnWiFi")
+				cursor:set("wireless", "sta0", "wifi-iface")
+				cursor:set("wireless", "sta0", "mode", "sta")
+				local written = {}
+				local orig_r, orig_w = ucihelper._read_file, ucihelper._write_file
+				ucihelper._read_file = function(p)
+					if p == "/etc/config/wireless" then return "config wifi-iface 'default_radio0'\n" end
+					return written[p]
+				end
+				ucihelper._write_file = function(p, c) written[p] = c return true end
+				local quiet = io.stderr
+				io.stderr = {write = function() end}
+				ucihelper.apply_config({radio_table = {}, vap_table = {
+					{ssid = "corp", radio = "radio0", security = "wpa2", x_passphrase = "hunter22"}}},
+					{config = {use_only_unifi_wlan = true}})
+				io.stderr = quiet
+				ucihelper._read_file, ucihelper._write_file = orig_r, orig_w
+				assert_nil(db.wireless.default_radio0, "the board's SSID is gone")
+				assert_true(db.wireless.sta0 ~= nil, "a client-mode section is never touched")
+				assert_true(db.wireless.openuf_radio0_corp ~= nil, "the controller's WLAN is there")
+				assert_true(written[ucihelper.WIRELESS_PRISTINE] ~= nil, "original config saved")
 			end)
 		end
 	},

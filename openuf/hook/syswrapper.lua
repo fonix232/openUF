@@ -61,9 +61,10 @@ local function usage()
 		"       syswrapper.sh set-inform <url>\n" ..
 		"       syswrapper.sh reset-inform\n" ..
 		"       syswrapper.sh netmodel-retry     (re-apply a rolled-back network plan)\n" ..
-		"       syswrapper.sh netmodel-restore   (put the pre-openUF network config back)\n" ..
+		"       syswrapper.sh netmodel-restore   (put the pre-openUF network and WiFi config back)\n" ..
 		"       syswrapper.sh 11k-scan           (the controller's nightly neighbour scan)\n" ..
 		"       syswrapper.sh upgrade <url>      (hand an upgrade to owut; the URL is not fetched)\n" ..
+		"       syswrapper.sh reprovision        (have the controller re-send its full config)\n" ..
 		"\n" ..
 		"key32hex: exactly 32 hexadecimal characters (16 bytes, AES-128)\n"
 	)
@@ -140,7 +141,24 @@ end
 
 -- netmodel-restore
 -- Put back the board's own /etc/config/network from before openUF took the
--- bridge over (/etc/openuf/network.pre-openuf) and reload.
+-- bridge over (/etc/openuf/network.pre-openuf) and reload -- and its own
+-- /etc/config/wireless (/etc/openuf/wireless.pre-openuf), when own_config
+-- deleted its SSIDs. The controller will manage the AP again on its next
+-- push unless openUF is stopped or the device forgotten first.
+local wireless_pristine = "/etc/openuf/wireless.pre-openuf"
+local function restore_wireless()
+	local f = io.open(wireless_pristine, "r")
+	if not f then return false end
+	local saved = f:read("*a")
+	f:close()
+	local o = io.open("/etc/config/wireless", "w")
+	if not o then return false end
+	o:write(saved)
+	o:close()
+	os.execute("wifi reload >/dev/null 2>&1")
+	return true
+end
+
 local function cmd_netmodel_restore()
 	local ok, nm = pcall(dofile, "/opt/openuf/netmodel.lua")
 	if not ok then ok, nm = pcall(dofile, "netmodel.lua") end
@@ -150,12 +168,31 @@ local function cmd_netmodel_restore()
 	end
 	local st = load_state()
 	local s  = st.load()
-	if not nm.restore_pristine(s) then
-		io.stderr:write("syswrapper: no " .. nm.PRISTINE_FILE .. " -- openUF never took the bridge over\n")
+	local net = nm.restore_pristine(s)
+	local wifi = restore_wireless()
+	if not (net or wifi) then
+		io.stderr:write("syswrapper: no " .. nm.PRISTINE_FILE .. " or " .. wireless_pristine
+			.. " -- openUF never took the network or the WiFi over\n")
 		return false
 	end
 	st.save(s)
-	io.stdout:write("syswrapper: restored the pre-openUF network config\n")
+	io.stdout:write("syswrapper: restored the pre-openUF" .. (net and " network" or "")
+		.. ((net and wifi) and " and" or "") .. (wifi and " wireless" or "") .. " config\n")
+	return true
+end
+
+-- reprovision
+-- Ask the controller for its full config again. The controller only pushes
+-- when the device reports a cfgversion other than the one it expects, and it
+-- deduplicates identical pushes for ten minutes, so this forgets the
+-- cfgversion: the next inform reports none and the controller sends the whole
+-- config. What an openUF update needs to re-apply everything with new logic.
+local function cmd_reprovision()
+	local st = load_state()
+	local s = st.load()
+	s.cfgversion = ""
+	st.save(s)
+	io.stdout:write("syswrapper: cfgversion cleared; the controller re-sends its config on the next inform\n")
 	return true
 end
 
@@ -216,6 +253,8 @@ local function main(args)
 		if not cmd_netmodel_restore() then os.exit(1) end
 	elseif cmd == "11k-scan" then
 		if not cmd_11k_scan() then os.exit(1) end
+	elseif cmd == "reprovision" then
+		cmd_reprovision()
 	elseif cmd == "upgrade" or cmd == "upgrade2" then
 		if not cmd_upgrade(args[2]) then os.exit(1) end
 	else
@@ -240,6 +279,7 @@ return {
 	cmd_netmodel_retry = cmd_netmodel_retry,
 	cmd_11k_scan = cmd_11k_scan,
 	cmd_upgrade  = cmd_upgrade,
+	cmd_reprovision = cmd_reprovision,
 	_upgrade_request_file = function(p) upgrade_request_file = p end,
 	_scan_request_file = function(p) scan_request_file = p end,
 	is_hex32 = is_hex32,

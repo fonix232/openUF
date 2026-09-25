@@ -504,7 +504,13 @@ end
 
 -- Replace every bridge that claims a socket (or our bridge's name), and
 -- re-point whatever used it. Returns changed, keep_vids.
-function M.takeover(cursor, plan, st)
+-- own: the interfaces too (config.own_config, default on). Every interface
+-- on the bridges being taken over -- other than management and openUF's own --
+-- is deleted instead of re-pointed, and so are L3 interfaces left on a socket
+-- (a stock wan/wan6): the controller's networks are the AP's networks, and a
+-- leftover would keep an address on a VLAN the controller never gave the AP.
+-- The board's file is saved once as PRISTINE_FILE (netmodel-restore).
+function M.takeover(cursor, plan, st, own)
 	local changed = false
 	local keep_vids = {}
 	local sockets = {}
@@ -550,7 +556,15 @@ function M.takeover(cursor, plan, st)
 		local dev = s.device or s.ifname
 		if type(dev) ~= "string" then return end
 		local base, vid = dev:match("^(.-)%.(%d+)$")
-		if base and bridge_names[base] then
+		if own and ((base and bridge_names[base]) or bridge_names[dev] or sockets[dev]) then
+			doomed[#doomed + 1] = name
+			if st then
+				st.netmodel_removed = st.netmodel_removed or {}
+				local seen = false
+				for _, n in ipairs(st.netmodel_removed) do if n == name then seen = true end end
+				if not seen then st.netmodel_removed[#st.netmodel_removed + 1] = name end
+			end
+		elseif base and bridge_names[base] then
 			keep_vids[tonumber(vid)] = true
 			changed = put(cursor, name, "device", plan.bridge.name .. "." .. vid) or changed
 		elseif bridge_names[dev] then
@@ -673,7 +687,8 @@ function M.converge(model, sw, cfg, st, opts)
 	end
 	if takeover then
 		local keep
-		changed, keep = M.takeover(cursor, plan, st)
+		local own = not (cfg and cfg.config and cfg.config.own_config == false)
+		changed, keep = M.takeover(cursor, plan, st, own)
 		-- A VLAN a surviving foreign interface uses must stay in the table,
 		-- or re-pointing it at the new bridge would leave it on a dead VLAN.
 		for vid in pairs(keep or {}) do

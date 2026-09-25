@@ -38,6 +38,15 @@ M._read_file = function(path)
 	return s
 end
 
+-- Injectable: whole-file writer (pristine config copies).
+M._write_file = function(path, content)
+	local f = io.open(path, "w")
+	if not f then return false end
+	f:write(content)
+	f:close()
+	return true
+end
+
 -- Static radio capability defaults, used when UCI/driver introspection can't
 -- supply a real value. Tune per target hardware (see u6iw.lua's fw.ver note
 -- for the same caveat pattern).
@@ -473,9 +482,37 @@ local AUTODISABLED = OPENUF_PREFIX .. "autodisabled"
 -- is OpenWrt's own default of "ap". An exempt section openUF had already
 -- switched off on an earlier pass (it carries the stamp) is switched back on
 -- once, so the exemption repairs the damage rather than freezing it.
-function M.set_wlan_exclusive(enabled)
+-- Where the board's own wireless config is kept, once, before own_config
+-- deletes the SSIDs openUF does not manage (syswrapper.sh restore-wireless).
+M.WIRELESS_PRISTINE = "/etc/openuf/wireless.pre-openuf"
+
+-- own: delete foreign AP sections outright instead of disabling them
+-- (config.own_config, default on) -- the controller's WLANs are the AP's WLANs.
+-- Client/mesh sections are never touched.
+function M.set_wlan_exclusive(enabled, own)
 	local uci = get_uci()
 	local cursor = uci.cursor()
+	if enabled and own then
+		local doomed = {}
+		cursor:foreach("wireless", "wifi-iface", function(s)
+			local name = s[".name"]
+			if name and name:sub(1, #OPENUF_PREFIX) ~= OPENUF_PREFIX
+				and (s.mode == nil or s.mode == "ap") then
+				doomed[#doomed + 1] = name
+			end
+		end)
+		if #doomed > 0 then
+			if not M._read_file(M.WIRELESS_PRISTINE) then
+				local cur = M._read_file("/etc/config/wireless")
+				if cur then M._write_file(M.WIRELESS_PRISTINE, cur) end
+			end
+			for _, name in ipairs(doomed) do cursor:delete("wireless", name) end
+			io.stderr:write("openuf: removed the board's own SSIDs (" .. table.concat(doomed, ", ")
+				.. "); originals in " .. M.WIRELESS_PRISTINE .. "\n")
+			cursor:commit("wireless")
+		end
+		return
+	end
 	local targets = {}
 	cursor:foreach("wireless", "wifi-iface", function(s)
 		local name = s[".name"]
@@ -1119,6 +1156,20 @@ function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, r
 		-- openuf_autodisabled stamp) confines the teardown below to options
 		-- openUF itself wrote.
 		cursor:set("wireless", radio, "openuf_rates", "1")
+		-- cell_density is OpenWrt's other rate control, and the two do not
+		-- compose: density 2 left supported_rates at 11 Mbps and up while the
+		-- pushed floor made basic_rate 1 Mbps -- a basic rate outside the
+		-- supported set, which hostapd refuses outright ("Failed to prepare
+		-- rates table"), taking every SSID on the radio down. Seen on a live
+		-- E8450. While the controller owns the rates, density is off; the
+		-- board's value is kept in openuf_cell_density and put back below.
+		local density = cursor:get("wireless", radio, "cell_density")
+		if density and density ~= "0" then
+			if not cursor:get("wireless", radio, "openuf_cell_density") then
+				cursor:set("wireless", radio, "openuf_cell_density", density)
+			end
+			cursor:set("wireless", radio, "cell_density", "0")
+		end
 		-- basic_rate/supported_rates are UCI *list* options carrying kb/s
 		-- values; OpenWrt divides each by 100 itself (hostapd_add_rate) to
 		-- reach hostapd's 100-kbps units, so they are set in kb/s as received.
@@ -1185,6 +1236,11 @@ function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, r
 		for _, opt in ipairs({"basic_rate", "supported_rates", "legacy_rates",
 				"beacon_rate", "openuf_rates"}) do
 			cursor:delete("wireless", radio, opt)
+		end
+		local density = cursor:get("wireless", radio, "openuf_cell_density")
+		if density then
+			cursor:set("wireless", radio, "cell_density", density)
+			cursor:delete("wireless", radio, "openuf_cell_density")
 		end
 	end
 	cursor:commit("wireless")
@@ -1616,7 +1672,8 @@ function M.apply_config(resp, cfg, opts)
 	-- Hand-configured (non-openuf_) SSIDs: disable or restore them per
 	-- conf.lua's use_only_unifi_wlan. Runs after the vap loop so it sees the
 	-- final section set, and before the reload so both land in one restart.
-	M.set_wlan_exclusive(cfg and cfg.config and cfg.config.use_only_unifi_wlan == true)
+	M.set_wlan_exclusive(cfg and cfg.config and cfg.config.use_only_unifi_wlan == true,
+		not (cfg and cfg.config and cfg.config.own_config == false))
 
 	-- A VLAN bridge that only exists in UCI carries no traffic: netifd has to
 	-- be told, and `wifi reload` alone does not create a bridge device. Runs

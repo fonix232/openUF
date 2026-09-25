@@ -256,7 +256,7 @@ return {
 		end
 	},
 	{
-		name = "netmodel: converge takes over the bifrost bridge and keeps its interfaces working",
+		name = "netmodel: with own_config=false the takeover keeps foreign interfaces working",
 		fn = function()
 			local u = bifrost_uci()
 			local fs = new_fs()
@@ -265,7 +265,7 @@ return {
 			local sys = fixture("system_cfg_10_6_vlans.txt")
 			local st = {}
 			local changed, plan = netmodel.converge(netmodel.parse(sys), inform_switch_parse(sys),
-				e8450_cfg(), st, {identity_mac = "00:00:5e:00:53:3e"})
+				e8450_cfg({own_config = false}), st, {identity_mac = "00:00:5e:00:53:3e"})
 			local c = u.cursor
 			assert_true(changed, "network changed")
 			assert_nil(c:get("network", "switch"), "the foreign bridge is gone")
@@ -281,6 +281,34 @@ return {
 			assert_eq(fs.files[netmodel.PRISTINE_FILE], "config interface 'lan'\n", "pristine copy kept")
 			assert_true(has(fs.cmds, "/etc/init.d/network reload"), "network reloaded")
 			assert_true(plan ~= nil, "plan returned")
+			netmodel._uci = nil
+		end
+	},
+	{
+		name = "netmodel: by default the takeover owns the interfaces too",
+		fn = function()
+			local u = bifrost_uci()
+			local c = u.cursor
+			c:set("network", "wan6", "interface")
+			c:set("network", "wan6", "device", "wan")
+			c:set("network", "wan6", "proto", "dhcpv6")
+			c:set("network", "wg0", "interface")
+			c:set("network", "wg0", "proto", "wireguard")
+			local fs = new_fs()
+			netmodel._uci = u.mock
+			stub_io(fs)
+			local sys = fixture("system_cfg_10_6_vlans.txt")
+			local st = {}
+			netmodel.converge(netmodel.parse(sys), inform_switch_parse(sys), e8450_cfg(), st,
+				{identity_mac = "00:00:5e:00:53:3e"})
+			assert_eq(c:get("network", "lan", "device"), "br-lan.1", "management kept and re-homed")
+			assert_nil(c:get("network", "guest"), "foreign VLAN interface removed")
+			assert_nil(c:get("network", "iot"), "foreign VLAN interface removed")
+			assert_nil(c:get("network", "vpn_se"), "no leftover address on VLAN 12")
+			assert_nil(c:get("network", "wan6"), "socket L3 interface removed")
+			assert_eq(c:get("network", "wg0"), "interface", "unrelated interfaces untouched")
+			assert_eq(#st.netmodel_removed, 4, "recorded")
+			assert_eq(fs.files[netmodel.PRISTINE_FILE], "config interface 'lan'\n", "pristine copy kept")
 			netmodel._uci = nil
 		end
 	},

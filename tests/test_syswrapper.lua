@@ -189,4 +189,21 @@ return {
 			assert_true(math.abs(tonumber(raw:match("%d+")) - os.time()) <= 2, "dated now")
 		end
 	},
+	{
+		name = "syswrapper: reprovision clears cfgversion so the controller re-sends its config",
+		fn = function()
+			reset_state()
+			local s = state.load()
+			s.adopted, s.cfgversion, s.cfgversion_effective = true, "abc123", "abc123"
+			state.save(s)
+			local real = io.stdout
+			io.stdout = {write = function() end}
+			sw.cmd_reprovision()
+			io.stdout = real
+			local after = state.load()
+			assert_eq(after.cfgversion, "", "cleared")
+			assert_eq(after.adopted, true, "adoption untouched")
+			assert_eq(after.cfgversion_effective, "abc123", "the applied record untouched")
+		end
+	},
 }

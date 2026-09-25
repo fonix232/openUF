@@ -125,6 +125,8 @@ M.FIELDS = {
 	-- The controller's ebtables.* hardening intent ({bpdu, tagdrop, ifnames}),
 	-- so the nft rules l2guard builds from it come back after a reboot.
 	l2guard                   = "table",
+	-- Interfaces netmodel deleted when it took the network over (own_config).
+	netmodel_removed          = "table",
 	-- cfgversion_effective: the last config this device applied without an
 	-- error, and the one-push retry bookkeeping (see inform.lua).
 	cfgversion_effective      = "string",
