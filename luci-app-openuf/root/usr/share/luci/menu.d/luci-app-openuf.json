@@ -20,9 +20,18 @@
 		}
 	},
 
+	"admin/services/openuf/settings": {
+		"title": "Settings",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "openuf/settings"
+		}
+	},
+
 	"admin/services/openuf/unhandled": {
 		"title": "Unhandled messages",
-		"order": 20,
+		"order": 30,
 		"action": {
 			"type": "view",
 			"path": "openuf/unhandled"

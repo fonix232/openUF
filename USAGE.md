@@ -2,18 +2,12 @@
 
 ## 1. Dependencies
 
-Install the following apk packages on the OpenWrt device before running openUF.
-OpenWrt 25.12 replaced `opkg` with `apk`; on 24.10 and earlier substitute
-`opkg update` / `opkg install`.
-
-```sh
-apk update
-apk add lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw lldpd nftables kmod-nft-bridge hostapd-utils usteer ip-bridge tc-tiny wpad-wolfssl
-```
-
-On OpenWrt 24.10 and earlier the package manager is `opkg install` rather than
-`apk add`; the package names are the same, and `install.sh` picks whichever one
-the device has.
+The `openuf` package depends on everything openUF cannot work without: `lua`,
+`lua-cjson`, `luasocket`, `lua-openssl`, `luabitop`, `libuci-lua`, `iw`, `lldpd`,
+`nftables`, `kmod-nft-bridge`, `hostapd-utils` and `ip-bridge`. The rest each enable one
+controller feature and are left to you, because they cost flash a small board may not
+have: `usteer`, `tc-tiny`, `kmod-sched-act-police`, `luasec`, `kmod-leds-gpio`,
+`coreutils-stat` and a full `wpad` build.
 
 | Package | Purpose |
 |---|---|
@@ -26,20 +20,14 @@ the device has.
 | `iw` | Radio and station statistics |
 | `lldpd` | LLDP topology announcement and neighbor discovery |
 | `openssl-util` | `openssl` CLI — last-resort AES-**CBC** fallback if `lua-openssl` is unavailable. This path cannot do GCM, so it is not sufficient to complete adoption on its own |
-| `nftables` | Client block/unblock (`openuf/firewall.lua`) **and** the Multicast/Broadcast Blocker (`openuf/bcfilter.lua`). ~490 KB with its kernel modules — the first thing that won't fit on a small-flash board, which leaves both features unavailable (openUF logs that rather than pretending) |
+| `nftables` | Client block/unblock (`firewall.lua`) **and** the Multicast/Broadcast Blocker (`bcfilter.lua`). ~490 KB with its kernel modules — the first thing that won't fit on a small-flash board, which leaves both features unavailable (openUF logs that rather than pretending) |
 | `kmod-nft-bridge` | The Multicast/Broadcast Blocker only. `nftables` does not pull it in, and without `nft_meta_bridge` the bridge family has no `meta` expression — so the blocker's drop rule is rejected while its table, chain and allow-list set all build normally. Client block/unblock matches on `ether saddr` alone and does not need it |
 | `hostapd-utils` | `hostapd_cli` — immediate deauth of a just-blocked wireless client, client kick (Roaming Assistance) and Minimum RSSI enforcement |
-| `tc-tiny` | `tc` — WiFi Speed Limit (`openuf/shaper.lua`). Busybox has no `tc`; without it the limit is recorded in UCI and never enforced |
+| `tc-tiny` | `tc` — WiFi Speed Limit (`shaper.lua`). Busybox has no `tc`; without it the limit is recorded in UCI and never enforced |
 | `kmod-sched-act-police` | The **upload** half of WiFi Speed Limit only. `police` is a tc *action*, a separate module from the ingress qdisc and absent from a stock filogic image. Without it the download cap applies and the upload cap does not — openUF logs which interface `tc` rejected and names this package rather than reporting the whole limit as applied |
 | `coreutils-stat` | `stat` — only if your build has no `stat` applet (some do not). `inform.lua` uses `stat -c %Y` to notice an out-of-process `state.json` write, i.e. an SSH `set-adopt` or a manual `reset-inform`; without it those are ignored until restart. Enabling busybox's own `stat` applet is smaller |
-| `usteer` | Band Steering (Behavior Controls) — ubus-based client-steering daemon, driven by `openuf/usteer.lua` |
+| `usteer` | Band Steering (Behavior Controls) — ubus-based client-steering daemon, driven by `usteer.lua` |
 | `wpad-wolfssl` (or `wpad-openssl`, `wpad-mbedtls`, `wpad`) | Full hostapd build with 802.11k/v support — required for BSS Transition and Band Steering. Any of the full builds will do; `wpad-basic-*` lacks `bss_transition` entirely and errors with "unknown configuration item 'bss_transition'" |
-
-`install.sh install` installs all of the above automatically when missing, so a
-manual `apk add` is only needed if you're not using the installer. It treats any
-full `wpad` build as sufficient and leaves an existing one alone — notably
-`wpad-mbedtls`, which is what OpenWrt 25.12 ships on ath79 — rather than swapping
-it for `wpad-wolfssl` and bouncing every SSID on the device for no gain.
 
 > **AES-GCM is required for adoption.** UniFi Network Application 10.4.57 will
 > not finish provisioning a device until it has received a genuine
@@ -50,104 +38,120 @@ it for `wpad-wolfssl` and bouncing every SSID on the device for no gain.
 
 There is no Lua zlib binding in the OpenWrt 25.12 feeds. openUF therefore sends
 inform payloads uncompressed and decompresses zlib-compressed controller
-responses with a bundled pure-Lua inflater (`openuf/inflate.lua`), so no zlib
+responses with a bundled pure-Lua inflater (`inflate.lua`), so no zlib
 package is required.
 
 Only required if your inform URL uses `https://` (uncommon — the UniFi default
 is `http://…:8080/inform`): `apk add luasec` for the TLS client. Without it, an
 `https://` URL fails with a clear error instead of connecting in cleartext.
-`install.sh` installs it for you when — and only when — the URL it finds (the
-adopted `state.json`, else `conf.lua`'s default) actually is `https://`.
 
 ---
 
 ## 2. Installation
 
-Download the latest release directly on the device over SSH — no git client or scp required:
+openUF is two OpenWrt packages, both architecture-independent: `openuf` (the daemon) and
+`luci-app-openuf` (its LuCI pages). They come from this repository's package feed, which
+GitHub Actions builds with the official OpenWrt SDK and signs:
 
 ```sh
-# On the OpenWrt device
-mkdir openuf-install && cd openuf-install
-wget https://github.com/jonasevcik/openUF/releases/latest/download/openuf.tar.gz
-tar xzf openuf.tar.gz
-sh install.sh install
+# OpenWrt 25.12 and snapshots (apk)
+wget -O /etc/apk/keys/openuf.pem https://fonix232.github.io/openUF/openuf.pem
+apk add -X https://fonix232.github.io/openUF/apk/packages.adb luci-app-openuf
+
+# OpenWrt 24.10 (opkg)
+wget -O /etc/opkg/keys/55e48a603d3eb56a https://fonix232.github.io/openUF/55e48a603d3eb56a
+echo "src/gz openuf https://fonix232.github.io/openUF/ipk" >> /etc/opkg/customfeeds.conf
+opkg update && opkg install luci-app-openuf
 ```
 
-Optionally verify the download before installing:
+Install `openuf` alone on a device without LuCI. What the package puts where:
+
+| Path | What |
+|---|---|
+| `/usr/share/openuf/` | The daemon (comment-stripped at build time; the repository keeps the comments) |
+| `/etc/config/openuf` | Settings (§ 3) |
+| `/etc/openuf/` | State: `state.json` (adoption, authkey, cfgversion), the auto-derived model files, the unhandled ledger, saved original network/wireless config |
+| `/etc/init.d/openuf` | The service: two procd instances, `announce` and `inform`. Restarts on its own when `/etc/config/openuf` changes |
+| `/etc/init.d/openuf-bootstrap` | Reinstalls the package after a firmware upgrade (below) |
+| `/usr/bin/syswrapper.sh` | The controller-facing command (`set-inform`, `set-adopt`, …) |
+| `/usr/sbin/openuf-update` | Update from the feed, with rollback |
+| `/etc/apk/keys/openuf.pem`, `/etc/apk/repositories.d/openuf.list` (opkg: `/etc/opkg/keys/55e48a603d3eb56a`, `/etc/opkg/openuf.conf`) | The feed, so updates arrive with the rest of the system's packages |
+| `/lib/upgrade/keep.d/openuf` | What a firmware upgrade keeps |
+
+The first install enables and starts the service and enables `lldpd`.
+
+**Updating.** `openuf-update` upgrades both packages from the feed, then waits up to 75 s
+for the new daemon to complete an inform. If it does not, it installs the previous version
+again (the feed keeps the last five builds). A controller that does not answer is reported
+but not rolled back, because the old version would face the same controller.
+`openuf-update --check` only says whether there is a newer build. Plain `apk upgrade` works
+too; it just has no rollback.
+
+**Firmware upgrades.** A package survives a firmware upgrade only when it is built into
+the image, and OpenWrt's image builder (ASU: owut, LuCI's attended sysupgrade, the
+firmware-selector) only builds official packages. So the package lists its settings, state,
+feed and bootstrap service in `/lib/upgrade/keep.d/openuf`, which every upgrade that keeps
+settings honours. On the new image's first boot the bootstrap waits for the network, then
+installs `openuf` (and `luci-app-openuf` when LuCI is there) from the feed. The AP comes back
+still adopted, with the same identity. The controller's Upgrade button (`upgrade_mode
+owut`, § 6) tells owut to leave openUF's packages out of the ASU request; when you run
+`owut upgrade` by hand, add `-r openuf,luci-app-openuf`, or the ASU server rejects the
+build.
+
+**Uninstalling.** `apk del luci-app-openuf openuf` (`opkg remove`). The service stops, the
+temporary SSH adoption account goes, and `/etc/openuf/` stays, so a reinstall finds the
+adoption again. Delete it by hand to forget the device.
+
+**From a tarball install** (the `install.sh` era, code in `/opt/openuf`): install the
+package over it. Before its files go in, the package stops the old service, keeps the old
+`conf.lua` and removes the old code, init scripts, LuCI files and `sysupgrade.conf` lines.
+The move into UCI then writes every setting that differs from the defaults to
+`/etc/config/openuf` and the research-only table options to `/etc/openuf/local.lua`.
+`state.json` is not touched, so the AP stays adopted.
+
+**Building it yourself.** The repository is an OpenWrt feed. In a buildroot or SDK:
 
 ```sh
-wget https://github.com/jonasevcik/openUF/releases/latest/download/openuf.tar.gz.sha256
-sha256sum -c openuf.tar.gz.sha256
+echo "src-git openuf https://github.com/fonix232/openUF.git" >> feeds.conf
+./scripts/feeds update openuf && ./scripts/feeds install -p openuf -a
+make package/openuf/compile package/luci-app-openuf/compile
 ```
 
-Releases are tagged `vX.Y.Z`; each tag push builds and publishes a new `openuf.tar.gz` via
-GitHub Actions. If you're working from a git checkout instead (e.g. for development), the old
-transfer-then-install flow still works:
-
-```sh
-# From your development machine
-scp -r openuf/ install.sh root@<device-ip>:/tmp/openuf/
-ssh root@<device-ip> "cd /tmp/openuf && sh install.sh install"
-```
-
-What `install.sh install` does:
-- Copies `openuf/` to `/opt/openuf/` — **an existing `conf.lua` is kept**, and the shipped
-  default lands beside it as `conf.lua.dist`. That file holds the modelmap selection,
-  `l2_announce` and `bootstrap_adopt_user`, none of it re-derivable; overwriting it on an
-  adopted AP resets the board to the generic profile, which changes `lan_cpueth`, changes
-  the identity MAC, and leaves the controller unable to recognise the device. Because it is
-  preserved, **re-running the installer is safe** — which is how you top up a dependency
-  added by a later version
-- Creates `/etc/openuf/` (state directory)
-- Adds `/etc/openuf/` and `/opt/openuf/conf.lua` to `/etc/sysupgrade.conf`, so that a
-  firmware upgrade keeps them. `sysupgrade` preserves `/etc/config` and a short built-in
-  list and knows nothing about either path; without this a stock upgrade takes
-  `state.json` — mac, authkey, cfgversion, `swvlan_backup` — and the modelmap selection
-  with it, and the AP comes back unadopted, posing as a generic dualband AP the
-  controller no longer recognises. Each line is appended only if it is not already there
-  and nothing else in the file is touched, so a keep list you maintain yourself is safe.
-  The Lua tree is deliberately *not* preserved: the installer reinstalls it, and carrying
-  an old copy onto a new OpenWrt is a silent version mismatch
-- Symlinks `/opt/openuf/hook/syswrapper.sh` → `/usr/bin/syswrapper.sh`
-- Creates `/etc/init.d/openuf` with two procd service instances (announce + inform)
-- Enables and starts the service
-- Enables and starts `lldpd`
-
-To uninstall:
-```sh
-sh install.sh uninstall
-```
-
-Uninstall removes the `/opt/openuf/conf.lua` line from `/etc/sysupgrade.conf` — the file
-is gone with `/opt/openuf/` — but **keeps the `/etc/openuf/` line**. The state directory
-itself is left intact so that the authkey survives, and un-registering it would let the
-next firmware upgrade delete exactly what it is being kept for. Remove that line by hand
-if you also delete `/etc/openuf/`; leaving it costs nothing either way.
+`.github/scripts/sdk-build.sh` does the same inside the official SDK containers, and
+`openuf/tools/deploy.sh <dir> <ap>...` installs what it built on test APs, one at a time,
+stopping at the first that does not complete an inform.
 
 ---
 
 ## 3. Configuration
 
-### Hardware model map (`openuf/conf.lua`)
+Settings live in UCI, `/etc/config/openuf`, section `main`. Change them on **Services →
+openUF → Settings** in LuCI, or with `uci`:
 
-Select the modelmap that matches your hardware:
-
-```lua
--- For TP-Link Archer C5 v1 (dual-band, board-specific):
-dev = dofile("modelmap/archer-c5-v1.lua")
-
--- For TP-Link TL-WDR3500 v1 (dual-band, board-specific):
-dev = dofile("modelmap/tl-wdr3500-v1.lua")
-
--- For Xiaomi Mi Router AX3000T (802.11ax, DSA — no swconfig):
-dev = dofile("modelmap/xiaomi-ax3000t.lua")
-
--- For any other dual-band OpenWrt AP:
-dev = dofile("modelmap/generic-dualband-ap.lua")
-
--- For TP-Link WR1043ND v2 (single-band):
-dev = dofile("modelmap/tl-wr1043ndv2.lua")
+```sh
+uci set openuf.main.inform_url=http://10.0.0.1:8080/inform
+uci commit openuf        # the service restarts on its own
 ```
+
+Every option has a default (`/usr/share/openuf/config.lua`), so an empty section works.
+
+### Hardware model map (`option modelmap`)
+
+`auto` (the default) derives the board's ports, uplink, identity MAC, LED and radios from
+`/etc/board.json` (§ 6, "Boards without a hand-written map"). Name a map to use a
+hand-written one instead:
+
+```sh
+uci set openuf.main.modelmap=archer-c5-v1          # TP-Link Archer C5 v1 (dual-band)
+uci set openuf.main.modelmap=tl-wdr3500-v1         # TP-Link TL-WDR3500 v1 (dual-band)
+uci set openuf.main.modelmap=xiaomi-ax3000t        # Xiaomi Mi Router AX3000T (802.11ax, DSA)
+uci set openuf.main.modelmap=generic-dualband-ap   # any other dual-band OpenWrt AP
+uci set openuf.main.modelmap=tl-wr1043ndv2         # TP-Link WR1043ND v2 (single-band)
+uci commit openuf
+```
+
+The maps are in `/usr/share/openuf/modelmap/`; a name without a matching file falls back
+to `auto`, with a line in the log.
 
 Prefer a board-specific map where one exists. A generic profile cannot know your
 board's LED name (so Locate and the LED toggle do nothing) or which of its ports
@@ -216,7 +220,7 @@ The modelmap sets:
   field means. openUF never touches an unreported radio: a config push naming one is
   refused rather than applied
 
-### Device identity (`openuf/ufmodel/`)
+### Device identity (`ufmodel/`)
 
 `dev.openuf.uap.ufmodel` names the identity: `"auto"` or a file in `ufmodel/`.
 
@@ -256,30 +260,69 @@ uap = {
 }
 ```
 
-### Paths and options (`openuf/conf.lua`)
+### Options
+
+| Option | Default | What it does |
+|---|---|---|
+| `inform_url` | `http://unifi:8080/inform` | Where an unadopted device informs. Once adopted, the URL the controller assigned (in `state.json`) wins |
+| `modelmap` | `auto` | The hardware map (above) |
+| `l2_announce` | `1` | L2 discovery broadcasts (below) |
+| `ssh_adopt` | `0` | The temporary `ubnt/ubnt` SSH adoption account (§ 4) |
+| `stun`, `stun_local_port` | `1`, `3478` | Let the controller wake the device for an immediate inform |
+| `cfg_retries` | `2` | How often a push that failed to apply is asked for again (§ 6) |
+| `use_only_unifi_wlan` | `1` | Take SSIDs the controller did not create off the air (§ 6) |
+| `own_config` | `1` | Remove interfaces and SSIDs the controller did not ask for, keeping a copy (§ 6) |
+| `bridge_backend` | `auto` | `vlan_filtering`, `bridges` or `auto` (§ 6) |
+| `bridge_takeover`, `bridge_rollback_timeout` | `1`, `180` | Let openUF rebuild the management bridge, and roll back after this many seconds without the controller |
+| `bridge_name`, `port_default` | `br-lan`, `all` | The management bridge; what a wired port without a profile carries besides the native VLAN (`all` tagged, or `none`) |
+| `country_override` | — | Program this ISO country's regulatory domain instead of the controller's (the controller's is still reported). A legal decision — off unless set |
+| `sta_events` | `1` | Client connection events as `STA_ASSOC_TRACKER` notification informs (§ 6) |
+| `system_timezone`, `system_ntp`, `system_cron` | `1` | Apply the controller's timezone, NTP servers and nightly scan job. A site with its own NTP switches just `system_ntp` off |
+| `l2guard` | `1` | The controller's `ebtables.*` hardening as an nftables bridge table on the VAPs |
+| `rrm_enrichment`, `rrm_request_interval` | `1`, `600` | Ask 802.11k-capable clients for beacon reports (the neighbour list) |
+| `upgrade_mode` | — | `owut`: the controller's Upgrade button runs an attended sysupgrade (§ 6) |
+| `advertise_updates`, `advertise_interval`, `version_scheme` | `0`, `21600`, — | Show newer OpenWrt builds in the controller (§ 6) |
+| `state_file` | `/etc/openuf/state.json` | Where the adoption lives |
+| `unhandled_file` | `/etc/openuf/unhandled.json` | The unhandled ledger (below); `off` keeps it in memory |
+| `debug_dump_file`, `debug_dump_requests`, `debug_dump_max_bytes` | —, `0`, `4194304` | Protocol capture (below) |
+
+Booleans take `1`/`0` (or `true`/`false`, `on`/`off`). A value that does not parse falls
+back to the default and says so in the log.
+
+A setting that changes what a controller push does (`use_only_unifi_wlan`, `own_config`,
+the `bridge_*` options, `port_default`, `country_override`, `l2guard` and the three
+`system_*` options) also makes the daemon forget the cfgversion at its next start, so the
+controller sends its whole configuration again and the change lands straight away. A
+feature switched off takes its state with it at the next start: the L2 and DNS-answer nft
+tables are deleted and the controller's cron job is removed. The timezone and NTP servers
+keep their last values.
+
+`/etc/openuf/local.lua`, if it exists, runs after UCI is read, with `config` (the options)
+and `dev` (the model map) as globals, and may change either. It is for what UCI cannot
+express: the research-only table options `debug_caps` and `debug_payload_extra` (override
+`fw_caps`/`wifi_caps`/`wifi_caps2`, merge extra payload fields; logged loudly at every
+start), or a model-map tweak such as a radio policy:
 
 ```lua
-config = {
-    use_only_unifi_wlan = true,  -- disable non-openuf_ SSIDs during provisioning
-    inform_url  = "http://unifi:8080/inform",   -- default URL (overwritten at adoption)
-    state_file  = "/etc/openuf/state.json",
-    l2_announce = true,          -- see below
-    debug_dump_file = nil,       -- see below
-    debug_dump_max_bytes = 4194304,
-    bootstrap_adopt_user = nil,  -- see below
+dev.conf.radio = {
+    na = {htmode_max = "HE80", acs_exclude_dfs = true},  -- a driver that cannot start DFS CAC
+    ng = {htmode_floor = "HE20"},                        -- raise a controller's 802.11n default
 }
 ```
 
+`htmode_floor` never overrides a WLAN's Force WiFi 4 Mode, and the hardware clamp still runs
+last. `acs_exclude_dfs` and `channels` only apply while the channel is Auto.
+
 `l2_announce` — on by default; sends the UDP discovery broadcasts that make the
-device appear in UniFi Discover with no `set-inform` at all. Set it to `false`
-to be adopted over L3 only, and restart the service (the init script reads this
-and simply doesn't start the broadcaster). The reason to turn it off isn't
+device appear in UniFi Discover with no `set-inform` at all. Set it to `0`
+to be adopted over L3 only (the init script then simply doesn't start the
+broadcaster). The reason to turn it off isn't
 noise: a controller that discovered a device via L2 adopts it *by SSHing in*,
 so on a device that can't accept that login, adoption fails while the inform
 loop looks perfectly healthy — see § 4.
 
 `debug_dump_file` — opt-in, off by default. When set to a path (e.g.
-`"/var/log/openuf-informs.log"`), every decrypted controller inform response is
+`/var/log/openuf-informs.log`), every decrypted controller inform response is
 appended verbatim, with a UTC timestamp, before it's dispatched. Used to capture
 ground-truth payload shapes when validating field assumptions (`system_cfg`,
 `cmd` dispatch, etc.) against a real UniFi controller — see
@@ -310,50 +353,11 @@ two whole features sat unnoticed in every capture for months. Key names and
 counts only: these blobs carry passphrases and the adoption key, so no value is
 ever logged.
 
-`bootstrap_adopt_user` — set by `install.sh install --bootstrap-adopt`, not by
-hand. Names the temporary SSH bootstrap account (see § SSH prerequisite below)
-that `inform.lua` should lock/unlock as the device's adopted state changes.
-
 The dropped-key report also feeds the **unhandled ledger**, always and not only in
-debug mode: `/etc/openuf/unhandled.json` (`unhandled_file`; `false` keeps it in memory)
+debug mode: `/etc/openuf/unhandled.json` (`unhandled_file`; `off` keeps it in memory)
 holds every response type, command, top-level field and config key shape openUF did not
 act on, with a count, first/last seen and a copy of what arrived — secrets redacted by
 field name, payloads capped at 2 KB, 150 entries at most.
-
-More options (all in `conf.lua`, all optional):
-
-| Option | Default | What it does |
-|---|---|---|
-| `sta_events` | `true` | Client connection events as `STA_ASSOC_TRACKER` notification informs (§ 6) |
-| `controller_system` | `true` | Apply the controller's timezone, NTP servers and cron job; `false`, or a table such as `{ntp = false}` |
-| `l2guard` | `true` | The controller's `ebtables.*` hardening as an nftables bridge table on the VAPs |
-| `cfg_retries` | `2` | How often a push that failed to apply is asked for again (§ 6) |
-| `country_override` | `nil` | Program this ISO country's regulatory domain instead of the controller's (the controller's is still reported). A legal decision — off unless set |
-| `debug_dump_requests` | `false` | With `debug_dump_file`, also log what openUF sends (`TX`) and transport errors (`ERR`) |
-| `debug_caps`, `debug_payload_extra` | `nil` | Research only: override `fw_caps`/`wifi_caps`/`wifi_caps2`, merge extra payload fields. Logged loudly at every start |
-
-`use_only_unifi_wlan`, `sta_events`, the three parts of `controller_system`, `l2guard` and
-`rrm_enrichment` can also be switched from LuCI (**Services → openUF → Settings**). Saving
-rewrites just those lines of `conf.lua` (a key that is set by an expression rather than a
-plain `true`/`false` is left for a hand edit), has Lua read the file back before it replaces
-the original, and restarts the daemon. WLAN, system and L2 changes also clear the
-cfgversion (`syswrapper.sh reprovision`), because they only land when the controller pushes
-its config. A feature switched off takes its state with it at the next start: the L2 and
-DNS-answer nft tables are deleted and the controller's cron job is removed. The timezone
-and NTP servers keep their last values.
-
-A modelmap may also carry a per-band radio policy, for board limits the controller cannot
-know:
-
-```lua
-dev.conf.radio = {
-    na = {htmode_max = "HE80", acs_exclude_dfs = true},  -- a driver that cannot start DFS CAC
-    ng = {htmode_floor = "HE20"},                        -- raise a controller's 802.11n default
-}
-```
-
-`htmode_floor` never overrides a WLAN's Force WiFi 4 Mode, and the hardware clamp still runs
-last. `acs_exclude_dfs` and `channels` only apply while the channel is Auto.
 
 ---
 
@@ -376,24 +380,24 @@ Confirm SSH works from the controller's network before attempting adoption.  A f
 > Once adopted, that field is ignored — key rotation only happens via the SSH
 > `set-adopt` path from that point on, matching real L2 hardware behavior.
 
-#### Optional: zero-touch bootstrap adoption (`--bootstrap-adopt`)
+#### Optional: zero-touch bootstrap adoption (`option ssh_adopt`)
 
 Real Ubiquiti hardware ships a factory-default `ubnt`/`ubnt` SSH account
 specifically so first adoption works without presetting anything — live testing
 against a real controller (see PROTOCOL-VALIDATION.md) confirmed the controller's
 SSH client tries exactly that account for L2-discovered, not-yet-adopted devices,
 regardless of any admin-configured "Device SSH Authentication" credentials.
-`install.sh install --bootstrap-adopt` sets up the same thing, scoped as tightly
-as this project can manage:
+`option ssh_adopt '1'` sets up the same thing, scoped as tightly as this project
+can manage:
 
 ```sh
-sh install.sh install --bootstrap-adopt
+uci set openuf.main.ssh_adopt=1 && uci commit openuf
 ```
 
 - The account is **non-root**, a member of a dedicated `openuf` group with
   write access to `/etc/openuf` only — no other privilege, ever, even
   transiently.
-- Its login shell (`openuf/hook/adopt-shell.sh`) is a forced-command wrapper
+- Its login shell (`/usr/share/openuf/hook/adopt-shell.sh`) is a forced-command wrapper
   that permits exactly one thing: running `syswrapper.sh set-adopt <url>
   <key>`. Any other command, or a plain interactive login attempt, is refused
   outright — the account can never be used as a general-purpose shell.
@@ -402,16 +406,15 @@ sh install.sh install --bootstrap-adopt
   `set-adopt` writing new state. It re-enables the account automatically on
   a factory reset (`reset-inform`, or a controller-initiated "Forget Device"),
   so re-adoption after a reset works the same zero-touch way.
-- This is entirely opt-in: a plain `install.sh install` (no flag) never
-  creates this account and behaves exactly as documented above — the admin
-  sets their own root password.
+- This is entirely opt-in: with the option off (the default) the account is
+  never created, and switching it off removes an account openUF created — the
+  admin sets their own root password instead.
 
-`uninstall` always removes the bootstrap account if present, regardless of
-whether `--bootstrap-adopt` is passed to it.
+Removing the package removes the account too.
 
 ### L2 adoption (device and controller on the same subnet)
 
-1. Start openUF (`/etc/init.d/openuf start` or `sh install.sh install`)
+1. Install the package (the service starts on its own; `/etc/init.d/openuf start` otherwise)
 2. The `announce.lua` process sends UDP broadcasts to port 10001 every 10 seconds
 3. The device appears in **UniFi Discover** with model "U6IW"
 4. Click **Adopt** in the controller
@@ -429,7 +432,7 @@ whether `--bootstrap-adopt` is passed to it.
 > times on the Adopt click, failed (`Login attempt for nonexistent user`), and
 > parked the device at **Connection Interrupted** while the inform loop kept
 > running normally. If SSH can't succeed on your device, set
-> `config.l2_announce = false` in `conf.lua` and restart: with no broadcasts the
+> `option l2_announce '0'` (`uci set openuf.main.l2_announce=0 && uci commit openuf`): with no broadcasts the
 > controller treats it as L3-discovered and delivers the key over the inform
 > channel instead. Forget any device record created while broadcasts were on
 > first — the controller remembers how it found it.
@@ -462,7 +465,7 @@ whether `--bootstrap-adopt` is passed to it.
 ## 5. State file
 
 Persistent state is stored at `/etc/openuf/state.json` — or wherever
-`conf.lua`'s `state_file` points, which the inform daemon, the L2 broadcaster
+the `state_file` option points, which the inform daemon, the L2 broadcaster
 and `syswrapper.sh` all read, so all three agree on one file. Change it before
 adoption: moving it afterwards leaves the authkey behind and the controller
 stops recognising the device.
@@ -493,7 +496,7 @@ announced on stderr rather than passed off as a fresh install.
 | `authkey` | 32 hex chars (16-byte AES-128 key); default = pre-adoption key |
 | `cfgversion` | Opaque string the controller uses to push config updates |
 | `upgrade_requested_version` / `upgrade_requested_url` | Set when the controller sends an `upgrade` command; stored for visibility only — openUF never downloads or flashes firmware (see below) |
-| `inform_url` | URL for the 10-second inform heartbeat. Seeded from `conf.lua` on a first boot (or after a factory reset) and overwritten by the controller or by `syswrapper.sh set-inform`; once present here it always wins over `conf.lua` |
+| `inform_url` | URL for the 10-second inform heartbeat. Seeded from the `inform_url` option on a first boot (or after a factory reset) and overwritten by the controller or by `syswrapper.sh set-inform`; once present here it always wins over the option |
 | `use_gcm` | `true` when the controller has requested AES-128-GCM encryption (`use_aes_gcm=true` in mgmt_cfg) |
 | `blocked_stas` | MACs blocked from the controller's Clients view; re-applied to nftables on startup so blocks survive restarts |
 | `swvlan_backup` | Original `ports` strings of the stock `switch_vlan` sections, snapshotted before per-port VLAN assignment first modifies them; used to restore them (see § 6) |
@@ -997,7 +1000,7 @@ uci show wireless | grep openuf_
 
 To remove all provisioned SSIDs:
 ```sh
-lua -e "dofile('/opt/openuf/ucihelper.lua').wlan_clear()"
+cd /usr/share/openuf && lua -e "dofile('ucihelper.lua').wlan_clear()"
 # or simply reset-inform and re-adopt
 ```
 
@@ -1005,7 +1008,7 @@ lua -e "dofile('/opt/openuf/ucihelper.lua').wlan_clear()"
 
 ### Controller-owned bridge (`vlan_filtering` backend)
 
-Set `bridge_backend = "vlan_filtering"` in `conf.lua` (or leave it on `"auto"` on a board
+Set `option bridge_backend 'vlan_filtering'` (or leave it on `auto` on a board
 whose uplink is already in a vlan-filtering bridge). From the first provisioning push on,
 `netmodel.lua` realises the controller's own description of the AP's layer 2 --
 `vlan.*`, `bridge.*`, `netconf.*`, `dhcpc.*` and the `switch.*` port matrix, captured in
@@ -1048,20 +1051,20 @@ Wired clients are still reported per socket from the bridge FDB.
 (`stun_local_port`, 3478) and reports the address the controller saw as
 `connect_request_ip`/`_port`. When the controller sends its connection request (a bare
 `0x8888` STUN header), the daemon informs immediately. On 10.6 that happens for upgrades
-and when a device misses a heartbeat. `stun = false` turns it off.
+and when a device misses a heartbeat. `option stun '0'` turns it off.
 
 ### OpenWrt upgrades through UniFi
 
-See `openuf/upgrade.lua`'s header and [contrib/asu](contrib/asu/README.md). In short:
-`upgrade_mode = "owut"` makes a controller upgrade run an attended sysupgrade of this
-board (requires the contrib/asu bootstrap, which reinstalls openUF on the new image);
-`advertise_updates = true` shows UniFi's "Upgrade available" badge while `owut check` finds
+See `openuf/src/upgrade.lua`'s header and [openuf/contrib/asu](openuf/contrib/asu/README.md). In short:
+`option upgrade_mode 'owut'` makes a controller upgrade run an attended sysupgrade of this
+board, leaving openUF's own packages out of the ASU request (the package's bootstrap
+reinstalls them on the new image); `option advertise_updates '1'` shows UniFi's "Upgrade available" badge while `owut check` finds
 a newer build. By default the controller's catalogue version is learned from its own
 upgrade commands and reported, so no stale version keeps the badge up.
 
 ### Boards without a hand-written map
 
-`dev = dofile("modelmap/auto.lua")` derives the map from `/etc/board.json` on DSA boards:
+`option modelmap 'auto'` (the default) derives the map from `/etc/board.json` on DSA boards:
 sockets, the uplink (from the bridge FDB, so `ip-bridge` must be installed), the identity
 (`ufmodel = "auto"`, § 3) and that model's port numbering (a model with a built-in switch
 has its uplink on its last port — port 5, "PoE In + Data", on a U6-IW — a plain AP on
@@ -1095,14 +1098,11 @@ plan that is rolled back (§ Controller-owned bridge) sets `cfgversion_effective
 
 ### Updating openUF in place
 
-`openuf-update` (installed by `install.sh`) downloads the latest release, checks its
-sha256, backs up `/opt/openuf` and `/etc/openuf`, runs `install.sh install` (which keeps
-`conf.lua`), restarts, and waits up to 75 s for the new daemon to complete an inform
-(`/tmp/openuf-status`). If it doesn't, the backup is put back. `--ref v1.2.3` picks a
-release, `--ref <branch>` a source tree, `--from <file|dir>` a local copy, and `--check`
-only shows what is installed. From a development machine, `sh tools/deploy.sh <ap>...`
-builds the release tarball and runs the updater on each AP in turn, stopping at the first
-failure.
+`openuf-update` upgrades from the package feed and goes back to the previous build if the
+new one does not complete an inform within 75 s (§ 2). From a development machine,
+`sh tools/deploy.sh <dir> <ap>...` installs packages built with
+`.github/scripts/sdk-build.sh` on each AP in turn, stopping at the first that does not
+complete an inform.
 
 ## 7. LLDP topology
 
@@ -1195,7 +1195,7 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 |---|---|
 | Device doesn't appear in UniFi Discover | `announce.lua` not running, or UDP port 10001 blocked |
 | Controller shows device as "Disconnected" | `inform.lua` not running, or wrong `inform_url` |
-| Adoption fails with SSH error | SSH not reachable from controller, or root password not set — run `passwd root` on the device, or reinstall with `--bootstrap-adopt` |
+| Adoption fails with SSH error | SSH not reachable from controller, or root password not set — run `passwd root` on the device, or switch on the adoption account (`uci set openuf.main.ssh_adopt=1 && uci commit openuf`) |
 | Device stays stuck at "Adopting" forever | No AES-GCM backend — `lua-openssl` missing or built without AEAD support. The CLI `openssl-util` fallback is CBC-only and will not work (see § 1) |
 | Controller rejects device ("firmware incompatible") | Adjust `fw.ver` in `ufmodel/u6iw.lua` |
 | hostapd fails: "unknown configuration item 'bss_transition'" | A `wpad-basic-*` build is installed — replace it with `apk add wpad-wolfssl` |
@@ -1223,7 +1223,7 @@ adopted AP alongside `openuf`.
 
 ```sh
 ssh root@<ap> 'cat > /tmp/heartbeat-probe.lua' < tools/heartbeat-probe.lua
-ssh root@<ap> 'cd /opt/openuf && lua /tmp/heartbeat-probe.lua'
+ssh root@<ap> 'cd /usr/share/openuf && lua /tmp/heartbeat-probe.lua'
 ```
 
 Read the **steady** figure, not the cold one: the first payload of a process

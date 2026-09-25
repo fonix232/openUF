@@ -48,7 +48,7 @@ Real OpenWrt target hardware has genuine `uci`/`iw`/`ubus`/`hostapd` and hits no
    controller will never provision the device — see
    [the GCM provisioning gate](#the-gcm-provisioning-gate). `tools/validation/ap/Dockerfile`
    builds the `zhaozg/lua-openssl` rock (`luarocks-5.1 install openssl`); no prebuilt Alpine
-   apk exists. `install.sh` already installs `lua-openssl` on real OpenWrt hardware.
+   apk exists. The `openuf` package depends on `lua-openssl` on real OpenWrt hardware.
 2. **Set the Inform Host Override before adopting anything.** Devices → Device Updates and
    Settings → Device SSH Settings. It must be the controller container's **literal IP** —
    the controller rejects a bare hostname with `ERROR inform - dev[<mac>] invalid inform_ip

@@ -45,7 +45,7 @@ Most rows below marked ✅ were verified by driving the real controller UI again
 | Pending adoption | ✅ HTTP 404 before adoption is the controller's normal answer; openUF keeps its regular cadence instead of backing off, so a new device appears and adopts within one interval |
 | Controller wake-up (STUN) | ✅ openUF keeps a binding to the controller's `stun_url` and reports `connect_request_ip`/`_port`; the controller's `0x8888` connection request makes it inform at once (10.6 uses it for upgrades and missed-heartbeat recovery). Verified through NAT on the bench |
 | Inform cadence | ✅ Follows the controller's `interval` and `immediate` instead of a fixed 10 s, and re-informs straight after applying a push |
-| Zero-touch bootstrap adoption | ✅ Optional (`install.sh install --bootstrap-adopt`, or `SSH_ADOPT=1` in image builds) — a temporary `ubnt/ubnt` account, non-root, whose forced shell runs nothing but 10.6's `/usr/bin/syswrapper.sh set-adopt <url> <key> [<mac>]` (a MAC must be this AP's). Dropbear's TCP forwarding is switched off while it is usable, and it locks itself at adoption. Only needed where the controller adopts over SSH: L2-discovered devices, and same-subnet devices whose netmask it knows — which is why openUF withholds `netmask` until it is adopted, keeping adoption on the inform channel by default |
+| Zero-touch bootstrap adoption | ✅ Optional (`option ssh_adopt '1'`, or `SSH_ADOPT=1` in image builds) — a temporary `ubnt/ubnt` account, non-root, whose forced shell runs nothing but 10.6's `/usr/bin/syswrapper.sh set-adopt <url> <key> [<mac>]` (a MAC must be this AP's). Dropbear's TCP forwarding is switched off while it is usable, and it locks itself at adoption. Only needed where the controller adopts over SSH: L2-discovered devices, and same-subnet devices whose netmask it knows — which is why openUF withholds `netmask` until it is adopted, keeping adoption on the inform channel by default |
 | Forget device / factory reset | ✅ Working (`syswrapper.sh reset-inform`) |
 | Restart / reboot command | ✅ Working |
 | Applied-config reporting | ✅ `cfgversion_effective` names the last push that applied without an error, which is what the controller's "last config applied successfully" is computed from. A push that fails to apply keeps reporting the previous `cfgversion`, so the controller sends it again after its 10-minute dedupe window (twice, then it is acknowledged so it cannot cycle); a network plan that was rolled back is not reported as applied |
@@ -77,7 +77,7 @@ Most rows below marked ✅ were verified by driving the real controller UI again
 | Client Isolation | ✅ Wire protocol confirmed live (`wireless.<n>.l2_isolation`) → `isolate` (hostapd `ap_isolate`) |
 | Hide WiFi Name | ✅ Wire protocol confirmed live (`wireless.<n>.hide_ssid`, duplicated as `aaa.<n>.hide_ssid`) → `hidden` (hostapd `ignore_broadcast_ssid`) |
 | MAC Address Filter | ✅ Wire protocol confirmed live. Arrives in a top-level `macacl.<m>.*` section keyed by **devname**, not by WLAN index, so it is joined on `wireless.<n>.devname` → `macfilter` + `maclist`. Allow/deny policy maps 1:1 onto OpenWrt's; enforced by hostapd itself |
-| WiFi Speed Limit | ⚠️ Wire protocol confirmed live (top-level `qos.vap.<m>.*`, joined on devname; kbps; a **per-VAP aggregate** cap, not per-client). Needs a speed-limit profile to exist in site settings before the per-WLAN toggle emits anything. No hostapd/OpenWrt option expresses a throughput cap, so it is enforced with `tc` — HTB on egress for downlink, ingress policing for uplink. The generated commands are verified against real `tc`, but the on-air throughput is not (no real radios available). **Needs `tc-tiny` *and* `kmod-sched-act-police`**: the uplink half uses the `police` action, which is a separate module absent from some images — without it the download cap applies and the upload cap silently does not (`install.sh` installs both, and openUF now logs it by name if `tc` still rejects the filter). The qdiscs are rebuilt from UCI on every start, so the cap survives a reboot |
+| WiFi Speed Limit | ⚠️ Wire protocol confirmed live (top-level `qos.vap.<m>.*`, joined on devname; kbps; a **per-VAP aggregate** cap, not per-client). Needs a speed-limit profile to exist in site settings before the per-WLAN toggle emits anything. No hostapd/OpenWrt option expresses a throughput cap, so it is enforced with `tc` — HTB on egress for downlink, ingress policing for uplink. The generated commands are verified against real `tc`, but the on-air throughput is not (no real radios available). **Needs `tc-tiny` *and* `kmod-sched-act-police`**: the uplink half uses the `police` action, which is a separate module absent from some images — without it the download cap applies and the upload cap silently does not (install `tc-tiny` and `kmod-sched-act-police`; openUF logs it by name if `tc` still rejects the filter). The qdiscs are rebuilt from UCI on every start, so the cap survives a reboot |
 | Minimum RSSI | ✅ Working — per **radio**, not per WLAN; enforced by deauthenticating clients below the threshold (a one-shot kick, not a persistent block). Disabling it in the controller stops the enforcement (the wire signals disable by omitting the whole `stamgr.<n>` block) |
 | Show Access Point Name in Beacon | ❌ **Not implemented on the OpenWrt side.** The wire protocol and its `wifi_caps2` bit `0x40` gating are confirmed live, and openUF writes `wps_device_name`/`ap_setup_locked` — but a beacon never carries the name. OpenWrt emits the whole WPS/WSC block, `device_name` included, only when `config_methods` is non-empty, which needs `wps_pushbutton` or `wps_label`; openUF sets neither, so WPS never activates. Verified 2026-09-10 on an Archer C5 and an AX3000T (both 25.12.5): the gate is `/usr/share/ucode/wifi/ap.uc:227`, and no live BSS config carries a single WPS key. Enabling WPS to broadcast a name is a real security surface for a cosmetic feature, so this is left unimplemented deliberately |
 | SAE Anti-clogging / SAE Sync Time | ✅ Working — `aaa.<n>.sae.anti_clogging`/`sae.sync` (sent only for WLANs that really run SAE) become `sae_anti_clogging_threshold`/`sae_sync` through `list hostapd_bss_options`, which both OpenWrt wifi stacks pass to hostapd verbatim. Neither is a wifi-iface option, so writing them as options (as upstream once did) was stored and silently dropped |
@@ -113,8 +113,8 @@ Most rows below marked ✅ were verified by driving the real controller UI again
 | Controller system settings | ✅ The site's timezone, NTP servers and the nightly `syswrapper.sh 11k-scan` cron job are applied to UCI and the crontab, reversibly (`controller_system`; `{ntp = false}` keeps a local NTP server). `11k-scan` asks a client for an 802.11k beacon report — the AP itself never goes off-channel |
 | L2 hardening (`ebtables.*`) | ✅ The controller's BPDU and VLAN-tag drops for Wi-Fi clients, re-expressed as an nftables bridge table on the VAPs (`l2guard`; needs `kmod-nft-bridge`) |
 | Board radio policy | ✅ A modelmap can floor or cap the pushed channel width and keep ACS off DFS channels (`dev.conf.radio.<band>`), and `country_override` programs a different regulatory domain while still reporting the controller's — for drivers that cannot run DFS |
-| LuCI status page | ✅ **Services → openUF** (`luci-app-openuf`): daemon and heartbeat, adoption and applied-config state, the identity presented (catalogue model, sysid, firmware), the port map, network ownership, upgrade survival and settings, plus an **Unhandled messages** tab listing the ledger. The Settings toggles (controller WLANs only, connection events, the controller's timezone / NTP / scheduled scan, L2 hardening, 802.11k reports) edit `conf.lua` in place, check it with Lua before swapping it in, and restart the daemon; a switched-off feature drops its nft table or cron job at startup. Installed by `install.sh` when LuCI is present; a feed Makefile is included for image builds. Served by a ucode rpcd backend that never returns the adoption key |
-| In-place update | ✅ `openuf-update` downloads a release (sha256-checked), backs up, installs keeping `conf.lua` and `state.json`, waits for a completed inform and rolls back otherwise; `tools/deploy.sh` pushes a local build to APs the same way |
+| LuCI pages | ✅ **Services → openUF** (`luci-app-openuf`): **Status** (daemon and heartbeat, adoption and applied-config state, the identity presented — catalogue model, sysid, firmware — the port map, network ownership and upgrade survival), **Settings** (every option in `/etc/config/openuf`, a standard LuCI form with Save & Apply and rollback; a change restarts the daemon, a switched-off feature drops its nft table or cron job, and a setting that changes what the controller provisions has it send its configuration again) and **Unhandled messages** (the ledger). Served by a ucode rpcd backend that never returns the adoption key |
+| Packaging and updates | ✅ OpenWrt packages (`openuf`, `luci-app-openuf`, architecture-independent) from a signed feed built by CI with the official SDK: apk for 25.12+, opkg for 24.10. `openuf-update` upgrades from the feed, waits for a completed inform and goes back to the previous build otherwise; the package reinstalls itself after a firmware upgrade that keeps settings; `tools/deploy.sh` installs a local build on test APs |
 | Set Replacement Device / Load Configuration | ✅ Working — both are controller-side clones; no device-side protocol involved |
 | Power / PoE reporting | Not applicable — the flagged UI field belongs to the upstream parent device, not the AP |
 | Speed test | Not applicable — gateway-only feature in current UniFi Network |
@@ -151,8 +151,7 @@ USB extroot or a custom build with the crypto baked into squashfs.  Known-workin
   status LED** (`/sys/class/leds` holds only the two mt76 radio LEDs), so Locate blinks
   `blue:status` — **install `kmod-leds-gpio`** (9 KB) or the board has no drivable LED at
   all: its case LED is a blue/yellow GPIO pair the stock filogic image ships no driver for,
-  leaving it stuck on whatever the bootloader set (a steady orange). `install.sh` adds the
-  module when it sees that situation. Do not point `dev.conf.led` at `mt76-phy0` instead —
+  leaving it stuck on whatever the bootloader set (a steady orange). Do not point `dev.conf.led` at `mt76-phy0` instead —
   it exists and accepts writes, but is wired to nothing on this board
 - **TP-Link WR1043ND v2** (single-band 802.11n) — use `modelmap/tl-wr1043ndv2.lua`
 - **Linksys E8450 / Belkin RT3200, Netgear WAX220** (DSA, 802.11ax) — `modelmap/auto.lua`
@@ -168,63 +167,81 @@ The *modelmap* describes your real hardware; the *ufmodel* picks the UniFi ident
 
 ## Quick start
 
+openUF is an OpenWrt package, `openuf`, with its LuCI pages in `luci-app-openuf`. Both
+come from this repository's package feed, which CI builds with the official OpenWrt SDK
+and signs.
+
 ```sh
-# 1. SSH into the OpenWrt device, install dependencies (OpenWrt 25.12+ uses apk;
-#    on 24.10 and earlier the same names go through `opkg install`)
-apk update
-apk add lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw ip-bridge lldpd nftables kmod-nft-bridge hostapd-utils usteer tc-tiny kmod-sched-act-police wpad-wolfssl
+# OpenWrt 25.12 and snapshots (apk)
+wget -O /etc/apk/keys/openuf.pem https://fonix232.github.io/openUF/openuf.pem
+apk add -X https://fonix232.github.io/openUF/apk/packages.adb luci-app-openuf
 
-# 2. Download and install the latest release (no git client or scp needed)
-mkdir openuf-install && cd openuf-install
-wget https://github.com/fonix232/openUF/releases/latest/download/openuf.tar.gz
-tar xzf openuf.tar.gz
-sh install.sh install
-# later: openuf-update   (keeps conf.lua and the adoption; rolls back on failure)
-
-# 3a. L2 adoption (device and controller on same subnet)
-#     — The device will appear in UniFi Discover automatically.
-#     — Click Adopt in the controller UI.
-
-# 3b. L3 adoption (different subnets — no SSH from the controller needed)
-ssh root@<device> syswrapper.sh set-inform http://<controller-ip>:8080/inform
-#     — The device will appear as Pending in the controller.
-#     — Click Adopt.
+# OpenWrt 24.10 (opkg)
+wget -O /etc/opkg/keys/55e48a603d3eb56a https://fonix232.github.io/openUF/55e48a603d3eb56a
+echo "src/gz openuf https://fonix232.github.io/openUF/ipk" >> /etc/opkg/customfeeds.conf
+opkg update && opkg install luci-app-openuf
 ```
 
-Both adoption paths complete to **Connected**.  L2 requires the controller to
-SSH in (set a root password first, or use `--bootstrap-adopt`); L3 skips SSH
-entirely and delivers the adoption key over the inform channel.
+Install `openuf` alone on a device without LuCI. The package pulls in what it needs
+(Lua with cjson, luasocket and lua-openssl for AES-GCM, `iw`, `lldpd`, nftables with
+`kmod-nft-bridge`, `hostapd-utils`, `ip-bridge`), adds the feed to the device and
+starts the service. Settings are in `/etc/config/openuf`, and on **Services → openUF →
+Settings** in LuCI.
 
-Step 1 is optional: `install.sh install` installs every dependency that is
-missing, including `usteer` and a full `wpad` build — both required for BSS
-Transition (802.11v) and Band Steering to work at all. Any full build counts
-(`wpad`, `wpad-wolfssl`, `wpad-openssl`, `wpad-mbedtls`), and an existing one is
-left in place. `wpad-basic-*` builds lack 802.11v support entirely and will error
-with "unknown configuration item 'bss_transition'"; if you've manually installed
-a basic build, replace it with `apk add wpad-wolfssl` first.
+Then adopt it:
 
-`install.sh install` also makes openUF **survive firmware upgrades**. It registers
-`/etc/openuf/`, `/opt/openuf/conf.lua` and a small boot-time bootstrap
-(`/etc/init.d/openuf-bootstrap`) with `sysupgrade`, and keeps a copy of the installed build
-in `/etc/openuf/dist/`. After an upgrade that keeps settings — owut, LuCI's attended
-sysupgrade or plain `sysupgrade` — the new image comes up with the adoption, `conf.lua` and
-that copy, and the bootstrap reinstalls the same openUF version on its first boot (adding any
-missing packages from the feed; owut/ASU images already carry them). Stock `sysupgrade`
-backs up none of this by itself. Existing entries in `/etc/sysupgrade.conf` are left alone; see
-[USAGE.md](USAGE.md) for what uninstall does to them.
+- **L2** (device and controller on the same subnet): it appears in the controller's
+  device list; click **Adopt**. The controller adopts over SSH, so set a root password, or
+  switch on the temporary `ubnt/ubnt` adoption account (`uci set openuf.main.ssh_adopt=1`).
+- **L3** (different subnets, no SSH needed): `uci set openuf.main.inform_url=http://<controller>:8080/inform && uci commit openuf`,
+  or `syswrapper.sh set-inform <url>`. It appears as Pending; click **Adopt**.
 
-**Building it into images:** [contrib/asu](contrib/asu/README.md) has the package list and a
-first-boot script for firmware-selector, `owut` and the ASU API (`contrib/asu/asu-build.py`).
-A freshly flashed board boots straight into **ready-to-adopt AP mode** — every socket in one
-DHCP-managed bridge, no DHCP server or firewall, no SSIDs — and openUF then survives every
-later `owut upgrade` still adopted.
+Optional extras, each for one controller feature: `usteer` (band steering), `tc-tiny` and
+`kmod-sched-act-police` (WiFi speed limits), `luasec` (an `https://` inform URL),
+`kmod-leds-gpio` on boards whose status LED needs it, and a full `wpad` build
+(`wpad-wolfssl`, `-openssl` or `-mbedtls`; the default `wpad-basic-*` lacks 802.11v, so
+BSS Transition and Band Steering fail with "unknown configuration item 'bss_transition'").
 
-Installing from a git checkout instead (for contributors/dev builds) still works — `scp -r
-openuf/ install.sh root@<device>:/tmp/openuf/` and run `install.sh` from there.
+**Updates.** `openuf-update` upgrades from the feed, waits for the new version to complete
+an inform, and goes back to the previous one if it does not.
 
-See [USAGE.md](USAGE.md) for full dependency details, configuration reference, and troubleshooting.
+**Firmware upgrades.** Packages only survive a firmware upgrade when they are built into the
+image, and OpenWrt's image builder (ASU, owut, LuCI's attended sysupgrade) only builds
+official packages. So the package keeps its settings, state, feed key and a small bootstrap
+service across upgrades that keep settings (`/lib/upgrade/keep.d/openuf`); on the new image's
+first boot the bootstrap reinstalls openUF from the feed, and the AP comes back still
+adopted. The controller's Upgrade button (`upgrade_mode owut`) leaves openUF's packages out
+of the ASU request by itself; when you run `owut upgrade` by hand, add
+`-r openuf,luci-app-openuf`.
+
+**Coming from a tarball install** (`install.sh`, `/opt/openuf`): install the package over
+it. It stops the old service, moves `conf.lua`'s settings into `/etc/config/openuf`
+(research-only table options go to `/etc/openuf/local.lua`), removes the old files and
+keeps `state.json`, so the AP stays adopted.
+
+**Building it into images:** [openuf/contrib/asu](openuf/contrib/asu/README.md) has the
+package list and a first-boot script for firmware-selector, `owut` and the ASU API. A freshly
+flashed board boots straight into **ready-to-adopt AP mode** — every socket in one
+DHCP-managed bridge, no DHCP server or firewall, no SSIDs — and installs openUF from the feed
+once it has a network.
+
+See [USAGE.md](USAGE.md) for every setting, dependency details and troubleshooting.
+
+## Repository layout
+
+| Path | What |
+|---|---|
+| `openuf/` | The `openuf` package: `Makefile`, `src/` (the daemon, installed to `/usr/share/openuf`), `files/` (init scripts, default UCI config, keep-list, feed key), `tests/`, `tools/`, `contrib/asu/` |
+| `luci-app-openuf/` | The `luci-app-openuf` package: the LuCI views and their rpcd backend |
+| `.github/` | CI: tests, the package feed (`feed.yml`, published to GitHub Pages), releases |
+| `docs/`, `USAGE.md`, `PROTOCOL-VALIDATION.md` | Documentation |
+
+The repository is an OpenWrt package feed: add it to a buildroot or SDK with
+`src-git openuf https://github.com/fonix232/openUF.git` in `feeds.conf`.
 
 ## Local testing (no hardware required)
+
+Everything below runs from the package directory, `openuf/`.
 
 ```sh
 # Install Lua on macOS/Linux
@@ -235,6 +252,7 @@ brew install lua luarocks      # macOS
 luarocks install --local lua-cjson
 
 # Run unit tests (all pure Lua)
+cd openuf
 eval $(luarocks path --local)
 lua tests/run_tests.lua
 
@@ -245,9 +263,9 @@ sh tools/simulate.sh --adopt
 # Or drive it manually:
 pip install pycryptodome
 python3 tools/test_controller.py --adopt --verbose
-# In another terminal, run from inside the openuf/ dir (the scripts load
-# conf.lua and the modelmap with cwd-relative paths):
-cd openuf && lua inform.lua
+# In another terminal, from src/ (the scripts load the model map and their
+# siblings with cwd-relative paths):
+cd src && lua inform.lua
 ```
 
 On a real AP, `tools/heartbeat-probe.lua` reports what one inform actually costs

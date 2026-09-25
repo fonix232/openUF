@@ -224,18 +224,19 @@ version string per ufmodel.
 
 | Area | Files |
 |---|---|
-| Controller-owned bridge: one vlan-filtering bridge realising the controller's L2 model (Management VLAN, WLAN VLANs, trunk ports), takeover/recreation of foreign bridges, automatic rollback | `openuf/netmodel.lua`, hooks in `inform.lua`/`ucihelper.lua`, `syswrapper.sh netmodel-retry` / `netmodel-restore` |
+| Controller-owned bridge: one vlan-filtering bridge realising the controller's L2 model (Management VLAN, WLAN VLANs, trunk ports), takeover/recreation of foreign bridges, automatic rollback | `openuf/src/netmodel.lua`, hooks in `inform.lua`/`ucihelper.lua`, `syswrapper.sh netmodel-retry` / `netmodel-restore` |
 | Protocol: `inform_ip`, pending 404, `interval`/`immediate`, `blocked_sta`, `kick-sta`, key rotation, `sys_stats`, `sysid`, MemAvailable, immediate re-inform, IP refresh | `inform.lua`, `sysinfo.lua`, `ucihelper.lua`, `ufmodel/u6iw.lua` |
-| STUN wake-up channel | `openuf/stun.lua` |
+| STUN wake-up channel | `openuf/src/stun.lua` |
 | IP detection on `<bridge>.<vid>` management | `announce.lua` |
-| DSA boards without a hand-written map; stable identity MAC | `openuf/modelmap/auto.lua`, `dev.conf.net.identity_mac` |
-| OpenWrt upgrades through UniFi (owut), catalogue-version learning | `openuf/upgrade.lua` |
-| Image builds (firmware-selector / owut / ASU API / ImageBuilder) | `contrib/asu/` |
-| Real-netifd test bench | `tools/validation/openwrt/` |
-| Client connection/roaming events (`STA_ASSOC_TRACKER` notification informs) | `openuf/staevents.lua` |
+| DSA boards without a hand-written map; stable identity MAC | `openuf/src/modelmap/auto.lua`, `dev.conf.net.identity_mac` |
+| OpenWrt upgrades through UniFi (owut), catalogue-version learning | `openuf/src/upgrade.lua` |
+| Image builds (firmware-selector / owut / ASU API / ImageBuilder) | `openuf/contrib/asu/` |
+| Real-netifd test bench | `openuf/tools/validation/openwrt/` |
+| Client connection/roaming events (`STA_ASSOC_TRACKER` notification informs) | `openuf/src/staevents.lua` |
 | Applied-config reporting (`cfgversion_effective`, bounded re-push) | `inform.lua` |
 | Explicit cipher from `wpa.1.pairwise`; SAE anti-clogging/sync via `hostapd_bss_options` | `ucihelper.lua`, `inform.lua` |
-| Identity from the controller's own model registry | `tools/uidb-catalog.py`, `openuf/ufmodel/catalog.lua`, `openuf/modelmatch.lua`, `openuf/ufmodel/auto.lua` |
-| yesrab/openUF ports: unhandled ledger, controller timezone/NTP/cron, L2 hardening, in-place updater, debug switches, radio policy, `country_override`, single-band generic map | `unhandled.lua`, `sysconf.lua`, `l2guard.lua`, `update.sh`, `tools/deploy.sh`, `ucihelper.lua`, `modelmap/generic-singleband-ap.lua` |
-| Ready-to-adopt AP mode on first boot | `contrib/asu/openuf-firstboot.sh` |
-| Tests: 786 (upstream 691), all green under Lua 5.1 | `tests/test_netmodel.lua`, `test_stun.lua`, `test_upgrade.lua`, `test_staevents.lua`, `test_modelmatch.lua`, `test_unhandled.lua`, `test_sysconf.lua`, `test_l2guard.lua`, additions elsewhere |
+| Identity from the controller's own model registry | `openuf/tools/uidb-catalog.py`, `openuf/src/ufmodel/catalog.lua`, `openuf/src/modelmatch.lua`, `openuf/src/ufmodel/auto.lua` |
+| yesrab/openUF ports: unhandled ledger, controller timezone/NTP/cron, L2 hardening, in-place updater, debug switches, radio policy, `country_override`, single-band generic map | `unhandled.lua`, `sysconf.lua`, `l2guard.lua`, `update.sh`, `openuf/tools/deploy.sh`, `ucihelper.lua`, `modelmap/generic-singleband-ap.lua` |
+| Ready-to-adopt AP mode on first boot | `openuf/contrib/asu/openuf-firstboot.sh` |
+| OpenWrt packages `openuf` and `luci-app-openuf` from a signed feed (apk for 25.12+, opkg for 24.10) built by CI with the official SDK; settings in UCI (`/etc/config/openuf`) with LuCI Status / Settings / Unhandled messages pages; reinstall after firmware upgrades; `openuf-update` with rollback; migration from tarball installs | `openuf/Makefile`, `openuf/files/`, `openuf/src/config.lua`, `openuf/src/migrate.lua`, `luci-app-openuf/`, `.github/workflows/feed.yml` |
+| Tests: 819 (upstream 691), all green under Lua 5.1, run from `openuf/` | `openuf/tests/`: `test_netmodel.lua`, `test_stun.lua`, `test_upgrade.lua`, `test_staevents.lua`, `test_modelmatch.lua`, `test_unhandled.lua`, `test_sysconf.lua`, `test_l2guard.lua`, `test_config.lua`, `test_migrate.lua`, `test_package.lua`, additions elsewhere |

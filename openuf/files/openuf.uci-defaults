@@ -1,0 +1,18 @@
+#!/bin/sh
+# openUF, on every install and upgrade of the package (and once on the first
+# boot of an image that includes it).
+
+# A tarball install's settings (install.sh, /opt/openuf/conf.lua; kept aside
+# by the package's pre-install) move into /etc/config/openuf, once.
+if [ -f /etc/openuf/conf.lua.legacy ]; then
+	(cd /usr/share/openuf && lua migrate.lua /etc/openuf/conf.lua.legacy) | logger -t openuf
+	mv /etc/openuf/conf.lua.legacy /etc/openuf/conf.lua.migrated
+fi
+
+# The SSH adoption account's shell moved with the code.
+sed -i 's#:/opt/openuf/hook/adopt-shell.sh$#:/usr/share/openuf/hook/adopt-shell.sh#' /etc/passwd
+
+# Topology: the controller learns the AP's uplink from LLDP.
+[ -x /etc/init.d/lldpd ] && /etc/init.d/lldpd enable
+
+exit 0

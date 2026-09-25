@@ -1,7 +1,8 @@
-# Release artifacts (tools/dist.sh)
-build/
-openuf.tar.gz
-openuf.tar.gz.sha256
+# Package builds (.github/scripts/sdk-build.sh output)
+out/
+*.apk
+*.ipk
+__pycache__/
 
 # macOS Finder metadata. Written into any directory the Finder has merely
 # looked at, so it turns up in docs/ as readily as the root.

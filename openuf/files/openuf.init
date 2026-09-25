@@ -1,0 +1,113 @@
+#!/bin/sh /etc/rc.common
+# openUF procd service
+#
+# Manages two background processes:
+#   announce — sends L2 UDP discovery broadcasts (port 10001)
+#   inform   — sends encrypted TNBU heartbeats to the controller
+#
+# Settings: /etc/config/openuf (see /usr/share/openuf/config.lua).
+
+START=99
+STOP=01
+USE_PROCD=1
+
+OPENUF_DIR=/usr/share/openuf
+STATE_DIR=/etc/openuf
+ADOPT_USER=ubnt
+ADOPT_GECOS="openuf bootstrap adoption"
+
+# The temporary SSH adoption account (option ssh_adopt): a non-root ubnt/ubnt
+# login whose shell only runs `syswrapper.sh set-adopt`, which is how a
+# controller adopts a device it found on its own subnet. The daemon locks it
+# once the device is adopted and unlocks it after a factory reset; this only
+# creates it, or removes it when the option is off. Never touches a ubnt
+# account openUF did not create.
+adopt_account() {
+	local want uid gid
+	config_get_bool want main ssh_adopt 0
+	if [ "$want" != 1 ]; then
+		if grep -q "^$ADOPT_USER:[^:]*:[0-9]*:[0-9]*:$ADOPT_GECOS:" /etc/passwd 2>/dev/null; then
+			sed -i "/^$ADOPT_USER:/d" /etc/passwd /etc/shadow
+			sed -i '/^openuf:/d' /etc/group
+			logger -t openuf "removed the SSH adoption account ($ADOPT_USER)"
+		fi
+		return 0
+	fi
+	grep -q "^$ADOPT_USER:" /etc/passwd 2>/dev/null && return 0
+	gid=900
+	while grep -q "^[^:]*:[^:]*:$gid:" /etc/group 2>/dev/null; do gid=$((gid + 1)); done
+	grep -q '^openuf:' /etc/group || echo "openuf:x:$gid:" >> /etc/group
+	gid=$(sed -n 's/^openuf:[^:]*:\([0-9]*\):.*/\1/p' /etc/group)
+	uid=900
+	while awk -F: -v id="$uid" '$3==id{f=1} END{exit !f}' /etc/passwd 2>/dev/null; do uid=$((uid + 1)); done
+	echo "$ADOPT_USER:x:$uid:$gid:$ADOPT_GECOS:$STATE_DIR:$OPENUF_DIR/hook/adopt-shell.sh" >> /etc/passwd
+	echo "$ADOPT_USER:$(openssl passwd -6 ubnt 2>/dev/null || echo '*'):::::::" >> /etc/shadow
+	# set-adopt writes state.json as that user.
+	mkdir -p "$STATE_DIR"
+	[ -f "$STATE_DIR/state.json" ] || : > "$STATE_DIR/state.json"
+	chgrp "$gid" "$STATE_DIR" "$STATE_DIR/state.json"
+	chmod g+w "$STATE_DIR"
+	chmod 664 "$STATE_DIR/state.json"
+	logger -t openuf "created the SSH adoption account ($ADOPT_USER/ubnt); it locks once adopted"
+}
+
+start_service() {
+	local l2
+	config_load openuf
+	adopt_account
+
+	# The Lua scripts (and the model map) load siblings with cwd-relative
+	# paths, but procd starts services with cwd "/". Run each from
+	# $OPENUF_DIR via `sh -c "cd ... && exec lua ..."` so those loads resolve.
+	#
+	# l2_announce off skips the broadcaster entirely, for L3-only adoption.
+	# The instance is not started rather than started and exited: procd would
+	# respawn a self-exiting process forever.
+	config_get_bool l2 main l2_announce 1
+	if [ "$l2" = 1 ]; then
+		procd_open_instance announce
+		procd_set_param command /bin/sh -c "cd '$OPENUF_DIR' && exec lua announce.lua"
+		procd_set_param respawn 3600 5 0
+		procd_set_param stdout 1
+		procd_set_param stderr 1
+		procd_close_instance
+	fi
+
+	procd_open_instance inform
+	procd_set_param command /bin/sh -c "cd '$OPENUF_DIR' && exec lua inform.lua"
+	procd_set_param respawn 3600 5 0
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+# A change to /etc/config/openuf (LuCI's Save & Apply, `uci commit openuf`)
+# restarts the daemon: it reads its settings once, at start. Only openUF's own
+# config: network/wireless triggers cost an in-flight inform on every
+# unrelated LuCI edit, and the daemon re-reads those files each heartbeat
+# anyway.
+service_triggers() {
+	procd_add_reload_trigger "openuf"
+}
+
+reload_service() {
+	stop
+	start
+}
+
+stop_service() {
+	# procd stops the two Lua instances itself. What it cannot see is the RRM
+	# collector: rrmscan.collector_ensure() spawns `ubus subscribe hostapd.*`
+	# with a trailing &, so it is reparented to init and outlives the daemon
+	# that started it. Left behind it appends beacon-report notifications to
+	# /tmp/openuf-rrm.jsonl forever, and harvest() -- the only thing that ever
+	# truncates that file -- is gone with the inform loop. /tmp is a RAM disk
+	# on these boards, so this is an unbounded leak.
+	#
+	# Driven through rrmscan.lua rather than a pkill here so the subscribe
+	# pattern and the file path stay defined in exactly one place.
+	# Best-effort: this must not block a stop.
+	(cd "$OPENUF_DIR" 2>/dev/null && lua -e 'dofile("rrmscan.lua").collector_stop()') \
+		>/dev/null 2>&1
+	return 0
+}

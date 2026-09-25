@@ -1,0 +1,108 @@
+# Disposable environment for validating openUF's controller-pushed payload
+# assumptions against a real UniFi Network Application controller.
+# See PROTOCOL-VALIDATION.md for the validation matrix and findings, and
+# this directory's README.md for how to run through it.
+#
+# Run from the repo root:
+#   docker compose -f tools/validation/docker-compose.yml up -d --build
+
+services:
+  unifi-db:
+    image: docker.io/mongo:4.4
+    container_name: openuf-validation-db
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=openuf
+      - MONGO_USER=unifi
+      - MONGO_PASS=openuf
+      - MONGO_DBNAME=unifi
+      - MONGO_AUTHSOURCE=admin
+    volumes:
+      - unifi-db-data:/data/db
+      - ./init-mongo.sh:/docker-entrypoint-initdb.d/init-mongo.sh:ro
+    networks:
+      - validation
+    restart: unless-stopped
+
+  controller:
+    # Pinned to 10.4.57 -- the version this project's docs claim to be tested
+    # against (see README.md), rather than `latest`, to match that baseline.
+    # Note: both versions return HTTP 404 to the client on well-formed inform
+    # POSTs regardless -- that is NOT a rejection (see PROTOCOL-VALIDATION.md
+    # "General protocol finding"). The 127.0.0.1:9080/ucore connection-refused
+    # errors in this image's logs are an unrelated background licensing/manifest
+    # fetch, present on 10.4.57 too -- not the cause of the 404, a dead end
+    # ruled out during Stage 1 validation.
+    image: lscr.io/linuxserver/unifi-network-application:10.4.57
+    container_name: openuf-validation-controller
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - MONGO_USER=unifi
+      - MONGO_PASS=openuf
+      - MONGO_HOST=unifi-db
+      - MONGO_PORT=27017
+      - MONGO_DBNAME=unifi
+      - MONGO_AUTHSOURCE=admin
+    volumes:
+      - unifi-controller-config:/config
+    ports:
+      - "8443:8443"       # web admin UI
+      - "8080:8080"       # AP inform traffic
+      - "10001:10001/udp" # AP L2 discovery
+      - "3478:3478/udp"   # STUN
+    networks:
+      - validation
+    depends_on:
+      - unifi-db
+    restart: unless-stopped
+
+  ap:
+    build:
+      context: ../..
+      dockerfile: tools/validation/ap/Dockerfile
+    container_name: openuf-validation-ap
+    hostname: openuf-ap
+    cap_add:
+      # Real target hardware (a real Linux/OpenWrt device) has full kernel
+      # privileges; a plain Docker container -- even running as root --
+      # does NOT have CAP_NET_ADMIN by default, so `ip addr add`/`ip route`
+      # (used by src/netconfig.lua to apply controller-pushed static IP
+      # config) fail with "RTNETLINK answers: Operation not permitted".
+      # Needed only to validate that code path against this disposable
+      # container; not a requirement of openUF itself.
+      - NET_ADMIN
+    networks:
+      - validation
+    # Not exposed to the host on purpose -- the controller reaches this
+    # container's sshd over the internal `validation` network only, same
+    # as it would reach real hardware on its own subnet.
+
+  # Second AP, for the controller's device-to-device config-clone features
+  # ("Set Replacement Device" / "Load Configuration" -- see README section 6).
+  # Both are controller-side clones of the source device's DB config followed
+  # by a normal adopt + setparam push, so no product-code changes are needed;
+  # they just require a second same-model device with its own MAC, which this
+  # container gets for free from its own eth0. Behind a profile so the default
+  # single-AP workflow (`docker compose up -d`) is unchanged; start it with
+  # `docker compose -f tools/validation/docker-compose.yml up -d ap2`.
+  ap2:
+    build:
+      context: ../..
+      dockerfile: tools/validation/ap/Dockerfile
+    container_name: openuf-validation-ap2
+    hostname: openuf-ap2
+    profiles: ["replacement"]
+    cap_add:
+      - NET_ADMIN   # same rationale as `ap` above
+    networks:
+      - validation
+
+networks:
+  validation:
+    driver: bridge
+
+volumes:
+  unifi-db-data:
+  unifi-controller-config:
