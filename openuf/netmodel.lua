@@ -733,6 +733,10 @@ function M.converge(model, sw, cfg, st, opts)
 		and cur_ip:match("^%d+%.%d+%.%d+%.%d+$") and cur_ip ~= "0.0.0.0" then
 		cursor:set("network", plan.mgmt.iface, "ipaddr", cur_ip)
 	end
+	-- ...and the running client must not give the lease back as it stops.
+	if plan.mgmt.proto == "dhcp" and M._stop_releasing_dhcp_client then
+		pcall(M._stop_releasing_dhcp_client, plan.mgmt.iface)
+	end
 
 	if before and not M._read_file(M.PRISTINE_FILE) then
 		M._write_file(M.PRISTINE_FILE, before)

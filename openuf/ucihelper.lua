@@ -897,7 +897,28 @@ function M.keep_dhcp_address(iface, ip)
 		changed = true
 	end
 	if changed then cursor:commit("network") end
+	M.stop_releasing_dhcp_client(iface)
 	return changed
+end
+
+-- A DHCP client started before norelease was set still releases its lease
+-- when netifd stops it, and the server then hands the address to nobody in
+-- particular -- a reserved address outside the dynamic range is gone for good.
+-- SIGKILL skips the release: the lease stays on the server and the client
+-- netifd starts next renews it. Only a client running with -R (release on
+-- exit) is touched. Called right before openUF reloads the network.
+function M.stop_releasing_dhcp_client(iface)
+	local ok_j, cjson = pcall(require, "cjson")
+	if not ok_j then return false end
+	local ok, st = pcall(cjson.decode, M._popen("ubus call network.interface." .. tostring(iface) .. " status") or "")
+	local dev = ok and type(st) == "table" and (st.l3_device or st.device) or nil
+	if type(dev) ~= "string" or not dev:match("^[%w%.%-_]+$") then return false end
+	local pid = tonumber((M._read_file("/var/run/udhcpc-" .. dev .. ".pid") or ""):match("%d+"))
+	if not pid then return false end
+	local cmdline = (M._read_file("/proc/" .. pid .. "/cmdline") or ""):gsub("%z", " ")
+	if not (cmdline:find("udhcpc", 1, true) and cmdline:find(" -R", 1, true)) then return false end
+	M._popen("kill -9 " .. pid)
+	return true
 end
 
 -- LLDP must announce the MAC openUF is adopted under, or the controller cannot

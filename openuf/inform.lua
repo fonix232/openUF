@@ -89,6 +89,8 @@ M._usteer    = usteer
 M._switchvlan = switchvlan
 M._rrmscan    = rrmscan
 M._netmodel   = netmodel
+-- netmodel stops a lease-releasing DHCP client before its reloads.
+netmodel._stop_releasing_dhcp_client = ucihelper.stop_releasing_dhcp_client
 M._stun       = stun
 M._upgrade    = upgrade
 M._unhandled  = unhandled

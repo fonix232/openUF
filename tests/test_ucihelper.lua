@@ -457,6 +457,30 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: a DHCP client that would release its lease is killed before a reload",
+		fn = function()
+			with_ucihelper(function(db)
+				local cmds = {}
+				ucihelper._popen = function(cmd)
+					cmds[#cmds + 1] = cmd
+					if cmd:find("ubus call network.interface.lan status", 1, true) then
+						return '{"up":true,"l3_device":"br-lan.1"}'
+					end
+					return ""
+				end
+				local cmdline = "udhcpc\0-p\0/var/run/udhcpc-br-lan.1.pid\0-R\0-i\0br-lan.1\0"
+				ucihelper._read_file = function(path)
+					if path == "/var/run/udhcpc-br-lan.1.pid" then return "4242\n" end
+					if path == "/proc/4242/cmdline" then return cmdline end
+				end
+				assert_true(ucihelper.stop_releasing_dhcp_client("lan"), "killed")
+				assert_eq(cmds[#cmds], "kill -9 4242", "SIGKILL: no release")
+				cmdline = "udhcpc\0-p\0/var/run/udhcpc-br-lan.1.pid\0-i\0br-lan.1\0"
+				assert_false(ucihelper.stop_releasing_dhcp_client("lan"), "a norelease client is left alone")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: the uplink socket carries the identity MAC and is LLDP's chassis interface",
 		fn = function()
 			with_ucihelper(function(db)
