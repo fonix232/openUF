@@ -117,16 +117,32 @@ function M.uptime()
 	end)
 end
 
--- Returns {total_kb, free_kb} by parsing /proc/meminfo.
+-- Returns {total_kb, free_kb, available_kb, buffers_kb} by parsing
+-- /proc/meminfo. available_kb is the kernel's own estimate of what a new
+-- allocation could use without swapping (MemAvailable, 3.14+); MemFree alone
+-- counts every page cache page as "used", which on an AP whose RAM is mostly
+-- cache reported ~94% memory use for a box with room to spare.
 function M.meminfo()
 	local s = M._read_file("/proc/meminfo")
 	if not s then return {total_kb = 0, free_kb = 0} end
 	local total = tonumber(s:match("MemTotal:%s+(%d+)"))
 	local free  = tonumber(s:match("MemFree:%s+(%d+)"))
 	return {
-		total_kb = total or 0,
-		free_kb  = free  or 0,
+		total_kb     = total or 0,
+		free_kb      = free  or 0,
+		available_kb = tonumber(s:match("MemAvailable:%s+(%d+)")),
+		buffers_kb   = tonumber(s:match("Buffers:%s+(%d+)")),
 	}
+end
+
+-- The three load averages as the strings the controller's sys_stats block
+-- carries ("0.42"), or nil when /proc/loadavg cannot be read.
+function M.loadavg()
+	local s = M._read_file("/proc/loadavg")
+	if not s then return nil end
+	local a, b, c = s:match("^(%S+)%s+(%S+)%s+(%S+)")
+	if not a then return nil end
+	return {a, b, c}
 end
 
 -- Previous /proc/stat sample for delta-based CPU% (see M.cpu_percent).
@@ -1126,6 +1142,33 @@ end
 -- Which bridge port -- i.e. which socket -- the uplink cable is in, as an
 -- ifname. Same contract as M.uplink_phys_port: measured, never declared, and
 -- nil rather than a guess when the chain cannot be completed.
+-- On a vlan-filtering bridge the FDB says which VLAN each host was learned
+-- in (`<mac> dev lan2 vlan 3 master br-lan`), and that -- not the bridge's
+-- name -- is the network the host belongs to. mac -> vid, first entry wins;
+-- memoized per pass like bridge_fdb_ports.
+function M.bridge_fdb_vlans(bridge)
+	if not bridge then return {} end
+	return pass_memo("fdbvlan_br:" .. bridge, function()
+		local vlans = {}
+		local out = M._run_cmd("bridge fdb show br " .. bridge)
+		for line in tostring(out or ""):gmatch("[^\n]+") do
+			if line:find("master") and not line:find("self") and not line:find("permanent") then
+				local mac = line:match("^(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)")
+				local vid = tonumber(line:match("%svlan%s+(%d+)") or "")
+				if mac and vid and not vlans[mac:lower()] then vlans[mac:lower()] = vid end
+			end
+		end
+		return vlans
+	end)
+end
+
+-- Does this bridge filter VLANs? (sysfs, no fork)
+function M.bridge_filters_vlans(bridge)
+	if not bridge then return false end
+	local v = M._read_file("/sys/class/net/" .. bridge .. "/bridge/vlan_filtering")
+	return v ~= nil and v:match("^%s*1") ~= nil
+end
+
 function M.uplink_bridge_port(bridge)
 	local gw_mac = M._default_gateway_mac()
 	if not gw_mac then return nil end

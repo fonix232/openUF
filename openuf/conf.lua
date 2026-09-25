@@ -105,4 +105,56 @@ config = {
 	-- adopted and re-enables it on factory reset -- see USAGE.md's SSH
 	-- prerequisite section.
 	bootstrap_adopt_user = nil,
+
+	-- Who builds the AP's layer 2 from the controller's push (netmodel.lua):
+	--   "bridges"        per-VLAN bridges holding <uplink>.<vid> sub-devices
+	--                    (the original design; Native VLAN per port only)
+	--   "vlan_filtering" ONE vlan-filtering bridge carrying every network the
+	--                    controller describes -- Management VLAN, WLAN VLANs,
+	--                    tagged/trunk ports -- with the switch doing the VLAN
+	--                    work in hardware. DSA boards only.
+	--   "auto"           vlan_filtering when the uplink socket is already in a
+	--                    vlan-filtering bridge (where "bridges" cannot work at
+	--                    all), bridges otherwise.
+	bridge_backend = "auto",
+
+	-- vlan_filtering only: replace any bridge that holds this board's sockets
+	-- ("the controller fully manages the bridge"). Interfaces that used it are
+	-- re-pointed, the VLANs they need are kept, and the board's own config is
+	-- saved once to /etc/openuf/network.pre-openuf
+	-- (`syswrapper.sh netmodel-restore` puts it back). false: leave the network
+	-- alone whenever another bridge claims the sockets.
+	bridge_takeover = true,
+
+	-- vlan_filtering only: every network change is rolled back unless an
+	-- inform succeeds within this many seconds; a rolled-back plan is not
+	-- applied again until the controller sends a different one
+	-- (`syswrapper.sh netmodel-retry` overrides).
+	bridge_rollback_timeout = 180,
+
+	-- vlan_filtering only: the bridge's name, and what a downstream socket
+	-- carries while Port VLAN is off in the controller -- "all" (native VLAN
+	-- untagged, every other VLAN tagged: UniFi's "Allow All") or "native".
+	bridge_name  = "br-lan",
+	port_default = "all",
+
+	-- The controller's STUN wake-up channel (stun.lua): lets it make this AP
+	-- inform at once -- used on 10.6 for upgrades and missed-heartbeat
+	-- recovery. stun_local_port is kept stable so a restart keeps the address
+	-- the controller has on file. false disables.
+	stun            = true,
+	stun_local_port = 3478,
+
+	-- OpenWrt upgrades through UniFi's upgrade flow (upgrade.lua), all opt-in:
+	--   upgrade_mode = "owut"      a controller upgrade (button, schedule,
+	--                              Custom Upgrade) runs `owut upgrade`; needs
+	--                              the contrib/asu bootstrap. nil: store only.
+	--   advertise_updates = true   show UniFi's "Upgrade available" badge while
+	--                              `owut check` finds a newer build
+	--   version_scheme = "openwrt" OpenWrt revision in the firmware column
+	--                              (causes a permanent Upgrade badge)
+	upgrade_mode       = nil,
+	advertise_updates  = false,
+	advertise_interval = 6 * 3600,
+	version_scheme     = nil,
 }

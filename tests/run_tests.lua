@@ -143,6 +143,9 @@ local test_files = {
 	"tests/test_rrmscan.lua",
 	"tests/test_shaper.lua",
 	"tests/test_switchvlan.lua",
+	"tests/test_netmodel.lua",
+	"tests/test_stun.lua",
+	"tests/test_upgrade.lua",
 	"tests/test_modelmap.lua",
 }
 

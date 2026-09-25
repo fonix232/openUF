@@ -60,6 +60,8 @@ local function usage()
 		"Usage: syswrapper.sh set-adopt <url> <key32hex>\n" ..
 		"       syswrapper.sh set-inform <url>\n" ..
 		"       syswrapper.sh reset-inform\n" ..
+		"       syswrapper.sh netmodel-retry     (re-apply a rolled-back network plan)\n" ..
+		"       syswrapper.sh netmodel-restore   (put the pre-openUF network config back)\n" ..
 		"\n" ..
 		"key32hex: exactly 32 hexadecimal characters (16 bytes, AES-128)\n"
 	)
@@ -122,6 +124,39 @@ local function cmd_reset_inform()
 	return true
 end
 
+-- netmodel-retry
+-- Forget that a network plan was rolled back, so the next push re-applies it
+-- (netmodel.lua refuses a plan that lost the controller once).
+local function cmd_netmodel_retry()
+	local st = load_state()
+	local s  = st.load()
+	s.netmodel_failed, s.netmodel_failed_logged = nil, nil
+	st.save(s)
+	io.stdout:write("syswrapper: the next network push will be applied again\n")
+	return true
+end
+
+-- netmodel-restore
+-- Put back the board's own /etc/config/network from before openUF took the
+-- bridge over (/etc/openuf/network.pre-openuf) and reload.
+local function cmd_netmodel_restore()
+	local ok, nm = pcall(dofile, "/opt/openuf/netmodel.lua")
+	if not ok then ok, nm = pcall(dofile, "netmodel.lua") end
+	if not ok then
+		io.stderr:write("syswrapper: netmodel.lua not found\n")
+		return false
+	end
+	local st = load_state()
+	local s  = st.load()
+	if not nm.restore_pristine(s) then
+		io.stderr:write("syswrapper: no " .. nm.PRISTINE_FILE .. " -- openUF never took the bridge over\n")
+		return false
+	end
+	st.save(s)
+	io.stdout:write("syswrapper: restored the pre-openUF network config\n")
+	return true
+end
+
 -- ─── Entry point ─────────────────────────────────────────────────────────────
 
 local function main(args)
@@ -136,6 +171,10 @@ local function main(args)
 		end
 	elseif cmd == "reset-inform" then
 		cmd_reset_inform()
+	elseif cmd == "netmodel-retry" then
+		cmd_netmodel_retry()
+	elseif cmd == "netmodel-restore" then
+		if not cmd_netmodel_restore() then os.exit(1) end
 	else
 		io.stderr:write("syswrapper: unknown command: " .. tostring(cmd) .. "\n")
 		usage()
@@ -155,6 +194,7 @@ return {
 	cmd_set_adopt  = cmd_set_adopt,
 	cmd_set_inform = cmd_set_inform,
 	cmd_reset_inform = cmd_reset_inform,
+	cmd_netmodel_retry = cmd_netmodel_retry,
 	is_hex32 = is_hex32,
 	is_url   = is_url,
 	_set_state = function(s) state = s end,

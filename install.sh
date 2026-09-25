@@ -259,14 +259,8 @@ case "$ACTION" in
 		# "Failed to load TC action module", so the download cap applies and the
 		# upload cap silently does not. Half a feature reporting success.
 		try_optional kmod-sched-act-police "WiFi Speed Limit, upload half (tc police)"
-		# inform.lua detects an out-of-process state.json write (syswrapper's
-		# SSH set-adopt, a manual reset-inform) with `stat -c %Y`. Some builds
-		# ship no stat applet at all -- confirmed on a real WDR3500 -- and
-		# without it those changes go unnoticed until openUF is restarted.
-		# Cheaper than this package: enable busybox's own stat applet.
-		if ! command -v stat >/dev/null 2>&1; then
-			try_optional coreutils-stat "state-file change detection (stat)"
-		fi
+		# (No coreutils-stat: inform.lua detects an out-of-process state.json
+		# write by comparing the file's contents, and never forks `stat`.)
 
 		# luasec, but only when it is actually needed: inform.lua TLS-wraps the
 		# socket for an https:// inform URL and fails with a clear error

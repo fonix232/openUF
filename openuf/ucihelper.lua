@@ -774,7 +774,8 @@ end
 -- is unaffected, but that is why this is loud rather than silent.
 function M.ensure_bridge_identity(cfg)
 	local cpueth = cfg and cfg.net and cfg.net.lan_cpueth
-	local want = mac_of(cpueth)
+	local pinned = cfg and cfg.net and cfg.net.identity_mac
+	local want = (type(pinned) == "string" and pinned:lower()) or mac_of(cpueth)
 	if not want then return false end
 
 	local br = master_of(cpueth)
@@ -1403,7 +1404,15 @@ function M.apply_config(resp, cfg, opts)
 			local vlan_id      = vap.vlan
 
 			local network = "lan"
-			if vlan_enabled and vlan_id and cpueth then
+			local netplan = opts and opts.netmodel
+			if netplan then
+				-- vlan_filtering backend: netmodel already built one interface
+				-- per network on the filtering bridge; the vap joins the one its
+				-- controller bridge maps to (which also covers `br-trunk`, the
+				-- untagged network once a Management VLAN is set).
+				network = (netplan.net_for_bridge or {})[vap.br_devname]
+					or (netplan.mgmt and netplan.mgmt.iface) or network
+			elseif vlan_enabled and vlan_id and cpueth then
 				network = M.ensure_vlan_network(cpueth, vlan_id)
 				wanted_vlans[tonumber(vlan_id) or vlan_id] = true
 			end
@@ -1417,7 +1426,7 @@ function M.apply_config(resp, cfg, opts)
 	-- (DSA per-port VLAN puts the socket in this same bridge -- see
 	-- ensure_vlan_network's OWNERSHIP note). Its bridge must survive the
 	-- prune below, and be built even when no WLAN mentions the VID at all.
-	for vid in pairs((opts and opts.keep_vlans) or {}) do
+	for vid in pairs((not (opts and opts.netmodel) and opts and opts.keep_vlans) or {}) do
 		local n = tonumber(vid) or vid
 		if not wanted_vlans[n] and cpueth then
 			M.ensure_vlan_network(cpueth, n)
@@ -1732,6 +1741,35 @@ end
 -- No state.json persistence either, unlike blocked_stas -- there's nothing
 -- to reconcile on restart since this is fully re-derived every inform cycle
 -- from live UCI config + sta_table.
+-- Every VAP netdev netifd reports, across all radios, sorted.
+function M.all_vap_ifnames()
+	local status = wireless_status()
+	local out = {}
+	for _, dev in pairs(status or {}) do
+		if type(dev) == "table" and type(dev.interfaces) == "table" then
+			for _, iface in ipairs(dev.interfaces) do
+				if type(iface) == "table" and iface.ifname then out[#out + 1] = iface.ifname end
+			end
+		end
+	end
+	table.sort(out)
+	return out
+end
+
+-- Disconnect a station from whichever VAP it is on, through hostapd's own ubus
+-- object -- present on every hostapd build, unlike hostapd_cli, which needs the
+-- optional hostapd-utils. ban_time 0: the client may come straight back, which
+-- is what the controller's "Reconnect" means. `mac` must already be validated
+-- (it is spliced into a command line).
+function M.disconnect_station(mac)
+	for _, ifname in ipairs(M.all_vap_ifnames()) do
+		M._run_cmd(("ubus call hostapd.%s del_client "
+			.. "'{\"addr\":\"%s\",\"reason\":5,\"deauth\":true,\"ban_time\":0}' 2>/dev/null")
+			:format(ifname, mac))
+	end
+	return true
+end
+
 function M.kick_station(ifname, mac)
 	M._run_cmd("hostapd_cli -i " .. ifname .. " deauthenticate " .. mac .. " 2>/dev/null")
 	return true

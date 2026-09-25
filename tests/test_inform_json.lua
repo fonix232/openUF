@@ -386,7 +386,31 @@ return {
 		fn = function()
 			local d = build()
 			assert_eq(d.mem_total, 131072 * 1024, "mem_total bytes")
-			assert_eq(d.mem_used, (131072 - 65536) * 1024, "mem_used = (total - free) bytes")
+			assert_eq(d.mem_used, (131072 - 72000) * 1024, "mem_used = (total - available) bytes")
+		end
+	},
+	{
+		name = "inform json: sys_stats carries load averages and memory (10.6 device shape)",
+		fn = function()
+			local d = build()
+			local ss = d.sys_stats
+			assert_not_nil(ss, "sys_stats present")
+			assert_eq(ss.mem_total, 131072 * 1024, "mem_total bytes")
+			assert_eq(ss.mem_used, (131072 - 72000) * 1024, "mem_used bytes")
+			assert_eq(ss.mem_buffer, 2048 * 1024, "mem_buffer bytes")
+		end
+	},
+	{
+		name = "inform json: inform_ip is the inform URL's literal host",
+		fn = function()
+			local d = build()
+			-- build() adopts with a literal-IP URL or the default; either way a
+			-- literal host must come back verbatim and a name is resolved.
+			local inform = dofile("openuf/inform.lua")
+			assert_eq(inform._inform_ip("http://192.0.2.10:8080/inform"), "192.0.2.10", "literal")
+			assert_nil(inform._inform_ip("not a url"), "garbage")
+			assert_true(d.inform_ip == nil or d.inform_ip:match("^%d+%.%d+%.%d+%.%d+$") ~= nil,
+				"inform_ip is omitted or an IPv4 literal")
 		end
 	},
 	{
@@ -492,8 +516,9 @@ return {
 			assert_not_nil(stats, "system-stats present")
 			assert_not_nil(stats.cpu, "cpu field present")
 			assert_not_nil(stats.uptime, "uptime field present")
-			-- meminfo fixture: total=131072kB, free=65536kB -> 50% used
-			assert_eq(stats.mem, "50", "mem percent computed from meminfo fixture")
+			-- meminfo fixture: total=131072kB, available=72000kB -> 45% used
+			-- (page cache is reclaimable: MemAvailable, not MemFree)
+			assert_eq(stats.mem, "45", "mem percent computed from meminfo fixture")
 		end
 	},
 	{

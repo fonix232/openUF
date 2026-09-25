@@ -158,6 +158,15 @@ end
 
 -- Read MAC address from sysfs for the given interface.
 -- Returns a 6-element byte table or nil on failure.
+-- "aa:bb:cc:dd:ee:ff" -> {0xaa, ...}, or nil.
+function M.parse_mac(s)
+	if type(s) ~= "string" then return nil end
+	local out = {}
+	for h in s:gmatch("%x%x") do out[#out + 1] = tonumber(h, 16) end
+	if #out ~= 6 or not s:match("^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$") then return nil end
+	return out
+end
+
 function M.get_mac(iface)
 	iface = iface or "eth0"
 	local f = io.open("/sys/class/net/" .. iface .. "/address", "r")
@@ -210,6 +219,18 @@ function M.get_ip(iface)
 	if master then
 		ip = ipv4_of(master)
 		if ip then return ip end
+		-- ...or on one of the bridge's own VLAN sub-devices: a vlan-filtering
+		-- bridge carries management on `<bridge>.<vid>` (br-lan.1, switch.1),
+		-- never on the bridge itself. Without this hop every such board --
+		-- netmodel's layout included -- reported 0.0.0.0.
+		local kids = M._popen("ls -d /sys/class/net/" .. master .. ".* 2>/dev/null")
+		for line in tostring(kids or ""):gmatch("[^\r\n]+") do
+			local child = line:match("([^/%s]+)%s*$")
+			if child and child ~= master then
+				ip = ipv4_of(child)
+				if ip then return ip end
+			end
+		end
 	end
 
 	-- Two hops: the port is a VLAN TRUNK, and it is the tagged sub-interface
@@ -395,7 +416,11 @@ if not OPENUF_TEST_MODE then
 		ufhw.uap = dofile("ufmodel/" .. dev.openuf.uap.ufmodel .. ".lua")
 
 		local iface = dev.conf.net.lan_cpueth or "eth1"
-		local mac   = M.get_mac(iface) or {0x24, 0xa4, 0x3c, 0x00, 0xd3, 0xad}
+		-- A map may pin the identity (modelmap/auto.lua does, for boards whose
+		-- socket MAC is random per boot); discovery must announce the same
+		-- MAC the informs arrive under.
+		local mac   = M.parse_mac and M.parse_mac(dev.conf.net.identity_mac)
+			or M.get_mac(iface) or {0x24, 0xa4, 0x3c, 0x00, 0xd3, 0xad}
 		local ip    = M.get_ip(iface)  or {192, 168, 1, 1}
 		local hostname = M.get_hostname() or "openUF"
 		-- conf.lua's state_file, honoured here the way inform.lua and

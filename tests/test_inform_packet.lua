@@ -509,6 +509,13 @@ return {
 					static_netmask = t.static_netmask, static_gateway = t.static_gateway}
 			end
 			-- Everything after the IP branch blows up, the way usteer did.
+			-- Injected rather than inherited: apply_config is pcall'd by its
+			-- caller, and usteer only raised on its own where no `uci` module
+			-- was installed -- so on a host with one (the validation image
+			-- ships a mock) nothing raised and this test failed for the
+			-- wrong reason.
+			local orig_usteer = inform._usteer
+			inform._usteer = {set_enabled = function() error("boom: usteer raised") end}
 			inform._ucihelper = setmetatable({
 				begin_pass = function() end, end_pass = function() end,
 				apply_config = function() error("boom: anything downstream can raise") end,
@@ -522,6 +529,7 @@ return {
 
 			inform._state.save, inform._netconfig._exec = orig_save, orig_exec
 			inform._ucihelper = orig_uci
+			inform._usteer = orig_usteer
 
 			assert_false(ok, "the downstream failure really did raise")
 			assert_true(saved ~= nil, "state was saved anyway, before the raise")
@@ -3430,6 +3438,143 @@ return {
 
 			io.stderr = orig_stderr
 			inform._warned_400 = false
+		end
+	},
+	{
+		name = "inform: a pending device's HTTP 404 keeps the normal cadence",
+		fn = function()
+			local orig = {
+				build_json = inform.build_json, build_packet = inform.build_packet,
+				http_post = inform.http_post, reload = inform._reload_if_changed,
+				rrm = inform._rrm_tick, stderr = io.stderr,
+			}
+			io.stderr = {write = function() end}
+			inform._reload_if_changed = function(_, _, last) return last end
+			inform._rrm_tick = function() return false end
+			inform.build_json = function() return "{}" end
+			inform.build_packet = function() return "pkt" end
+			inform.http_post = function() return nil, "HTTP 404" end
+			local ctx = {interval = 10, backoff = 10}
+			local st = {adopted = false, inform_url = "http://192.0.2.1:8080/inform"}
+			assert_eq(inform._tick(st, nil, nil, ctx), 10, "no backoff while pending")
+			assert_eq(inform._tick(st, nil, nil, ctx), 10, "still the normal interval")
+			st.adopted = true
+			assert_eq(inform._tick(st, nil, nil, ctx), 20, "an ADOPTED device's 404 is a real failure")
+			io.stderr = orig.stderr
+			inform.build_json, inform.build_packet, inform.http_post,
+				inform._reload_if_changed, inform._rrm_tick =
+				orig.build_json, orig.build_packet, orig.http_post, orig.reload, orig.rrm
+		end
+	},
+	{
+		name = "inform: a noop's interval and immediate flag drive the next wait",
+		fn = function()
+			local orig = {
+				build_json = inform.build_json, build_packet = inform.build_packet,
+				http_post = inform.http_post, parse_packet = inform.parse_packet,
+				reload = inform._reload_if_changed, rrm = inform._rrm_tick,
+			}
+			inform._reload_if_changed = function(_, _, last) return last end
+			inform._rrm_tick = function() return false end
+			inform.build_json = function() return "{}" end
+			inform.build_packet = function() return "pkt" end
+			inform.http_post = function() return "body" end
+			local ctx = {interval = 10, backoff = 10}
+			local st = sample_state({adopted = true})
+			inform.parse_packet = function() return '{"_type":"noop","interval":17}' end
+			assert_eq(inform._tick(st, {}, nil, ctx), 17, "the controller's interval")
+			inform.parse_packet = function() return '{"_type":"noop","interval":9999}' end
+			assert_eq(inform._tick(st, {}, nil, ctx), 10, "an absurd interval is ignored")
+			inform.parse_packet = function() return '{"_type":"noop","interval":10,"immediate":true}' end
+			assert_eq(inform._tick(st, {}, nil, ctx), 0, "immediate means now")
+			inform.build_json, inform.build_packet, inform.http_post, inform.parse_packet,
+				inform._reload_if_changed, inform._rrm_tick =
+				orig.build_json, orig.build_packet, orig.http_post, orig.parse_packet,
+				orig.reload, orig.rrm
+		end
+	},
+	{
+		name = "inform: setparam blocked_sta is the authoritative block list",
+		fn = function()
+			local reconciled, kicked = nil, {}
+			local orig_fw, orig_uci = inform._firewall, inform._ucihelper
+			inform._firewall = {reconcile = function(l) reconciled = l end, deauth = function() end}
+			inform._ucihelper = setmetatable({disconnect_station = function(m) kicked[#kicked + 1] = m end},
+				{__index = orig_uci})
+			local st = sample_state({adopted = true, blocked_stas = {"aa:aa:aa:aa:aa:01"}})
+			inform.handle_response('{"_type":"setparam","blocked_sta":"AA:AA:AA:AA:AA:02\\naa:aa:aa:aa:aa:01\\nnot-a-mac"}', st, {})
+			assert_eq(#st.blocked_stas, 2, "two valid MACs")
+			assert_eq(st.blocked_stas[2], "aa:aa:aa:aa:aa:02", "lower-cased, sorted")
+			assert_true(reconciled ~= nil, "nft reconciled")
+			assert_eq(#kicked, 1, "only the newly blocked client is disconnected")
+			reconciled = nil
+			inform.handle_response('{"_type":"setparam","blocked_sta":""}', st, {})
+			assert_eq(#st.blocked_stas, 0, "an empty list unblocks everyone")
+			reconciled = nil
+			inform.handle_response('{"_type":"setparam","mgmt_cfg":"cfgversion=x\\n"}', st, {})
+			assert_nil(reconciled, "absent blocked_sta changes nothing")
+			inform._firewall, inform._ucihelper = orig_fw, orig_uci
+		end
+	},
+	{
+		name = "inform: kick-sta disconnects the client without blocking it",
+		fn = function()
+			local kicked = {}
+			local orig_uci = inform._ucihelper
+			inform._ucihelper = setmetatable({disconnect_station = function(m) kicked[#kicked + 1] = m end},
+				{__index = orig_uci})
+			local st = sample_state({adopted = true})
+			inform.handle_response('{"_type":"cmd","cmd":"kick-sta","mac":"AA:BB:CC:00:11:22"}', st, {})
+			assert_eq(kicked[1], "aa:bb:cc:00:11:22", "disconnected")
+			assert_true(st.blocked_stas == nil or #st.blocked_stas == 0, "not blocked")
+			inform.handle_response('{"_type":"cmd","cmd":"kick-sta","mac":"; reboot"}', st, {})
+			assert_eq(#kicked, 1, "a malformed MAC never reaches a command line")
+			inform._ucihelper = orig_uci
+		end
+	},
+	{
+		name = "inform: an authkey rotation is accepted over the adopted channel only",
+		fn = function()
+			local key1, key2 = string.rep("1", 32), string.rep("2", 32)
+			local st = sample_state({adopted = true, authkey = key1})
+			local again = inform.handle_response('{"_type":"setparam","mgmt_cfg":"authkey=' .. key2 .. '\\n"}', st, {})
+			assert_eq(st.authkey, key2, "rotated")
+			assert_true(again, "re-informs at once under the new key")
+			local st2 = sample_state({adopted = true, authkey = state.DEFAULT_KEY})
+			inform.handle_response('{"_type":"setparam","mgmt_cfg":"authkey=' .. key2 .. '\\n"}', st2, {})
+			assert_eq(st2.authkey, state.DEFAULT_KEY, "never from a default-key channel once adopted")
+		end
+	},
+	{
+		name = "inform: _tick feeds the network rollback window",
+		fn = function()
+			local orig = {
+				build_json = inform.build_json, build_packet = inform.build_packet,
+				http_post = inform.http_post, parse_packet = inform.parse_packet,
+				reload = inform._reload_if_changed, rrm = inform._rrm_tick,
+				nm = inform._netmodel, stderr = io.stderr,
+			}
+			io.stderr = {write = function() end}
+			local seen = {}
+			inform._netmodel = {check = function(_, ok) seen[#seen + 1] = ok return nil end}
+			inform._reload_if_changed = function(_, _, last) return last end
+			inform._rrm_tick = function() return false end
+			inform.build_json = function() return "{}" end
+			inform.build_packet = function() return "pkt" end
+			local ctx = {interval = 10, backoff = 10}
+			local st = sample_state({adopted = true, netmodel_pending = {fp = "x"}})
+			inform.http_post = function() return nil, "connect failed" end
+			inform._tick(st, {}, nil, ctx)
+			inform.http_post = function() return "body" end
+			inform.parse_packet = function() return '{"_type":"noop"}' end
+			inform._tick(st, {}, nil, ctx)
+			assert_eq(seen[1], false, "a failed inform counts against the window")
+			assert_eq(seen[2], true, "an answered inform confirms")
+			io.stderr = orig.stderr
+			inform.build_json, inform.build_packet, inform.http_post, inform.parse_packet,
+				inform._reload_if_changed, inform._rrm_tick, inform._netmodel =
+				orig.build_json, orig.build_packet, orig.http_post, orig.parse_packet,
+				orig.reload, orig.rrm, orig.nm
 		end
 	},
 }

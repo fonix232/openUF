@@ -1523,4 +1523,21 @@ return {
 			sysinfo._read_file = orig_rf
 		end
 	},
+	{
+		name = "sysinfo: bridge_fdb_vlans maps each host to the VLAN it was learned in",
+		fn = function()
+			local orig = sysinfo._run_cmd
+			sysinfo._run_cmd = function()
+				return "aa:bb:cc:00:00:01 dev lan2 vlan 3 master br-lan \n"
+					.. "aa:bb:cc:00:00:02 dev lan1 vlan 1 master br-lan \n"
+					.. "aa:bb:cc:00:00:03 dev lan1 vlan 1 self \n"
+					.. "33:33:00:00:00:01 dev lan1 self permanent\n"
+			end
+			local m = sysinfo.bridge_fdb_vlans("br-lan")
+			sysinfo._run_cmd = orig
+			assert_eq(m["aa:bb:cc:00:00:01"], 3, "VLAN 3 host")
+			assert_eq(m["aa:bb:cc:00:00:02"], 1, "native host")
+			assert_nil(m["aa:bb:cc:00:00:03"], "self entries are the ASIC's view, skipped")
+		end
+	},
 }

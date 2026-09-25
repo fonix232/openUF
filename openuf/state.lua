@@ -103,6 +103,24 @@ M.FIELDS = {
 	-- it, before per-port VLAN moved any socket out of it. Same job, and the
 	-- same "only record of what to put back".
 	dsa_brlan_ports           = "table",
+	-- netmodel.lua (vlan_filtering backend). pending is the rollback window
+	-- of the last applied network plan -- it must survive a restart, or a
+	-- plan that strands the AP right before a reboot is never rolled back.
+	-- failed remembers the fingerprint of a plan that lost the controller so
+	-- the same push is not applied again; parked lists interfaces a takeover
+	-- disabled because their socket became a bridge port.
+	netmodel_pending          = "table",
+	netmodel_applied          = "string",
+	netmodel_failed           = "string",
+	netmodel_failed_logged    = "string",
+	netmodel_parked           = "table",
+	-- The controller's STUN service (mgmt_cfg stun_url), for the wake-up
+	-- channel in stun.lua. Pushed with every mgmt_cfg, kept across restarts
+	-- so the channel is up before the first push after a reboot.
+	stun_url                  = "string",
+	-- The catalogue firmware version learned from the controller's own
+	-- `upgrade` commands, reported instead of the ufmodel's (upgrade.lua).
+	fw_version                = "string",
 }
 
 -- Load state from disk. Missing file returns defaults. Applies security

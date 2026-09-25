@@ -11,6 +11,9 @@ local uap = {}
 uap = {
 	platform		= "U6IW",
 	model			= "U6IW",
+	-- uidb.json `sysid` a652 (U6-IW). The controller resolves the model from
+	-- this before it falls back to `model`.
+	sysid			= 0xa652,
 	fw				= {
 		pre			= "U6IW.",
 		-- Matches the real U6IW release firmware (v6.8.2+15592) as of

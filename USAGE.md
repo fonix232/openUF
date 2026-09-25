@@ -638,6 +638,12 @@ not a coincidence: they are one broadcast domain and the controller models them 
 network. `br-lan` keeps the uplink socket, the unassigned sockets and the AP's management
 address, untouched.
 
+> **This fork adds that route as a second backend** (`bridge_backend = "vlan_filtering"`,
+> chosen automatically when the uplink already sits in a vlan-filtering bridge) -- see
+> [Controller-owned bridge](#controller-owned-bridge-vlan_filtering-backend) below for how it
+> answers both objections. The per-VLAN-bridge design described here stays the default
+> everywhere else.
+
 The `bridge-vlan` + `vlan_filtering` route was rejected for two reasons, both worth knowing
 if you are tempted to add it:
 
@@ -935,6 +941,70 @@ lua -e "dofile('/opt/openuf/ucihelper.lua').wlan_clear()"
 ```
 
 ---
+
+### Controller-owned bridge (`vlan_filtering` backend)
+
+Set `bridge_backend = "vlan_filtering"` in `conf.lua` (or leave it on `"auto"` on a board
+whose uplink is already in a vlan-filtering bridge). From the first provisioning push on,
+`netmodel.lua` realises the controller's own description of the AP's layer 2 --
+`vlan.*`, `bridge.*`, `netconf.*`, `dhcpc.*` and the `switch.*` port matrix, captured in
+[docs/GAP-ANALYSIS-10.6.md §4](docs/GAP-ANALYSIS-10.6.md) -- as:
+
+| UCI section | What it is |
+|---|---|
+| `network.openuf_br` | the bridge (`bridge_name`, default `br-lan`) with every socket of the modelmap, `vlan_filtering 1`, the identity MAC pinned |
+| `network.openuf_bv<vid>` | one `bridge-vlan` per VLAN: the uplink carries VLAN 1 untagged and every other VLAN tagged; each downstream socket follows the `switch.*` matrix (native = `u*`, tagged = `t`, excluded = absent), or `port_default` while Port VLAN is off |
+| `network.<lan_name>` | management, on `br-lan.<vid>` -- `br-lan.1`, or the **Management VLAN** -- with the pushed DHCP/static addressing written as UCI (so it survives reboots) |
+| `network.openuf_v<vid>` | `proto none` on `br-lan.<vid>`, what a WLAN on that VLAN names as its network (VLAN 1 too, once management is tagged -- the controller's `br-trunk`) |
+
+The two objections to vlan filtering above, answered:
+
+1. **Stranding the AP.** Nothing is guessed: management is wherever the controller's
+   `dhcpc`/`netconf` put it, and the uplink always carries every VLAN. And every change
+   is applied with a **rollback**: the previous `/etc/config/network` is kept, and unless an
+   inform succeeds within `bridge_rollback_timeout` seconds (180) it is restored and
+   reloaded. A plan that lost the controller is remembered by fingerprint and not
+   re-applied until the controller sends a different one (`syswrapper.sh netmodel-retry`
+   forces a retry).
+2. **Fighting the tagged-SSID path.** There is no tagged-SSID path to fight: this backend
+   creates no `<uplink>.<vid>` sub-devices. A VAP joins `openuf_v<vid>` and netifd makes it
+   a bridge port with that VLAN as its PVID.
+
+**Takeover.** With `bridge_takeover = true` (the default) any bridge that holds one of the
+board's sockets is replaced, together with its `bridge-vlan` sections. Interfaces that pointed
+at it or at its VLAN sub-devices (`switch.3`) are re-pointed at `br-lan.<vid>` and their
+VLANs kept in the table, so hand-made networks keep working; an L3 interface straight on a
+socket (a stock `wan`) is disabled. The board's original config is saved once to
+`/etc/openuf/network.pre-openuf`; `syswrapper.sh netmodel-restore` puts it back.
+
+Trunk ports come for free (a socket can be native on one VLAN and tagged on others), and the
+switch ASIC does the VLAN work, so none of the learning-off/nft-tap machinery above is used.
+Wired clients are still reported per socket from the bridge FDB.
+
+### Controller wake-up (STUN)
+
+`stun.lua` keeps a binding to the controller's `stun_url` from a stable local port
+(`stun_local_port`, 3478) and reports the address the controller saw as
+`connect_request_ip`/`_port`. When the controller sends its connection request (a bare
+`0x8888` STUN header), the daemon informs immediately. On 10.6 that happens for upgrades
+and when a device misses a heartbeat. `stun = false` turns it off.
+
+### OpenWrt upgrades through UniFi
+
+See `openuf/upgrade.lua`'s header and [contrib/asu](contrib/asu/README.md). In short:
+`upgrade_mode = "owut"` makes a controller upgrade run an attended sysupgrade of this
+board (requires the contrib/asu bootstrap, which reinstalls openUF on the new image);
+`advertise_updates = true` shows UniFi's "Upgrade available" badge while `owut check` finds
+a newer build. By default the controller's catalogue version is learned from its own
+upgrade commands and reported, so no stale version keeps the badge up.
+
+### Boards without a hand-written map
+
+`dev = dofile("modelmap/auto.lua")` derives the map from `/etc/board.json` on DSA boards:
+sockets, the uplink (from the bridge FDB, so `ip-bridge` must be installed), U6IW port
+numbering (uplink = port 5), the identity MAC (the MAC the network already knows the AP
+by), the Locate LED and the radios. The result is pinned in
+`/etc/openuf/modelmap-auto.json` once the uplink could be detected; delete it to re-derive.
 
 ## 7. LLDP topology
 

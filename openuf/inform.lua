@@ -8,11 +8,12 @@
 	Binary packet format (TNBU, "UBNT" reversed):
 	  Offset  Len  Field
 	   0       4   Magic: 0x54 0x4E 0x42 0x55 ("TNBU")
-	   4       4   Packet version (uint32 BE) — always 0
+	   4       4   Packet version (uint32 BE) — the controller ignores it; openUF sends 1
 	   8       6   Device MAC
 	  14       2   Flags (uint16 BE):
 	               0x01 = payload encrypted (AES-128-CBC or GCM)
 	               0x02 = payload zlib-compressed
+	               0x04 = payload snappy-compressed
 	               0x08 = use AES-128-GCM instead of CBC (requires 0x01)
 	  16      16   AES IV
 	  32       4   Data version (uint32 BE) — always 1 (= JSON payload)
@@ -60,6 +61,9 @@ local firewall  = _require_sibling("firewall")
 local usteer    = _require_sibling("usteer")
 local switchvlan = _require_sibling("switchvlan")
 local rrmscan   = _require_sibling("rrmscan")
+local netmodel  = _require_sibling("netmodel")
+local stun      = _require_sibling("stun")
+local upgrade   = _require_sibling("upgrade")
 
 local M = {}
 
@@ -79,6 +83,9 @@ M._firewall  = firewall
 M._usteer    = usteer
 M._switchvlan = switchvlan
 M._rrmscan    = rrmscan
+M._netmodel   = netmodel
+M._stun       = stun
+M._upgrade    = upgrade
 
 -- In-memory only: 802.11k beacon-report neighbours, keyed by BSSID, plus the
 -- flat list build_json merges from. Clients report asynchronously and only
@@ -536,13 +543,21 @@ local function _filter_hosts(source, a, b, c, vlan, self_macs, station_macs)
 	if not ok or type(found) ~= "table" then return hosts end
 	for _, host in ipairs(found) do
 		if not self_macs[host.mac] and not station_macs[host.mac] then
+			-- `vlan` is one VLAN for the whole socket, or -- on a vlan-filtering
+			-- bridge -- a mac -> vid map read off the FDB, where one trunk
+			-- socket can carry hosts of several networks.
+			local v = vlan
+			if type(vlan) == "table" then
+				v = vlan[tostring(host.mac):lower()]
+				if v == 1 then v = nil end
+			end
 			hosts[#hosts + 1] = {
 				mac      = host.mac,
 				ip       = host.ip,
 				hostname = host.hostname,
 				age      = host.age,
 				uptime   = host.uptime,
-				vlan     = vlan,
+				vlan     = v,
 			}
 		end
 	end
@@ -572,6 +587,41 @@ local function _in_use_survey(stats)
 	return stats[1]
 end
 
+-- IPv4 address of the inform URL's host, for the payload's inform_ip. Literal
+-- hosts pass through; names are resolved (luasocket) and cached for five
+-- minutes so a heartbeat costs no DNS round trip. nil when unresolvable.
+M._inform_ip_cache = {}
+function M._inform_ip(url)
+	local host = type(url) == "string" and url:match("^%a+://%[?([^%]/:]+)") or nil
+	if not host then return nil end
+	if host:match("^%d+%.%d+%.%d+%.%d+$") then return host end
+	local c = M._inform_ip_cache[host]
+	local now = M._time()
+	if c and now - c.at < 300 then return c.ip end
+	local ok, ip = pcall(function()
+		local socket = require("socket")
+		local addr = socket.dns.toip(host)
+		return addr
+	end)
+	ip = ok and type(ip) == "string" and ip:match("^%d+%.%d+%.%d+%.%d+$") and ip or nil
+	M._inform_ip_cache[host] = {ip = ip, at = now}
+	return ip
+end
+
+-- The sys_stats block: load averages as strings, memory in bytes.
+function M._sys_stats(meminfo, mem_used_kb)
+	local out = {
+		mem_total = meminfo.total_kb * 1024,
+		mem_used  = mem_used_kb * 1024,
+	}
+	if meminfo.buffers_kb then out.mem_buffer = meminfo.buffers_kb * 1024 end
+	local ok, la = pcall(M._sysinfo.loadavg)
+	if ok and la then
+		out.loadavg_1, out.loadavg_5, out.loadavg_15 = la[1], la[2], la[3]
+	end
+	return out
+end
+
 -- Build the inform JSON payload.
 -- st: current state table
 -- cfg: device configuration (from conf.lua)
@@ -590,8 +640,11 @@ function M.build_json(st, cfg, ufhw)
 	local uptime     = M._sysinfo.uptime()
 	local meminfo    = M._sysinfo.meminfo()
 	local cpu_pct    = M._sysinfo.cpu_percent()
+	-- "Used" is total minus what the kernel says is available (page cache is
+	-- reclaimable, not used); MemFree is the fallback on kernels without it.
+	local mem_used_kb = meminfo.total_kb - (meminfo.available_kb or meminfo.free_kb)
 	local mem_pct    = meminfo.total_kb > 0
-	                    and math.floor((meminfo.total_kb - meminfo.free_kb) * 100 / meminfo.total_kb + 0.5)
+	                    and math.floor(mem_used_kb * 100 / meminfo.total_kb + 0.5)
 	                    or 0
 	local ifaces    = M._sysinfo.interfaces()
 	local lldp_nbrs = M._lldp.neighbors()
@@ -1551,6 +1604,13 @@ function M.build_json(st, cfg, ufhw)
 				local port_vlan = sock_bridge
 					and tonumber(sock_bridge:match("^br%-openuf(%d+)$")) or nil
 				if port_vlan == mgmt_vlan then port_vlan = nil end
+				-- A vlan-filtering bridge (netmodel's, or a hand-made one) is one
+				-- bridge for every network: the host's own FDB entry says which.
+				if port_vlan == nil and sock_bridge and M._sysinfo.bridge_filters_vlans
+					and M._sysinfo.bridge_filters_vlans(sock_bridge) then
+					local ok_v, map = pcall(M._sysinfo.bridge_fdb_vlans, sock_bridge)
+					if ok_v and type(map) == "table" and next(map) then port_vlan = map end
+				end
 				entry.mac_table = arr(_filter_hosts(
 					M._sysinfo.mac_table, p.ifname, sock_bridge, allow_tap,
 					port_vlan, self_macs, station_macs))
@@ -1609,12 +1669,33 @@ function M.build_json(st, cfg, ufhw)
 		-- device is permanently shown as needing an update. `fw.pre` (e.g.
 		-- "U6IW.") is a separate, correct field used only by announce.lua's
 		-- L2 discovery "firmware version verbose" TLV -- do not reuse it here.
-		version          = uap.fw and uap.fw.ver or "6.6.55",
+		-- The catalogue version: built into the ufmodel, or learned from the
+		-- controller's own upgrade commands. 10.6 calls a device upgradable
+		-- whenever this differs from the catalogue's by a character; the
+		-- opt-in variants (advertising an OpenWrt update, the revision scheme)
+		-- are in upgrade.lua.
+		version          = M._upgrade.version(uap.fw and uap.fw.ver or "6.6.55",
+			cfg and cfg.config, st.fw_version),
 		required_version = uap.required_version or "6.0.0",
 		bootrom_version  = uap.bootver or "",
 		country_code     = st.country_code or derived_country or 840,
 		mem_total        = meminfo.total_kb * 1024,
-		mem_used         = (meminfo.total_kb - meminfo.free_kb) * 1024,
+		mem_used         = mem_used_kb * 1024,
+		-- The controller takes the inform's source for the device's management
+		-- address from `inform_ip`; absent, it uses the HOST PART of inform_url
+		-- verbatim -- no DNS -- and rejects anything that is not an IP literal
+		-- ("invalid inform_ip unifi" -> HTTP 400, confirmed on 10.6.106). So a
+		-- hostname inform URL, including the shipped default, could never
+		-- complete an adoption without this.
+		inform_ip        = M._inform_ip(st.inform_url),
+		-- Subsystem id from the model registry (uidb `sysid`); the controller
+		-- resolves the model from it first and only then from `model`.
+		sysid            = uap.sysid,
+		-- Where the controller's STUN service can reach this device to make it
+		-- inform at once (stun.lua). Strings, as real devices send them.
+		connect_request_ip   = M._stun_client and (M._stun_client:address(st.ip)) or nil,
+		connect_request_port = M._stun_client
+			and tostring(select(2, M._stun_client:address(st.ip))) or nil,
 		-- Bit 0x10 (16): Device.hasQCASwitch() in the decompiled controller
 		-- is exactly hasFirmwareCapability(16), and PGOcbDWlbnYQdFW gates the
 		-- Ports view's projection of port_table into the device DTO on it.
@@ -1677,6 +1758,11 @@ function M.build_json(st, cfg, ufhw)
 			mem    = tostring(mem_pct),
 			uptime = tostring(uptime),
 		},
+		-- ...and sys_stats as well: 10.6 devices send both (the gateway's own
+		-- inform does), and the controller stores this block verbatim as the
+		-- device's load average and memory detail. It was `{}` on every openUF
+		-- device.
+		sys_stats        = M._sys_stats(meminfo, mem_used_kb),
 		if_table         = arr(if_table),
 		radio_table      = arr(radio_table),
 		radio_table_stats = arr(radio_table_stats),
@@ -2162,6 +2248,13 @@ function M._parse_wifi_system_cfg(sys_raw)
 				wpa3_fast_roaming_enabled = wpa3_ft,
 				vlan_enabled          = vlan_id ~= nil,
 				vlan                  = vlan_id,
+				-- The bridge the controller put this vap in, verbatim. The
+				-- vlan_filtering backend (netmodel.lua) resolves the vap's
+				-- network through the controller's bridge model instead of the
+				-- "br0.<vid>" pattern above, which cannot express `br-trunk`
+				-- (the untagged network once a Management VLAN is set).
+				br_devname            = a["br.devname"],
+				devname               = a.devname,
 				-- aaa.<n>.bss_transition: CONFIRMED live 2026-07-15 (toggled
 				-- "BSS Transition (802.11v)" in the Behavior Controls panel,
 				-- diffed system_cfg via debug_dump_file) -- present on every
@@ -2513,6 +2606,7 @@ local RECOGNIZED_SYSTEM_CFG = {
 
 local RECOGNIZED_MGMT_CFG = {
 	"^inform_url$", "^use_aes_gcm$", "^cfgversion$", "^led_enabled$", "^authkey$",
+	"^stun_url$",
 }
 
 -- Set from handle_response when cfg.config.debug_dump_file is on -- the
@@ -2615,6 +2709,11 @@ function M.handle_response(json_str, st, cfg)
 	local _type = resp._type
 
 	if _type == "noop" then
+		-- The controller's next-inform interval for this device and its "come
+		-- back now" flag. Bounded: a garbled value must not park the daemon.
+		local iv = tonumber(resp.interval)
+		if iv and iv >= 1 and iv <= 300 then M._next_interval = iv end
+		if resp.immediate == true then M._immediate = true end
 		return false
 	end
 
@@ -2638,6 +2737,10 @@ function M.handle_response(json_str, st, cfg)
 						-- breaking the inform loop for good (http-only builds have
 						-- no luasec, so switching to that https URL is fatal).
 						if v ~= "" then st.inform_url = v end
+					elseif k == "stun_url" then
+						-- The controller's STUN service, where the device keeps the
+						-- binding the controller wakes it through (stun.lua).
+						if v ~= "" then st.stun_url = v end
 					elseif k == "use_aes_gcm" then
 						st.use_gcm = (v == "true")
 					elseif k == "cfgversion" then
@@ -2664,6 +2767,17 @@ function M.handle_response(json_str, st, cfg)
 							st.authkey = v
 							st.adopted = true
 							newly_adopted = true
+						elseif st.adopted and is_hex32(v) and v ~= st.authkey
+							and st.authkey ~= M._state.DEFAULT_KEY then
+							-- A rotation. This setparam decrypted under the
+							-- current, secret key, so it is authenticated in a
+							-- way the default-key adoption exchange is not; the
+							-- controller pushes a new key whenever the one an
+							-- inform arrived under differs from its x_authkey,
+							-- and refusing it leaves the device on a key the
+							-- controller may stop trying.
+							st.authkey = v
+							newly_adopted = true   -- re-inform now, under the new key
 						end
 					end
 				end
@@ -2676,6 +2790,42 @@ function M.handle_response(json_str, st, cfg)
 		-- PROTOCOL-VALIDATION.md). Only present when the controller is
 		-- actually pushing a network-config change, not on every inform.
 		M._report_dropped_keys("mgmt_cfg", mgmt_raw, RECOGNIZED_MGMT_CFG)
+
+		-- blocked_sta: the site's COMPLETE blocked-client list, newline-joined,
+		-- carried by the provisioning push on every (re)connect and by every
+		-- full config. It is authoritative -- block-sta/unblock-sta are only
+		-- the live deltas -- so a block or unblock issued while this AP was
+		-- offline, or lost with state.json, converges here. Absent means
+		-- "not part of this push", never "unblock everyone".
+		if type(resp.blocked_sta) == "string" then
+			local list, seen = {}, {}
+			for mac in resp.blocked_sta:gmatch("[^%s,]+") do
+				mac = mac:lower()
+				if is_mac(mac) and not seen[mac] then
+					seen[mac] = true
+					list[#list + 1] = mac
+				end
+			end
+			table.sort(list)
+			local before = {}
+			for _, m in ipairs(st.blocked_stas or {}) do before[tostring(m):lower()] = true end
+			local same = true
+			for _, m in ipairs(list) do if not before[m] then same = false end end
+			local n_before = 0
+			for _ in pairs(before) do n_before = n_before + 1 end
+			if n_before ~= #list then same = false end
+			if not same then
+				st.blocked_stas = list
+				M._state.save(st)
+				M._firewall.reconcile(list)
+				local ufuci = M._ucihelper
+				for _, m in ipairs(list) do
+					if not before[m] and ufuci and ufuci.disconnect_station then
+						pcall(ufuci.disconnect_station, m)
+					end
+				end
+			end
+		end
 
 		local sys_raw = resp.system_cfg
 		if type(sys_raw) == "string" then
@@ -2747,6 +2897,52 @@ function M.handle_response(json_str, st, cfg)
 				ip = nil
 			end
 
+			-- The vlan_filtering backend (netmodel.lua): the controller's whole L2
+			-- model -- bridges, VLANs, Management VLAN, port matrix, management
+			-- addressing -- rendered as UCI on one filtering bridge, taking over
+			-- whatever bridge held the sockets before. When it produces a plan
+			-- the legacy IP-settings, per-VLAN-bridge and switchvlan passes below
+			-- stand aside: they describe a different layout of the same ports.
+			local netplan = nil
+			local nm = M._netmodel
+			if nm and nm.backend(cfg) == "vlan_filtering" then
+				local model = nm.parse(sys_raw)
+				if model then
+					local s = model.static
+					if s and ipv4 and not (ipv4(s.ip or "")
+							and (s.netmask == nil or s.netmask == "" or ipv4(s.netmask))
+							and (s.gateway == nil or s.gateway == "" or ipv4(s.gateway))) then
+						io.stderr:write("inform: netmodel: ignoring a malformed static address\n")
+						model.static = nil
+					end
+					local lan = cfg and cfg.net and cfg.net.lan_cpueth
+					local ok_br, br = pcall(M._sysinfo.bridge_of, lan)
+					local up = nil
+					if ok_br and br then
+						local ok_up, u = pcall(M._sysinfo.uplink_bridge_port, br)
+						if ok_up then up = u end
+					end
+					local ok_nm, changed, plan = pcall(nm.converge, model,
+						M._parse_switch_system_cfg(sys_raw), cfg, st,
+						{uplink_ifname = up, identity_mac = st.mac})
+					if not ok_nm then
+						io.stderr:write("inform: netmodel: " .. tostring(changed) .. "\n")
+					elseif plan then
+						netplan = plan
+						-- The per-VLAN-bridge ledgers describe a layout that no
+						-- longer exists; their restore paths must never run on it.
+						st.dsa_brlan_ports, st.swvlan_backup = nil, nil
+						st.ip_mode, st.static_ip, st.static_netmask = nil, nil, nil
+						st.static_gateway, st.static_dns = nil, nil
+						ip = nil   -- addressing is part of the plan, as UCI
+						if changed then
+							M._sysinfo.forget_uplink_cache()
+							M._state.save(st)
+						end
+					end
+				end
+			end
+
 			if ip then
 				local iface = cfg and cfg.net and cfg.net.lan_cpueth
 				if dhcp then
@@ -2814,7 +3010,7 @@ function M.handle_response(json_str, st, cfg)
 			-- only: on swconfig a port VLAN is a switch table entry, not a
 			-- bridge. Safe when nothing is pushed (an empty set).
 			local port_vlans = {}
-			if M._switchvlan and M._switchvlan.dsa_members
+			if not netplan and M._switchvlan and M._switchvlan.dsa_members
 				and not (cfg and cfg.vlan and cfg.vlan.ports) then
 				local br = M._sysinfo.bridge_of(cfg and cfg.net and cfg.net.lan_cpueth)
 				local up = br and M._sysinfo.uplink_bridge_port(br) or nil
@@ -2843,14 +3039,15 @@ function M.handle_response(json_str, st, cfg)
 					pcall(ufuci.apply_config,
 						{radio_table = radio_table, vap_table = vap_table, network_table = {}},
 						cfg, {band_steering_active = steering_active,
-							device_name = device_name, keep_vlans = port_vlans})
+							device_name = device_name, keep_vlans = port_vlans,
+							netmodel = netplan})
 				end
 			end
 
 			-- Per-port VLAN, after the WiFi pass so that any VLAN interface
 			-- ensure_vlan_network() creates for a tagged SSID already exists
 			-- before a switch port is put on the same VLAN.
-			if M._switchvlan then
+			if M._switchvlan and not netplan then
 				pcall(function()
 					-- Every VLAN a tagged SSID lands on. The switch drops
 					-- frames for a VID it has no entry for, so these need
@@ -2943,7 +3140,10 @@ function M.handle_response(json_str, st, cfg)
 		end
 
 		M._state.save(st)
-		return newly_adopted  -- re-inform immediately with the new key if adopted
+		-- Re-inform at once after adopting (new key) and after applying a
+		-- config push: the controller holds the device in PROVISIONING until it
+		-- sees its cfgversion echoed, and real firmware reports straight back.
+		return newly_adopted or type(sys_raw) == "string"
 	end
 
 	if _type == "setdefault" then
@@ -2975,8 +3175,25 @@ function M.handle_response(json_str, st, cfg)
 		-- which handles this identically (log + store, no real upgrade path).
 		st.upgrade_requested_version = tostring(resp.version or "")
 		st.upgrade_requested_url     = tostring(resp.url or "")
-		io.stderr:write("inform: upgrade requested (version=" .. st.upgrade_requested_version
-			.. ") -- stored only, not applying\n")
+		-- The catalogue version the controller wants this model on, reported
+		-- from now on: the controller calls a device upgradable whenever its
+		-- version differs from the catalogue's by so much as a character, so a
+		-- stale built-in version meant a permanent Upgrade badge (upgrade.lua).
+		local wanted = type(resp.version) == "string" and resp.version:match("^%d+%.%d+%.%d+%.%d+$")
+		if wanted then st.fw_version = wanted end
+		-- config.upgrade_mode = "owut": the controller's upgrade becomes an
+		-- attended sysupgrade of THIS board's OpenWrt (upgrade.lua). The UniFi
+		-- URL itself is never fetched.
+		local conf = cfg and cfg.config
+		if conf and conf.upgrade_mode == "owut" then
+			local ok_u, started, why = pcall(M._upgrade.start, conf)
+			io.stderr:write("inform: upgrade requested -- "
+				.. ((ok_u and started) and ("owut upgrade started, log in " .. M._upgrade.LOG_FILE)
+					or ("not upgrading: " .. tostring(ok_u and why or started))) .. "\n")
+		else
+			io.stderr:write("inform: upgrade requested (version=" .. st.upgrade_requested_version
+				.. ") -- stored only, not applying\n")
+		end
 		M._state.save(st)
 		return false
 	end
@@ -3057,6 +3274,13 @@ function M.handle_response(json_str, st, cfg)
 						end
 					end
 				end
+			end
+		elseif cmd == "kick-sta" then
+			-- "Reconnect Client": drop the association, allow it straight back.
+			local mac = type(resp.mac) == "string" and resp.mac:lower() or nil
+			local ufuci = M._ucihelper
+			if is_mac(mac) and ufuci and ufuci.disconnect_station then
+				pcall(ufuci.disconnect_station, mac)
 			end
 		elseif cmd == "spectrum-scan" then
 			-- Trigger a scan per radio (sweeps every channel), then read back
@@ -3275,7 +3499,11 @@ function M._populate_net_info(st, cfg)
 	if not ok_ann then return end
 
 	local iface = cfg and cfg.net and cfg.net.lan_cpueth or "eth1"
-	local mac_tbl = announce.get_mac(iface)
+	-- A map may pin the identity MAC (modelmap/auto.lua: the MAC the network
+	-- already knows the AP by, because some boards' socket MAC is random per
+	-- boot). Everything else -- the bridge pin, LLDP, discovery -- follows it.
+	local mac_tbl = (announce.parse_mac and announce.parse_mac(cfg and cfg.net and cfg.net.identity_mac))
+		or announce.get_mac(iface)
 	if mac_tbl then
 		-- Format as "xx:xx:xx:xx:xx:xx"
 		st.mac = string.format("%02x:%02x:%02x:%02x:%02x:%02x",
@@ -3561,6 +3789,18 @@ function M._tick(st, cfg, ufhw, ctx)
 	ctx.backoff  = ctx.backoff  or ctx.interval
 
 	ctx.last_mtime = M._reload_if_changed(st, cfg, ctx.last_mtime)
+	-- attended-sysupgrade update check (config.advertise_updates); never blocks.
+	pcall(M._upgrade.tick, M._time(), cfg and cfg.config)
+	-- The reported address was read once at startup; a DHCP renumbering or a
+	-- controller-driven Management VLAN move changes it underneath. Cheap
+	-- enough every five minutes (sysfs reads, no ubus).
+	local now = M._time()
+	if not ctx.next_netinfo then
+		ctx.next_netinfo = now + 300
+	elseif now >= ctx.next_netinfo then
+		ctx.next_netinfo = now + 300
+		pcall(M._populate_net_info, st, cfg)
+	end
 	-- Before build_json, so anything a client reported since the last cycle
 	-- rides out on THIS inform rather than waiting for the next.
 	pcall(M._rrm_tick, cfg)
@@ -3584,38 +3824,95 @@ function M._tick(st, cfg, ufhw, ctx)
 
 	local body, err = M.http_post(st.inform_url, pkt)
 	if not body then
+		if M._netmodel_check(st, cfg, false) == "rolled_back" then
+			-- The previous network is back: try again shortly rather than
+			-- sitting out the backoff the failed plan built up.
+			ctx.backoff = ctx.interval
+			return 5
+		end
+		-- A pending device is SUPPOSED to get 404: the controller files it as
+		-- pending on the first inform and answers 404 until someone clicks
+		-- Adopt. Backing off doubled the wait for the device to appear and for
+		-- the adoption to complete, up to a minute each; real firmware keeps
+		-- its normal cadence here.
+		if not st.adopted and type(err) == "string" and err:match("^HTTP 404") then
+			if not M._logged_pending then
+				io.stderr:write("inform: pending adoption (HTTP 404 until adopted in the controller)\n")
+				M._logged_pending = true
+			end
+			ctx.backoff = ctx.interval
+			return ctx.interval
+		end
 		io.stderr:write("inform: POST failed: " .. tostring(err) .. "\n")
 		M._warn_http_400(err, st, cfg)
+		-- While a network plan's rollback window is open, keep the normal
+		-- cadence: the window is judged on these ticks, and a 60 s backoff
+		-- would stretch a stranded AP's outage by up to a minute.
+		if st.netmodel_pending then
+			ctx.backoff = ctx.interval
+			return ctx.interval
+		end
 		ctx.backoff = math.min(ctx.backoff * 2, 60)
 		return ctx.backoff
 	end
 	ctx.backoff = ctx.interval
 	M._warned_400 = false
+	M._logged_pending = false
 
 	local parse_ok, json_body = pcall(M.parse_packet, body, st)
 	if not parse_ok then
 		io.stderr:write("inform: parse error: " .. tostring(json_body) .. "\n")
 		return ctx.interval
 	end
+	-- The controller answered with something this device can decrypt: the
+	-- management path works, which is exactly what confirms a network plan.
+	M._netmodel_check(st, cfg, true)
 
+	M._next_interval, M._immediate = nil, false
 	local ok_h, applied = pcall(M.handle_response, json_body, st, cfg)
 	if not ok_h then
 		io.stderr:write("inform: handle_response failed: " .. tostring(applied) .. "\n")
 		return ctx.interval
 	end
-	if applied then
+	if applied or M._immediate then
 		-- A config push runs `wifi reload`, which takes every hostapd object
 		-- the RRM collector subscribed to away with it and kills the
 		-- subscription. That is the one moment the liveness check must not
 		-- wait out its interval.
-		M._rrm_collector_next = 0
+		if applied then M._rrm_collector_next = 0 end
 		return 0
 	end
-	return ctx.interval
+	-- The controller's own cadence for this device (noop `interval`), which it
+	-- raises under load; ctx.interval only when it named none.
+	return M._next_interval or ctx.interval
+end
+
+-- Feed the vlan_filtering backend's rollback window with the outcome of one
+-- inform. A rollback rewrites /etc/config/network, so the cached uplink/bridge
+-- lookups and the reported address are refreshed with it.
+function M._netmodel_check(st, cfg, ok)
+	if not (M._netmodel and st and st.netmodel_pending) then return nil end
+	local ok_c, res = pcall(M._netmodel.check, st, ok)
+	if not ok_c then
+		io.stderr:write("inform: netmodel check: " .. tostring(res) .. "\n")
+		return nil
+	end
+	if res then
+		M._state.save(st)
+		if res == "rolled_back" then pcall(M._sysinfo.forget_uplink_cache) end
+		-- Either way the management address may have moved (a Management
+		-- VLAN is a new subnet), and `ip` in the payload is what the
+		-- controller shows and connects to.
+		pcall(M._populate_net_info, st, cfg)
+	end
+	return res
 end
 
 function M.run(cfg, ufhw)
 	local st = state.load()
+	-- A network plan applied right before a restart gets a fresh rollback
+	-- window measured from now.
+	if M._netmodel then pcall(M._netmodel.on_start, st) end
 	M._reapply_static_ip(st, cfg)
 	-- The MAC persisted by the previous run, before _populate_net_info
 	-- overwrites it with the live one read off dev.conf.net.lan_cpueth.
@@ -3720,8 +4017,50 @@ function M.run(cfg, ufhw)
 	}
 	while true do
 		local wait = M._tick(st, cfg, ufhw, ctx)
-		if wait > 0 then socket.select(nil, nil, wait) end
+		M._wait(st, cfg, wait)
 	end
+end
+
+-- Sleep until the next inform is due -- or until the controller asks for one
+-- over the STUN channel, whichever comes first. The client follows the
+-- stun_url the controller last pushed; config.stun = false turns it off.
+M._stun_client = nil
+function M._wait(st, cfg, wait)
+	local socket = require("socket")
+	-- Until a mgmt_cfg has named it, the controller's STUN service is assumed
+	-- where UniFi puts it: the inform host, port 3478. The pushed URL wins as
+	-- soon as one arrives (a device upgraded in place would otherwise wait for
+	-- the next config change to get its wake-up channel back).
+	local url = st.stun_url
+	if not url and type(st.inform_url) == "string" then
+		local host = st.inform_url:match("^%a+://%[?([^%]/:]+)")
+		if host then url = "stun://" .. host .. ":3478/" end
+	end
+	local want = st.adopted and url
+		and not (cfg and cfg.config and cfg.config.stun == false) and M._stun or nil
+	if M._stun_client and (not want or M._stun_client.url ~= url) then
+		M._stun_client:close()
+		M._stun_client = nil
+	end
+	if want and not M._stun_client then
+		local port = tonumber(cfg and cfg.config and cfg.config.stun_local_port) or 3478
+		local ok, c = pcall(M._stun.new, url, port)
+		M._stun_client = ok and c or nil
+	end
+	if wait <= 0 then return false end
+	if not M._stun_client then
+		socket.select(nil, nil, wait)
+		return false
+	end
+	local ok, woke = pcall(M._stun_client.wait, M._stun_client, wait, socket.gettime)
+	if not ok then
+		io.stderr:write("inform: stun: " .. tostring(woke) .. "\n")
+		M._stun_client:close()
+		M._stun_client = nil
+		return false
+	end
+	if woke then io.stderr:write("inform: stun: the controller asked for an inform\n") end
+	return woke
 end
 
 -- ─── Script entry point ───────────────────────────────────────────────────────

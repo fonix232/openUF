@@ -637,6 +637,37 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: apply_config with a netmodel plan joins vaps to the plan's networks",
+		fn = function()
+			-- vlan_filtering backend: the vap's network comes from the
+			-- controller's bridge it sits in (br0.20 -> openuf_v20, br-trunk ->
+			-- the native VLAN's interface), and no per-VLAN bridge is built.
+			with_ucihelper(function(db)
+				local plan = {
+					mgmt = {iface = "lan"},
+					net_for_bridge = {["br0"] = "lan", ["br0.20"] = "openuf_v20",
+						["br-trunk"] = "openuf_v1"},
+				}
+				local resp = {
+					radio_table = {},
+					vap_table = {
+						{ssid = "corp", radio = "radio0", security = "wpa2", x_passphrase = "hunter22",
+						 vlan = 20, vlan_enabled = true, br_devname = "br0.20"},
+						{ssid = "home", radio = "radio0", security = "wpa2", x_passphrase = "hunter22",
+						 br_devname = "br-trunk"},
+						{ssid = "odd", radio = "radio0", security = "open", br_devname = "br-unknown"},
+					},
+				}
+				ucihelper.apply_config(resp, {net = {lan_cpueth = "wan"}}, {netmodel = plan})
+				assert_eq(db.wireless.openuf_radio0_corp.network, "openuf_v20", "VLAN 20 vap")
+				assert_eq(db.wireless.openuf_radio0_home.network, "openuf_v1", "untagged vap under a Management VLAN")
+				assert_eq(db.wireless.openuf_radio0_odd.network, "lan", "unknown bridge -> management")
+				assert_nil(db.network and db.network.openuf_vlan20, "no per-VLAN-bridge interface")
+				assert_nil(db.network and db.network.openuf_brdev20, "no per-VLAN bridge")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: apply_config falls back to lan when vlan_enabled is false",
 		fn = function()
 			with_ucihelper(function(db)

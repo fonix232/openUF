@@ -25,7 +25,7 @@ openUF is a Lua daemon that makes an OpenWrt device appear as a **Ubiquiti UniFi
 
 Those are screenshots of the author's live network taken from a real UniFi Cloud Gateway Ultra; every hostname, MAC address, IP address, SSID and ISP name in them was rewritten to a consistent fake value in the browser before capture.
 
-Tested end-to-end against **UniFi Network Application 10.4.57** — both a self-hosted Docker controller and a real UniFi Cloud Gateway Ultra adopting a TP-Link Archer C5 v1 running openUF, with real clients associating to the pushed SSID.  The default device identity presented is **U6-InWall** (model `U6IW`).  openUF emulates a UniFi **access point** only — gateway (USG) and switch (USW) emulation are not implemented and not planned.
+Tested end-to-end against **UniFi Network Application 10.4.57** — both a self-hosted Docker controller and a real UniFi Cloud Gateway Ultra adopting a TP-Link Archer C5 v1 running openUF, with real clients associating to the pushed SSID — and against **10.6.106** (the build UniFi OS 5/6 consoles run) on a real-netifd OpenWrt bench; see [docs/GAP-ANALYSIS-10.6.md](docs/GAP-ANALYSIS-10.6.md) for what 10.6 changed and what this fork does about it.  The default device identity presented is **U6-InWall** (model `U6IW`).  openUF emulates a UniFi **access point** only — gateway (USG) and switch (USW) emulation are not implemented and not planned.
 
 Most rows below marked ✅ were verified by driving the real controller UI against a live openUF device and reading back the resulting wire capture; [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md) records the evidence, including where a claim rests on decompiling the controller rather than a live capture.
 
@@ -39,11 +39,14 @@ Most rows below marked ✅ were verified by driving the real controller UI again
 | TNBU inform protocol | ✅ Working — AES-128-CBC and AES-128-GCM |
 | AES-128-GCM | ✅ Working — **required**: 10.4.57 will not finish provisioning a device until it receives a genuine GCM inform. Needs a GCM-capable `lua-openssl` build |
 | L2 adoption (SSH `syswrapper.sh set-adopt`) | ✅ Working — completes to **Connected** |
-| L3 adoption (`set-inform`, no SSH) | ✅ Working — the controller skips SSH entirely and delivers the new authkey in the `setparam` `mgmt_cfg`; openUF accepts it only while unadopted. The controller chooses this path when it has *not* discovered the device via broadcast, which is what `config.l2_announce = false` is for — same-subnet devices that can't accept an SSH login need it |
+| L3 adoption (`set-inform`, no SSH) | ✅ Working — the controller skips SSH entirely and delivers the new authkey in the `setparam` `mgmt_cfg`. The controller chooses this path when it has *not* discovered the device via broadcast, which is what `config.l2_announce = false` is for — same-subnet devices that can't accept an SSH login need it. **Hostname inform URLs work**: openUF sends `inform_ip` (the resolved controller address); without it 10.6 rejects every inform from a device whose URL is not an IP literal (`invalid inform_ip`, HTTP 400) |
+| Pending adoption | ✅ HTTP 404 before adoption is the controller's normal answer; openUF keeps its regular cadence instead of backing off, so a new device appears and adopts within one interval |
+| Controller wake-up (STUN) | ✅ openUF keeps a binding to the controller's `stun_url` and reports `connect_request_ip`/`_port`; the controller's `0x8888` connection request makes it inform at once (10.6 uses it for upgrades and missed-heartbeat recovery). Verified through NAT on the bench |
+| Inform cadence | ✅ Follows the controller's `interval` and `immediate` instead of a fixed 10 s, and re-informs straight after applying a push |
 | Zero-touch bootstrap adoption | ✅ Optional (`install.sh install --bootstrap-adopt`) — a locked-down, non-root SSH account auto-disabled after adoption |
 | Forget device / factory reset | ✅ Working (`syswrapper.sh reset-inform`) |
 | Restart / reboot command | ✅ Working |
-| Firmware upgrade requests | Stored (version/url), never applied — flashing controller-supplied firmware onto non-Ubiquiti hardware would brick it |
+| Firmware upgrade requests | The Ubiquiti image is never fetched. By default the request is stored and its `version` learned, so the device reports the catalogue's current version (10.6 calls anything else "upgradable"). Opt-in `upgrade_mode = "owut"` turns Upgrade / Custom Upgrade / the controller's schedule into an **OpenWrt attended sysupgrade** of this board; `advertise_updates` raises UniFi's own "Upgrade available" badge while `owut check` finds a newer build. See `openuf/upgrade.lua` and [contrib/asu](contrib/asu/README.md) |
 
 ### WiFi provisioning
 
@@ -74,7 +77,7 @@ Most rows below marked ✅ were verified by driving the real controller UI again
 | WiFi Speed Limit | ⚠️ Wire protocol confirmed live (top-level `qos.vap.<m>.*`, joined on devname; kbps; a **per-VAP aggregate** cap, not per-client). Needs a speed-limit profile to exist in site settings before the per-WLAN toggle emits anything. No hostapd/OpenWrt option expresses a throughput cap, so it is enforced with `tc` — HTB on egress for downlink, ingress policing for uplink. The generated commands are verified against real `tc`, but the on-air throughput is not (no real radios available). **Needs `tc-tiny` *and* `kmod-sched-act-police`**: the uplink half uses the `police` action, which is a separate module absent from some images — without it the download cap applies and the upload cap silently does not (`install.sh` installs both, and openUF now logs it by name if `tc` still rejects the filter). The qdiscs are rebuilt from UCI on every start, so the cap survives a reboot |
 | Minimum RSSI | ✅ Working — per **radio**, not per WLAN; enforced by deauthenticating clients below the threshold (a one-shot kick, not a persistent block). Disabling it in the controller stops the enforcement (the wire signals disable by omitting the whole `stamgr.<n>` block) |
 | Show Access Point Name in Beacon | ❌ **Not implemented on the OpenWrt side.** The wire protocol and its `wifi_caps2` bit `0x40` gating are confirmed live, and openUF writes `wps_device_name`/`ap_setup_locked` — but a beacon never carries the name. OpenWrt emits the whole WPS/WSC block, `device_name` included, only when `config_methods` is non-empty, which needs `wps_pushbutton` or `wps_label`; openUF sets neither, so WPS never activates. Verified 2026-09-10 on an Archer C5 and an AX3000T (both 25.12.5): the gate is `/usr/share/ucode/wifi/ap.uc:227`, and no live BSS config carries a single WPS key. Enabling WPS to broadcast a name is a real security surface for a cosmetic feature, so this is left unimplemented deliberately |
-| SAE Anti-clogging / SAE Sync Time | ⚠️ Implemented from a decompile of the controller's WLAN-config generator. The controller only emits these for a genuine WPA3/SAE WLAN — not the mixed "WPA2/WPA3" option — and that emitting case was never reachable in the validation environment, so it is unconfirmed on the wire |
+| SAE Anti-clogging / SAE Sync Time | ❌ **Not applicable on OpenWrt.** The wire keys are parsed, but neither has a wifi-iface UCI option behind it (checked against the schema, `/usr/share/ucode/wifi/` and `hostapd.sh`), so nothing is written |
 
 ### Reporting and statistics
 
@@ -96,9 +99,11 @@ Most rows below marked ✅ were verified by driving the real controller UI again
 |---|---|
 | Locate (LED identify blink) | ✅ Working — requires `dev.conf.led` set per board, naming an LED that is **actually wired** (see USAGE § 3). The LED need not be a dedicated status light: Locate snapshots whatever trigger it was driving, persists it, and restores it on stop, so it survives a restart landing between the controller's `set-locate` and `unset-locate` — and an interrupted Locate is torn down at the next start rather than blinking forever |
 | Manage → LED steady on/off toggle | ✅ Working — same `dev.conf.led` requirement. Persisted and re-applied at startup, so it survives a reboot; it is also re-asserted when a Locate ends, since restoring the blink's previous trigger alone would leave a status LED dark |
-| Client block / unblock | ✅ Working — enforced via nftables, persists across restarts |
+| Client block / unblock | ✅ Working — enforced via nftables, persists across restarts, and **converges on the controller's `blocked_sta` list** (the site's complete block list, sent on every reconnect), so blocks issued while the AP was offline still apply |
+| Reconnect client (`kick-sta`) | ✅ Disconnects the station through hostapd's ubus object (no `hostapd-utils` needed), allowing it straight back |
 | IP Settings (DHCP / static) | ✅ Working — reconfigures the device's own management interface, including the DNS servers (`resolv.nameserver.<k>.ip` → `/etc/resolv.conf`, in the controller's primary/secondary order). DNS is applied on the static path only; on DHCP the lease supplies it. A static address is re-applied on every start, so it survives a reboot the controller never re-pushes it after |
 | Per-port VLAN assignment | ⚠️ Wire format fully mapped live (`switch.*`: device-level gate, per-VLAN table, per-port `pvid` plus a tagged/untagged/`exclude` matrix joined on `port_table[].port_idx`); requires reporting the `hasOWRTSwitch` capability bit and ticking **Port VLAN** on the device. Applied two ways depending on the board. On **swconfig** boards, as `switch_vlan` sections; requires a `dev.conf.vlan` port map plus a `swport` on the port, never touches the socket the uplink cable is in (detected at runtime, and refused outright when it cannot be determined), and is reversible — unticking the device-level **Port VLAN** box tears openUF's sections down and restores the stock port strings. The generated UCI is unit-tested, but that it programs a real switch ASIC is **not verified** (no switch hardware here). On **DSA** boards there is no switch table to write and `bridge-vlan` is deliberately not used: the assigned socket is moved out of `br-lan` and into that VLAN's `br-openuf<id>` bridge — the same L2 a tagged SSID on the same VLAN already uses, since they are one broadcast domain. `br-lan` keeps the uplink and the management address and nothing ever runs with `vlan_filtering`, so a wrong answer cannot strand the AP. A moved socket also gets **MAC learning turned off** (`openuf_brport<vid>_<socket>`): the VLAN bridge is software-only but the socket shares one address table with the uplink, and an entry learned there makes the switch resolve the reply in hardware to a port outside the uplink's bridge and drop it — outbound stays perfect, so nothing else reveals it. **Verified on real hardware** (full DHCP handshake captured at three points, with and without); Native VLAN only (a tagged-only port is refused out loud). Because that empties the socket's bridge FDB, openUF also installs a `bridge openuf_learn` nftables tap that harvests source MACs *and* IPv4 addresses on the moved socket, so the port keeps reporting its wired clients and they still land on the right network — the socket's bridge cannot be hardware-offloaded, so every frame on it reaches the CPU where the tap sees it |
+| Controller-owned bridge (`bridge_backend = "vlan_filtering"`) | ✅ **Verified on real netifd** (bench, 2026-09-25). The controller's whole L2 model — `bridge.*`/`vlan.*`/`netconf.*`/`dhcpc.*` and the `switch.*` port matrix — is realised as **one vlan-filtering bridge**: management on `br-lan.<vid>` including a **Management VLAN**, one interface per WLAN VLAN (the untagged network included once management is tagged), and full per-port membership (native + tagged + excluded, i.e. trunk ports). Any bridge already holding the sockets is **taken over and recreated**; interfaces that used it are re-pointed and keep their VLANs. Every change is **rolled back automatically** unless the controller is reached within `bridge_rollback_timeout` (180 s); a plan that stranded the AP is not re-applied. `auto` picks this whenever the uplink already sits in a vlan-filtering bridge. DSA only |
 | Set Replacement Device / Load Configuration | ✅ Working — both are controller-side clones; no device-side protocol involved |
 | Power / PoE reporting | Not applicable — the flagged UI field belongs to the upstream parent device, not the AP |
 | Speed test | Not applicable — gateway-only feature in current UniFi Network |
@@ -139,6 +144,11 @@ USB extroot or a custom build with the crypto baked into squashfs.  Known-workin
   module when it sees that situation. Do not point `dev.conf.led` at `mt76-phy0` instead —
   it exists and accepts writes, but is wired to nothing on this board
 - **TP-Link WR1043ND v2** (single-band 802.11n) — use `modelmap/tl-wr1043ndv2.lua`
+- **Any DSA board** — `modelmap/auto.lua` derives the sockets, the uplink (from the bridge
+  FDB), U6IW port numbering (uplink = port 5), a stable identity MAC (the MAC the network
+  already knows the AP by — not a socket MAC, which is random per boot on e.g. a Netgear
+  WAX220), the Locate LED and the radios from `/etc/board.json`, and pins the result in
+  `/etc/openuf/modelmap-auto.json`
 
 The *modelmap* describes your real hardware; the *ufmodel* picks the UniFi identity to present.  `ufmodel/u6iw.lua` (U6-InWall) is the default and the only one validated end-to-end — `uapg1`, `uapg1-lr`, and `uapg2-ac-lr` are also provided but untested.
 
@@ -148,7 +158,7 @@ The *modelmap* describes your real hardware; the *ufmodel* picks the UniFi ident
 # 1. SSH into the OpenWrt device, install dependencies (OpenWrt 25.12+ uses apk;
 #    on 24.10 and earlier the same names go through `opkg install`)
 apk update
-apk add lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw lldpd nftables kmod-nft-bridge hostapd-utils usteer ip-bridge tc-tiny wpad-wolfssl
+apk add lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw ip-bridge lldpd nftables kmod-nft-bridge hostapd-utils usteer tc-tiny kmod-sched-act-police wpad-wolfssl
 
 # 2. Download and install the latest release (no git client or scp needed)
 mkdir openuf-install && cd openuf-install
@@ -183,6 +193,10 @@ a basic build, replace it with `apk add wpad-wolfssl` first.
 `sysupgrade` backs up neither, and would take the authkey and the modelmap selection with
 it. Existing entries in `/etc/sysupgrade.conf` are left alone; see
 [USAGE.md](USAGE.md) for what uninstall does to them.
+
+**Building it into images:** [contrib/asu](contrib/asu/README.md) has the package list and a
+first-boot script for firmware-selector, `owut` and the ASU API (`contrib/asu/asu-build.py`);
+openUF then survives every later `owut upgrade` still adopted.
 
 Installing from a git checkout instead (for contributors/dev builds) still works — `scp -r
 openuf/ install.sh root@<device>:/tmp/openuf/` and run `install.sh` from there.
@@ -227,8 +241,9 @@ openUF implements the **TNBU binary inform protocol**:
 - HTTP POST to `/inform` every 10 seconds
 - Binary header: `TNBU` magic + version + MAC + flags + 16-byte IV + data version + payload length
 - Payload: JSON, AES-128 encrypted with the device's authkey — CBC, or GCM (with a
-  40-byte AAD) once the controller sets `use_aes_gcm`.  Controller responses may be
-  zlib-compressed; openUF decompresses them with a bundled pure-Lua inflater
+  40-byte AAD, 16-byte nonce) once the controller sets `use_aes_gcm`. Requests may be zlib-
+  or snappy-compressed; 10.6 never compresses its responses (flags are always `0x01`/`0x09`),
+  the bundled inflater only matters for other controllers
 - Default pre-adoption key: `ba86f2bbe107c7c57eb5f2690775c712`
 - Adoption: L2 — controller SSHes in and calls `syswrapper.sh set-adopt <url> <newkey>`;
   L3 — new authkey arrives in the `setparam` response's `mgmt_cfg`
