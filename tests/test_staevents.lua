@@ -131,4 +131,14 @@ return {
 			assert_nil(p.vap_table, "but not the stats")
 		end
 	},
+	{
+		name = "dnswatch: remove drops the DNS-answer table",
+		fn = function()
+			local dw = dofile("openuf/dnswatch.lua")
+			local cmds = {}
+			dw._exec = function(c) cmds[#cmds + 1] = c return 0 end
+			dw.remove()
+			assert_eq(cmds[1], "nft delete table bridge openuf_ev >/dev/null 2>&1", "one delete")
+		end
+	},
 }

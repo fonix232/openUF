@@ -1,13 +1,14 @@
 // openUF status for LuCI (luci-app-openuf).
 //
-// Read-only: everything comes from files openUF already keeps -- the
-// heartbeat (/tmp/openuf-status), state.json, the auto-derived identity and
-// port map, conf.lua -- plus a process check. The adoption key and anything
-// else secret in state.json is never returned.
+// Everything shown comes from files openUF already keeps -- the heartbeat
+// (/tmp/openuf-status), state.json, the auto-derived identity and port map,
+// conf.lua -- plus a process check. The adoption key and anything else secret
+// in state.json is never returned. The one write is set_settings: a handful of
+// on/off options in conf.lua, then a daemon restart.
 
 'use strict';
 
-import { readfile, access, stat, lsdir } from 'fs';
+import { readfile, writefile, rename, unlink, chmod, access, stat, lsdir, popen } from 'fs';
 import { connect } from 'ubus';
 
 const OPENUF = '/opt/openuf';
@@ -64,6 +65,199 @@ function conf_options() {
 		}
 	}
 	return out;
+}
+
+// ── Settings ─────────────────────────────────────────────────────────────
+//
+// The on/off options the page can change, with the value the daemon assumes
+// when conf.lua leaves the key out (inform.lua tests some for == true, some
+// for == false). controller_system is the fourth kind: true, false, or a
+// {timezone = , ntp = , cron = } table where a missing part counts as on.
+const CONF = `${OPENUF}/conf.lua`;
+const TOGGLES = {
+	use_only_unifi_wlan: false,
+	sta_events: true,
+	l2guard: true,
+	rrm_enrichment: false
+};
+const SYSTEM_PARTS = [ 'timezone', 'ntp', 'cron' ];
+
+// These take effect when the controller next pushes its config, which it only
+// does for a device reporting a cfgversion other than the one it expects:
+// saving one also clears the cfgversion (syswrapper.sh reprovision).
+const NEEDS_PUSH = { use_only_unifi_wlan: true, l2guard: true, controller_system: true };
+
+// conf.lua as lines, and the span of its top-level `config = { ... }` table.
+function conf_lines() {
+	const src = readfile(CONF);
+	if (src == null)
+		return null;
+	const lines = split(src, '\n');
+	let first = -1, last = -1;
+	for (let i = 0; i < length(lines); i++) {
+		if (first < 0 && match(lines[i], /^config[ \t]*=[ \t]*\{[ \t]*$/))
+			first = i;
+		else if (first >= 0 && match(lines[i], /^\}/)) {
+			last = i;
+			break;
+		}
+	}
+	return (first >= 0 && last > first) ? { lines, first, last } : null;
+}
+
+// A key's `key = value,` line inside the config table: its index, the text up
+// to the value, the value as written and whatever follows it (comma,
+// comment). `plain` is false for anything but true/false/nil or a one-line
+// table, which the page then leaves to a hand edit.
+function conf_entry(c, key) {
+	const re = regexp('^([ \t]*' + key + '[ \t]*=[ \t]*)(.*)$');
+	let found = null;
+	for (let i = c.first + 1; i < c.last; i++) {
+		const m = match(c.lines[i], re);
+		if (!m)
+			continue;
+		if (found)
+			return { plain: false };
+		const v = match(m[2], /^(true|false|nil|\{[^{}]*\})([ \t]*(,.*|--.*)?)$/);
+		found = v ? { idx: i, prefix: m[1], value: v[1], rest: v[2] ?? '', plain: true }
+			: { idx: i, plain: false };
+	}
+	return found;
+}
+
+function system_parts(value) {
+	const out = {};
+	for (let p in SYSTEM_PARTS)
+		out[p] = (value == null || value == 'true' || value == 'nil') ? true
+			: (value == 'false') ? false
+			: !match(value, regexp('[{,][ \t]*' + p + '[ \t]*=[ \t]*false'));
+	return out;
+}
+
+// Current values as the daemon reads them, and which keys are not plain.
+function read_settings(c) {
+	const values = {}, locked = [];
+	for (let key, def in TOGGLES) {
+		const e = c ? conf_entry(c, key) : null;
+		if (e && !e.plain)
+			push(locked, key);
+		values[key] = (e?.plain && e.value != 'nil') ? (e.value == 'true') : def;
+	}
+	const e = c ? conf_entry(c, 'controller_system') : null;
+	if (e && !e.plain)
+		push(locked, 'controller_system');
+	const parts = system_parts(e?.plain ? e.value : null);
+	for (let p in SYSTEM_PARTS)
+		values['system_' + p] = parts[p];
+	return { values, locked, editable: !!c };
+}
+
+function conf_put(c, key, value) {
+	const e = conf_entry(c, key);
+	if (e)
+		c.lines[e.idx] = e.prefix + value + e.rest;
+	else {
+		splice(c.lines, c.last, 0, `\t${key} = ${value},`);
+		c.last++;
+	}
+}
+
+// What the daemon will actually see in a conf.lua (path in P): loaded by Lua
+// itself, with dofile stubbed so the model map (board detection) does not run.
+const VERIFY_LUA = 'dofile = function() return {} end ' +
+	'local f = assert(loadfile(P)) f() local c = config or {} ' +
+	'local g = c.controller_system ' +
+	'print("use_only_unifi_wlan=" .. tostring(c.use_only_unifi_wlan == true)) ' +
+	'print("sta_events=" .. tostring(c.sta_events ~= false)) ' +
+	'print("l2guard=" .. tostring(c.l2guard ~= false)) ' +
+	'print("rrm_enrichment=" .. tostring(not not c.rrm_enrichment)) ' +
+	'for _, p in ipairs({"timezone", "ntp", "cron"}) do ' +
+	'print("system_" .. p .. "=" .. tostring(g == nil or g == true or (type(g) == "table" and g[p] ~= false))) end';
+
+function lua_read(path) {
+	const p = popen(`lua -e 'P = "${path}" ${VERIFY_LUA}' 2>/dev/null`);
+	if (!p)
+		return null;
+	const out = {};
+	for (let line in split(p.read('all') ?? '', '\n')) {
+		const m = match(line, /^([a-z0-9_]+)=(true|false)$/);
+		if (m)
+			out[m[1]] = (m[2] == 'true');
+	}
+	p.close();
+	return out;
+}
+
+function set_settings(args) {
+	const c = conf_lines();
+	if (!c)
+		return { error: 'conf.lua has no top-level "config = {" table to edit' };
+	const cur = read_settings(c);
+	const want = { ...cur.values };
+	const changed = [];
+	let push_needed = false;
+
+	for (let key in keys(TOGGLES)) {
+		if (args[key] == null || args[key] === cur.values[key])
+			continue;
+		if (key in cur.locked)
+			return { error: `${key} is not a plain true/false in conf.lua; edit it there` };
+		want[key] = !!args[key];
+		conf_put(c, key, want[key] ? 'true' : 'false');
+		push(changed, key);
+		if (NEEDS_PUSH[key])
+			push_needed = true;
+	}
+
+	let sys_changed = false;
+	for (let p in SYSTEM_PARTS) {
+		const a = args['system_' + p];
+		if (a != null && a !== cur.values['system_' + p]) {
+			want['system_' + p] = !!a;
+			sys_changed = true;
+		}
+	}
+	if (sys_changed) {
+		if ('controller_system' in cur.locked)
+			return { error: 'controller_system is not a one-line value in conf.lua; edit it there' };
+		const t = want.system_timezone, n = want.system_ntp, r = want.system_cron;
+		conf_put(c, 'controller_system', (t && n && r) ? 'true' : (!t && !n && !r) ? 'false'
+			: sprintf('{timezone = %s, ntp = %s, cron = %s}', t, n, r));
+		push(changed, 'controller_system');
+		push_needed = true;
+	}
+
+	if (!length(changed))
+		return { changed: [] };
+
+	// Write beside the original, have Lua read it back, and only then swap.
+	const tmp = `${CONF}.new`;
+	if (!writefile(tmp, join('\n', c.lines)))
+		return { error: `cannot write ${tmp}` };
+	chmod(tmp, stat(CONF)?.mode & 4095 || 420);
+	const got = lua_read(tmp);
+	for (let key, v in want) {
+		if (got?.[key] !== v) {
+			unlink(tmp);
+			return { error: `conf.lua check failed: ${key} would read as ${got?.[key]}` };
+		}
+	}
+	if (!rename(tmp, CONF)) {
+		unlink(tmp);
+		return { error: `cannot replace ${CONF}` };
+	}
+
+	// The daemon reads conf.lua once, at start. Clear the cfgversion while it
+	// is stopped, or its next state save would put it back.
+	const was_running = running('inform.lua');
+	if (was_running)
+		system('/etc/init.d/openuf stop >/dev/null 2>&1');
+	if (push_needed)
+		system('/usr/bin/syswrapper.sh reprovision >/dev/null 2>&1');
+	if (was_running)
+		system('/etc/init.d/openuf start >/dev/null 2>&1');
+
+	return { changed, restarted: was_running, reprovision: push_needed };
 }
 
 // Catalogue entry for a model code: its product name, SKU, system id and
@@ -124,6 +318,16 @@ function unhandled() {
 }
 
 const methods = {
+	set_settings: {
+		args: {
+			use_only_unifi_wlan: true, sta_events: true, l2guard: true, rrm_enrichment: true,
+			system_timezone: true, system_ntp: true, system_cron: true
+		},
+		call: function(req) {
+			return set_settings(req.args ?? {});
+		}
+	},
+
 	unhandled: {
 		call: function() {
 			return unhandled();
@@ -197,7 +401,8 @@ const methods = {
 					unhandled: length(keys(json_file(`${STATE}/unhandled.json`)?.entries ?? {})),
 					blocked_clients: length(st.blocked_stas ?? [])
 				},
-				config: conf
+				config: conf,
+				settings: read_settings(conf_lines())
 			};
 		}
 	}

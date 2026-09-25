@@ -3,12 +3,23 @@
 'require rpc';
 'require ui';
 
-// openUF status (luci-app-openuf): read-only for now. Everything shown comes
-// from the luci.openuf rpcd backend (root/usr/share/rpcd/ucode/luci.openuf).
+// openUF status (luci-app-openuf). Everything shown comes from the
+// luci.openuf rpcd backend (root/usr/share/rpcd/ucode/luci.openuf); the
+// Settings toggles are its one write.
 
 const callStatus = rpc.declare({
 	object: 'luci.openuf',
 	method: 'status',
+	expect: { '': {} }
+});
+
+const SETTING_KEYS = [ 'use_only_unifi_wlan', 'sta_events', 'l2guard', 'rrm_enrichment',
+	'system_timezone', 'system_ntp', 'system_cron' ];
+
+const callSetSettings = rpc.declare({
+	object: 'luci.openuf',
+	method: 'set_settings',
+	params: SETTING_KEYS,
 	expect: { '': {} }
 });
 
@@ -46,6 +57,11 @@ function value(v, fallback) {
 	return (v === null || v === undefined || v === '') ? E('em', {}, fallback || _('not set')) : T(v);
 }
 
+// A settings row's label: the name with a line on what it does underneath.
+function described(label, text) {
+	return E('span', {}, [ label, E('div', { 'class': 'cbi-value-description' }, text) ]);
+}
+
 function section(title, rows) {
 	return E('div', { 'class': 'cbi-section' }, [
 		E('h3', {}, title),
@@ -77,6 +93,17 @@ return view.extend({
 			]);
 
 		const applied = ctl.cfgversion && ctl.cfgversion_effective === ctl.cfgversion;
+		const own = conf.own_config !== 'false';
+		const set = s.settings || {}, sv = set.values || {}, locked = set.locked || [];
+		const editable = set.editable && L.hasViewPermission();
+		const widgets = {}, initial = {};
+		const toggle = function(key, label, text) {
+			const fixed = locked.indexOf(key.replace(/^system_.*/, 'controller_system')) >= 0;
+			initial[key] = !!sv[key];
+			widgets[key] = new ui.Checkbox(sv[key] ? '1' : '0', { disabled: !editable || fixed });
+			return [ described(label, fixed ? _('Set by an expression in conf.lua; change it there.') : text),
+				widgets[key].render() ];
+		};
 		const ports = (hw.ports || []).map(function(p) {
 			return _('Port %d: %s').format(p.idx, p.ifname) + (p.ifname === hw.uplink ? ' ' + _('(uplink)') : '');
 		});
@@ -144,13 +171,32 @@ return view.extend({
 			]),
 
 			section(_('Settings'), [
-				[ _('Controller WLANs only'), yesno(conf.use_only_unifi_wlan !== 'false') ],
-				[ _('Connection events'), yesno(conf.sta_events !== 'false') ],
-				[ _('Controller time, NTP and cron'), yesno(conf.controller_system !== 'false') ],
-				[ _('L2 hardening'), yesno(conf.l2guard !== 'false') ],
-				[ _('802.11k neighbour reports'), yesno(conf.rrm_enrichment !== 'false') ],
+				toggle('use_only_unifi_wlan', _('Controller WLANs only'), own
+					? _('Removes SSIDs the controller did not create; the original wireless config is kept in /etc/openuf. Switching this off does not bring them back.')
+					: _('Disables SSIDs the controller did not create. Switching this off enables them again.')),
+				toggle('sta_events', _('Connection events'),
+					_('Reports clients connecting and leaving, for the controller\'s client history and connectivity view.')),
+				toggle('system_timezone', _('Controller timezone'),
+					_('Uses the site timezone set in the controller.')),
+				toggle('system_ntp', _('Controller NTP servers'),
+					_('Uses the controller\'s NTP servers. Switching this off keeps the current servers until you change them.')),
+				toggle('system_cron', _('Controller scheduled scan'),
+					_('Runs the controller\'s nightly neighbouring-AP scan. Switching this off removes the job.')),
+				toggle('l2guard', _('L2 hardening'),
+					_('Drops STP BPDUs and VLAN-tagged frames from WiFi clients, as UniFi APs do.')),
+				toggle('rrm_enrichment', _('802.11k neighbour reports'),
+					_('Asks 802.11k-capable clients to report the APs they can hear. A client that takes part spends about a second off-channel.')),
 				conf.country_override ? [ _('Regulatory override'), T(conf.country_override) ] : null,
 				conf.debug_dump_file ? [ _('Debug capture'), T(conf.debug_dump_file) ] : null
+			]),
+			E('div', { 'class': 'cbi-section' }, [
+				E('p', { 'class': 'cbi-value-description' },
+					_('Saving restarts openUF, which takes a few seconds. WLAN, system and L2 changes also have the controller send its configuration again, applied at the next check-in.')),
+				E('button', {
+					'class': 'btn cbi-button cbi-button-apply important',
+					'disabled': editable ? null : '',
+					'click': ui.createHandlerFn(this, 'handleSettingsSave', widgets, initial)
+				}, _('Save & Apply'))
 			]),
 
 			section(_('Diagnostics'), [
@@ -158,6 +204,35 @@ return view.extend({
 				[ _('Blocked clients'), T(diag.blocked_clients || 0) ]
 			])
 		]);
+	},
+
+	handleSettingsSave: function(widgets, initial) {
+		const want = {};
+		let n = 0;
+		SETTING_KEYS.forEach(function(k) {
+			if (widgets[k] && widgets[k].isChecked() !== initial[k]) {
+				want[k] = widgets[k].isChecked();
+				n++;
+			}
+		});
+		if (!n) {
+			ui.addNotification(null, E('p', {}, _('No settings changed.')), 'info');
+			return;
+		}
+		ui.showModal(_('Applying settings'), [
+			E('p', { 'class': 'spinning' }, _('Saving conf.lua and restarting openUF…'))
+		]);
+		return callSetSettings.apply(null, SETTING_KEYS.map(function(k) { return want[k]; })).then(function(r) {
+			if (r.error) {
+				ui.hideModal();
+				ui.addNotification(null, E('p', {}, T(_('Settings not saved: %s').format(r.error))), 'danger');
+				return;
+			}
+			window.location.reload();
+		}).catch(function(err) {
+			ui.hideModal();
+			ui.addNotification(null, E('p', {}, T(_('Settings not saved: %s').format(err.message || err))), 'danger');
+		});
 	},
 
 	handleSaveApply: null,

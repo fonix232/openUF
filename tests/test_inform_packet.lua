@@ -3779,4 +3779,32 @@ return {
 				orig.reload, orig.rrm, orig.nm
 		end
 	},
+	{
+		name = "inform: _release_disabled drops the nft tables and the cron job of features switched off",
+		fn = function()
+			local orig = {l2 = inform._l2guard, dw = inform._dnswatch, sc = inform._sysconf}
+			local calls = {}
+			inform._l2guard = {reconcile = function(spec) calls[#calls + 1] = "l2guard:" .. tostring(spec) end}
+			inform._dnswatch = {remove = function() calls[#calls + 1] = "dnswatch" end}
+			inform._sysconf = {
+				enabled = orig.sc.enabled,
+				apply_cron = function(c) calls[#calls + 1] = "cron:" .. tostring(c.enabled) end,
+			}
+			inform._release_disabled({config = {l2guard = false, sta_events = false, controller_system = false}})
+			assert_eq(table.concat(calls, ","), "l2guard:nil,dnswatch,cron:false", "all three released")
+
+			calls = {}
+			inform._release_disabled({config = {controller_system = {ntp = false}}})
+			assert_eq(table.concat(calls, ","), "", "defaults and a cron-keeping gate touch nothing")
+
+			calls = {}
+			inform._release_disabled({config = {controller_system = {cron = false}}})
+			assert_eq(table.concat(calls, ","), "cron:false", "cron switched off on its own")
+
+			calls = {}
+			inform._release_disabled(nil)
+			assert_eq(table.concat(calls, ","), "", "no config at all: nothing released")
+			inform._l2guard, inform._dnswatch, inform._sysconf = orig.l2, orig.dw, orig.sc
+		end
+	},
 }

@@ -4406,6 +4406,23 @@ function M._keep_conf_copy()
 	return true
 end
 
+-- A feature switched off in conf.lua (the LuCI settings restart the daemon to
+-- apply a change) takes its nft table or cron job with it at startup, instead
+-- of leaving the last run's state in place until a reboot. The timezone and
+-- NTP servers are the board's own settings and keep their last values.
+function M._release_disabled(cfg)
+	local c = cfg and cfg.config or {}
+	if M._l2guard and c.l2guard == false then
+		pcall(M._l2guard.reconcile, nil)
+	end
+	if M._dnswatch and c.sta_events == false then
+		pcall(M._dnswatch.remove)
+	end
+	if M._sysconf and not M._sysconf.enabled(c.controller_system, "cron") then
+		pcall(M._sysconf.apply_cron, {enabled = false})
+	end
+end
+
 function M.run(cfg, ufhw)
 	local st = state.load()
 	M._warn_debug_overrides(cfg)
@@ -4530,6 +4547,8 @@ function M.run(cfg, ufhw)
 	-- blocklist. A tap that is not reinstalled fails silently, as an empty
 	-- mac_table, which is the bug it exists to fix.
 	if M._switchvlan then pcall(M._switchvlan.reconcile_mac_taps) end
+	-- Features switched off in conf.lua drop what they installed.
+	M._release_disabled(cfg)
 	-- The controller's ebtables hardening (l2guard) is nft state as well.
 	if M._l2guard and type(st.l2guard) == "table"
 		and not (cfg and cfg.config and cfg.config.l2guard == false) then

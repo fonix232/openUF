@@ -332,6 +332,16 @@ More options (all in `conf.lua`, all optional):
 | `debug_dump_requests` | `false` | With `debug_dump_file`, also log what openUF sends (`TX`) and transport errors (`ERR`) |
 | `debug_caps`, `debug_payload_extra` | `nil` | Research only: override `fw_caps`/`wifi_caps`/`wifi_caps2`, merge extra payload fields. Logged loudly at every start |
 
+`use_only_unifi_wlan`, `sta_events`, the three parts of `controller_system`, `l2guard` and
+`rrm_enrichment` can also be switched from LuCI (**Services → openUF → Settings**). Saving
+rewrites just those lines of `conf.lua` (a key that is set by an expression rather than a
+plain `true`/`false` is left for a hand edit), has Lua read the file back before it replaces
+the original, and restarts the daemon. WLAN, system and L2 changes also clear the
+cfgversion (`syswrapper.sh reprovision`), because they only land when the controller pushes
+its config. A feature switched off takes its state with it at the next start: the L2 and
+DNS-answer nft tables are deleted and the controller's cron job is removed. The timezone
+and NTP servers keep their last values.
+
 A modelmap may also carry a per-band radio policy, for board limits the controller cannot
 know:
 

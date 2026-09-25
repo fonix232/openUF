@@ -1,9 +1,14 @@
 {
 	"luci-app-openuf": {
-		"description": "Grant access to the openUF status pages",
+		"description": "Grant access to the openUF status pages and settings",
 		"read": {
 			"ubus": {
 				"luci.openuf": [ "status", "unhandled" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"luci.openuf": [ "set_settings" ]
 			}
 		}
 	}

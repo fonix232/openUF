@@ -66,6 +66,11 @@ function M.ensure()
 	return ok
 end
 
+-- Drop the table: connection events are switched off (conf.lua sta_events).
+function M.remove()
+	M._exec("nft delete table " .. M.TABLE .. " >/dev/null 2>&1")
+end
+
 -- The set of client MACs that received a DNS answer recently: {mac -> true}.
 function M.seen()
 	local out = {}
