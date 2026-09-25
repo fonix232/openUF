@@ -58,7 +58,8 @@ done
 
 # Preserve the executable bit the installer relies on.
 chmod +x "$STAGE/etc/init.d/openuf" "$STAGE/hook/syswrapper.sh" \
-	"$STAGE/hook/adopt-shell.sh"
+	"$STAGE/hook/adopt-shell.sh" "$STAGE/hook/ssh-forwarding.sh" \
+	"$STAGE/etc/init.d/openuf-bootstrap" "$STAGE/etc/openuf-bootstrap.sh"
 
 # A build stamp naming this checkout, so `openuf-update --check` and the
 # daemon's status file can say what is running.

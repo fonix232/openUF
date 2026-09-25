@@ -219,6 +219,14 @@ end
 -- (the Olson name LuCI keeps alongside the string it derived) is moved to
 -- openuf_zonename_orig, since it now names a different zone. Returns true
 -- when something was written.
+-- A POSIX TZ string without its explicit transition times ("/1", "/3", ...):
+-- the controller sends "GMT0BST,M3.5.0,M10.5.0" for Europe/London, where
+-- OpenWrt's zoneinfo has "GMT0BST,M3.5.0/1,M10.5.0". Same zone, same rules,
+-- but the controller's form moves the clock change to 02:00 -- an hour off.
+function M.tz_zone(tz)
+	return (tostring(tz or ""):gsub("/[%d:+-]+", ""))
+end
+
 function M.apply_timezone(tz)
 	if not M.is_valid_tz(tz) then
 		if tz ~= nil then
@@ -230,7 +238,24 @@ function M.apply_timezone(tz)
 	local sec = system_section(cursor)
 	if not sec then return false end
 	local cur = cursor:get("system", sec, "timezone")
-	if cur == tz then return false end
+	-- The same zone in a more precise form wins: keep the board's string, or
+	-- put back the one stamped before an earlier push replaced it.
+	if cur and M.tz_zone(cur) == M.tz_zone(tz) then
+		local orig = cursor:get("system", sec, "openuf_timezone_orig")
+		if not (orig and orig ~= cur and M.tz_zone(orig) == M.tz_zone(tz)) then return false end
+		cursor:set("system", sec, "timezone", orig)
+		cursor:delete("system", sec, "openuf_timezone_orig")
+		local zn = cursor:get("system", sec, "openuf_zonename_orig")
+		if zn then
+			cursor:set("system", sec, "zonename", zn)
+			cursor:delete("system", sec, "openuf_zonename_orig")
+		end
+		cursor:commit("system")
+		io.stderr:write(("sysconf: timezone %s -> %s (the board's form of the controller's zone)\n")
+			:format(tostring(cur), orig))
+		M._exec("/etc/init.d/system reload >/dev/null 2>&1")
+		return true
+	end
 	if not cursor:get("system", sec, "openuf_timezone_orig") then
 		cursor:set("system", sec, "openuf_timezone_orig", cur or "UTC")
 	end

@@ -12,6 +12,8 @@ INSTALL_DIR=/opt/openuf
 STATE_DIR=/etc/openuf
 BIN_LINK=/usr/bin/syswrapper.sh
 INIT_SCRIPT=/etc/init.d/openuf
+BOOTSTRAP_INIT=/etc/init.d/openuf-bootstrap
+BOOTSTRAP_RC=/etc/rc.d/S98openuf-bootstrap
 
 # ── Package manager ─────────────────────────────────────────────────────────
 # OpenWrt 25.12 replaced opkg with apk. Both are supported: every package
@@ -171,7 +173,7 @@ case "$ACTION" in
 		# from this script, and carrying an old tree onto a new OpenWrt is how
 		# you get a silent version mismatch.
 		SYSUPGRADE_CONF=/etc/sysupgrade.conf
-		for keep in "$STATE_DIR/" "$INSTALL_DIR/conf.lua"; do
+		for keep in "$STATE_DIR/" "$INSTALL_DIR/conf.lua" "$BOOTSTRAP_INIT" "$BOOTSTRAP_RC"; do
 			if ! grep -qxF "$keep" "$SYSUPGRADE_CONF" 2>/dev/null; then
 				# A hand-edited file need not end in a newline, and
 				# appending straight onto one that does not splices our
@@ -202,6 +204,33 @@ case "$ACTION" in
 		# Install init.d service
 		cp openuf/etc/init.d/openuf "$INIT_SCRIPT"
 		chmod +x "$INIT_SCRIPT"
+
+		# ── Surviving a firmware upgrade ────────────────────────────────
+		# A sysupgrade that keeps settings (owut, LuCI attended sysupgrade,
+		# plain sysupgrade) restores $STATE_DIR and conf.lua -- registered
+		# above -- but not this code or its init script, so the AP would come
+		# back adopted and silent. The bootstrap service (kept too) reinstalls
+		# openUF on the new image's first boot, from a copy of THIS build
+		# kept in $STATE_DIR/dist: the same version, no network or release
+		# needed for the code itself.
+		mkdir -p "$STATE_DIR/dist"
+		_files=""
+		for _f in openuf install.sh update.sh LICENSE; do
+			[ -e "$_f" ] && _files="$_files $_f"
+		done
+		# shellcheck disable=SC2086
+		if tar czf "$STATE_DIR/dist/openuf.tar.gz.tmp" $_files 2>/dev/null; then
+			mv "$STATE_DIR/dist/openuf.tar.gz.tmp" "$STATE_DIR/dist/openuf.tar.gz"
+		else
+			rm -f "$STATE_DIR/dist/openuf.tar.gz.tmp"
+			echo "Warning: could not keep a copy of this build in $STATE_DIR/dist;"
+			echo "  a firmware upgrade will reinstall openUF from GitHub instead."
+		fi
+		cp openuf/etc/openuf-bootstrap.sh "$STATE_DIR/bootstrap.sh"
+		chmod 0755 "$STATE_DIR/bootstrap.sh"
+		cp openuf/etc/init.d/openuf-bootstrap "$BOOTSTRAP_INIT"
+		chmod 0755 "$BOOTSTRAP_INIT"
+		"$BOOTSTRAP_INIT" enable 2>/dev/null
 
 		# ── Dependencies, now that openUF itself is safely installed ──────
 		# REQUIRED: openUF cannot function without these. They may already be
@@ -422,6 +451,14 @@ case "$ACTION" in
 		# Remove symlink
 		rm -f "$BIN_LINK" /usr/bin/openuf-update
 
+		# The upgrade bootstrap and its copy of the build: left in place they
+		# would reinstall openUF on the next boot.
+		if [ -f "$BOOTSTRAP_INIT" ]; then
+			"$BOOTSTRAP_INIT" disable 2>/dev/null
+			rm -f "$BOOTSTRAP_INIT"
+		fi
+		rm -rf "$STATE_DIR/dist" "$STATE_DIR/bootstrap.sh" "$STATE_DIR/bootstrap.conf"
+
 		# Remove the SSH bootstrap account/group if present (hygiene --
 		# symmetric with what install --bootstrap-adopt added, regardless of
 		# whether that flag is passed here).
@@ -453,8 +490,8 @@ case "$ACTION" in
 			if [ ! -f "$SU_TMP" ]; then
 				echo "Warning: mktemp failed, leaving /etc/sysupgrade.conf alone."
 			else
-				grep -vxF -e "$INSTALL_DIR/conf.lua" \
-					/etc/sysupgrade.conf > "$SU_TMP"
+				grep -vxF -e "$INSTALL_DIR/conf.lua" -e "$BOOTSTRAP_INIT" \
+					-e "$BOOTSTRAP_RC" /etc/sysupgrade.conf > "$SU_TMP"
 				su_rc=$?
 				# 0 is matches; 1 is an empty result, legitimate here (the
 				# file held nothing else). 2 is an error, and the temp file

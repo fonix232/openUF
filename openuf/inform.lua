@@ -241,12 +241,15 @@ end
 -- not enabled). Idempotent -- locking an already-locked account (or
 -- unlocking an already-unlocked one) is a harmless no-op on BusyBox/shadow
 -- passwd, so callers never need to track prior state themselves.
+-- The account's password is public, so TCP forwarding is off for as long as
+-- it is usable (hook/ssh-forwarding.sh), in the same command as the unlock.
+M.SSH_FORWARDING_HOOK = "/opt/openuf/hook/ssh-forwarding.sh"
 function M._sync_bootstrap_account(adopted, user)
 	if not user then return end
 	if adopted then
-		M._run_cmd("passwd -l '" .. user .. "'")
+		M._run_cmd("passwd -l '" .. user .. "'; sh " .. M.SSH_FORWARDING_HOOK .. " restore")
 	else
-		M._run_cmd("passwd -u '" .. user .. "'")
+		M._run_cmd("sh " .. M.SSH_FORWARDING_HOOK .. " lock; passwd -u '" .. user .. "'")
 	end
 end
 
@@ -3402,6 +3405,10 @@ function M.handle_response(json_str, st, cfg)
 					spec.ifnames = names
 					st.l2guard = spec
 					M._l2guard.reconcile(spec, names)
+					-- A push lands mid `wifi reload`, before the VAPs exist: try
+					-- again on a later heartbeat instead of waiting for the
+					-- next push, which may be days away.
+					M._l2guard_retry = (#names == 0) and (spec.bpdu or spec.tagdrop) or nil
 				end)
 			end
 		end
@@ -4180,6 +4187,18 @@ function M._tick(st, cfg, ufhw, ctx)
 	elseif now >= ctx.next_netinfo then
 		ctx.next_netinfo = now + 300
 		pcall(M._populate_net_info, st, cfg)
+	end
+	-- The L2 hardening a push could not apply because the VAPs were not up yet.
+	if M._l2guard_retry and type(st.l2guard) == "table" then
+		pcall(function()
+			local names = M._ucihelper.all_vap_ifnames()
+			if #names > 0 then
+				st.l2guard.ifnames = names
+				M._l2guard.reconcile(st.l2guard, names)
+				M._state.save(st)
+				M._l2guard_retry = nil
+			end
+		end)
 	end
 	-- The controller's nightly `syswrapper.sh 11k-scan` (its cron job, see
 	-- sysconf.lua): make the next 802.11k beacon request due now.

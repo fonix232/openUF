@@ -206,4 +206,59 @@ return {
 			assert_eq(after.cfgversion_effective, "abc123", "the applied record untouched")
 		end
 	},
+	{
+		name = "adopt-shell: accepts 10.6's /usr/bin form and a matching MAC, refuses the rest",
+		fn = function()
+			local dir = "/tmp/openuf_test_adoptshell_" .. tostring(os.time())
+			os.execute("mkdir -p " .. dir)
+			local f = io.open(dir .. "/sw", "w")
+			f:write("#!/bin/sh\necho RAN \"$@\"\n")
+			f:close()
+			os.execute("chmod +x " .. dir .. "/sw")
+			f = io.open(dir .. "/state.json", "w")
+			f:write('{"mac":"00:00:5e:00:53:3e","adopted":false}')
+			f:close()
+			local key = string.rep("ab", 16)
+			local function run(cmd)
+				local h = io.popen("OPENUF_SYSWRAPPER=" .. dir .. "/sw OPENUF_STATE=" .. dir
+					.. "/state.json sh openuf/hook/adopt-shell.sh -c '" .. cmd .. "' 2>&1")
+				local out = h:read("*a")
+				h:close()
+				return out
+			end
+			local url = "http://10.0.0.1:8080/inform"
+			assert_true(run("syswrapper.sh set-adopt " .. url .. " " .. key):find("RAN set%-adopt") ~= nil,
+				"bare form")
+			assert_true(run("/usr/bin/syswrapper.sh set-adopt " .. url .. " " .. key):find("RAN set%-adopt") ~= nil,
+				"10.6 absolute path")
+			assert_true(run("/usr/bin/syswrapper.sh set-adopt " .. url .. " " .. key .. " 00:00:5E:00:53:3E")
+				:find("RAN set%-adopt " .. url .. " " .. key .. "\n", 1, true) == nil
+				and run("/usr/bin/syswrapper.sh set-adopt " .. url .. " " .. key .. " 00:00:5E:00:53:3E")
+				:find("RAN set-adopt", 1, true) ~= nil, "own MAC, any case; not passed on")
+			assert_true(run("/usr/bin/syswrapper.sh set-adopt " .. url .. " " .. key .. " 00:11:22:33:44:55")
+				:find("not this device", 1, true) ~= nil, "another device's MAC refused")
+			assert_true(run("/bin/sh -c id"):find("not permitted", 1, true) ~= nil, "other commands refused")
+			assert_true(run("syswrapper.sh set-adopt " .. url .. " " .. key .. "; id")
+				:find("RAN", 1, true) == nil, "no command chaining")
+			os.execute("rm -rf " .. dir)
+		end
+	},
+	{
+		name = "bootstrap: the first-boot script embeds the repo's bootstrap worker and service verbatim",
+		fn = function()
+			local function read(path)
+				local f = assert(io.open(path, "r"))
+				local t = f:read("*a")
+				f:close()
+				return t
+			end
+			local fb = read("contrib/asu/openuf-firstboot.sh")
+			local worker = fb:match("cat > /etc/openuf/bootstrap.sh <<'WORKER'\n(.-)\nWORKER\n")
+			local service = fb:match("cat > /etc/init.d/openuf%-bootstrap <<'SERVICE'\n(.-)\nSERVICE\n")
+			assert_eq(worker, (read("openuf/etc/openuf-bootstrap.sh"):gsub("\n+$", "")),
+				"worker drifted: copy openuf/etc/openuf-bootstrap.sh into openuf-firstboot.sh")
+			assert_eq(service, (read("openuf/etc/init.d/openuf-bootstrap"):gsub("\n+$", "")),
+				"service drifted: copy openuf/etc/init.d/openuf-bootstrap into openuf-firstboot.sh")
+		end
+	},
 }

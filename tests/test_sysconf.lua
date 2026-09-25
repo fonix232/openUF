@@ -295,4 +295,24 @@ return {
 			assert_eq(sysconf.apply(nil).timezone, nil, "nil parsed -> nothing")
 		end
 	},
+	{
+		name = "sysconf: the controller's less precise form of the same zone keeps the board's string",
+		fn = function()
+			local db = system_db("GMT0BST,M3.5.0/1,M10.5.0", "Europe/London", nil)
+			fresh(db)
+			assert_false(sysconf.apply_timezone("GMT0BST,M3.5.0,M10.5.0"), "same zone: nothing written")
+			assert_eq(db.system.cfg01.timezone, "GMT0BST,M3.5.0/1,M10.5.0", "board's precise form kept")
+			-- An earlier push already replaced it: the stamped original comes back.
+			local db2 = system_db("GMT0BST,M3.5.0,M10.5.0", nil, nil)
+			db2.system.cfg01.openuf_timezone_orig = "GMT0BST,M3.5.0/1,M10.5.0"
+			db2.system.cfg01.openuf_zonename_orig = "Europe/London"
+			fresh(db2)
+			with_stderr(function()
+				assert_true(sysconf.apply_timezone("GMT0BST,M3.5.0,M10.5.0"), "restored")
+			end)
+			assert_eq(db2.system.cfg01.timezone, "GMT0BST,M3.5.0/1,M10.5.0", "precise form back")
+			assert_eq(db2.system.cfg01.zonename, "Europe/London", "zonename back")
+			assert_nil(db2.system.cfg01.openuf_timezone_orig, "stamp removed")
+		end
+	},
 }
