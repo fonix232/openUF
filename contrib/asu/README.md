@@ -16,7 +16,18 @@ Three ways to get openUF into an image, all built from the same two files:
 
 ## What happens on the device
 
-1. **First boot.** The script writes `/etc/openuf/bootstrap.{conf,sh}` and
+1. **First boot.** With `AP_MODE=1` (the default), a board openUF has never run on
+   is turned into an AP that is ready to adopt:
+   - every Ethernet socket joins one `br-lan`, so the uplink can go into any socket;
+   - management gets its address by DHCP;
+   - the DHCP/RA server, the firewall and the `wan`/`wan6` interfaces are switched off;
+   - every SSID is deleted and the radios are enabled, so nothing is on the air
+     until the controller provisions its WLANs.
+
+   On a DSA board the bridge backend becomes `vlan_filtering`, so the controller's
+   first push takes the bridge over. This happens only once: a later image's first
+   boot finds `/etc/openuf/ap-mode.done` or `state.json` and leaves the network alone.
+   Then the script writes `/etc/openuf/bootstrap.{conf,sh}` and
    enables `/etc/init.d/openuf-bootstrap`. It puts both, plus openUF's state, on the
    sysupgrade keep-list. If owut is present, it registers the packages so future
    `owut upgrade` builds keep them. This part runs before the network is up.
@@ -26,7 +37,9 @@ Three ways to get openUF into an image, all built from the same two files:
    It then runs `install.sh install` and, on a first install only, applies the
    settings:
    - `MODELMAP` (`auto` derives the ports, uplink, identity MAC and LED from
-     `/etc/board.json`);
+     `/etc/board.json`, and picks the closest UniFi model from the controller's
+     own registry: a 5-socket WiFi 6 board is a U6-IW, a 1-socket one a U6-Pro,
+     an 802.11ac router a UAP-IW-HD);
    - `INFORM_URL`;
    - `BRIDGE_BACKEND`;
    - `L2_ANNOUNCE`.
@@ -52,7 +65,10 @@ again, and the controller sees a new, pending device.
   by one VLAN-filtering `br-lan`. It carries management (including a Management
   VLAN), the WLAN VLANs, and the per-port VLANs. Every change rolls back
   automatically if the controller is unreachable 180 s after it is applied.
-  `auto` picks this whenever the uplink is already in a VLAN-filtering bridge.
+  `auto` picks this whenever the uplink is already in a VLAN-filtering bridge, and
+  on every DSA board set up by `AP_MODE`.
+- **`AP_MODE=0`.** Keep the board's own network and WiFi as they are. Use this for
+  a board you have already set up by hand as an AP.
 - **`OPENUF_REF`.** Pin a tag for reproducible images. With `latest`, whatever is
   released on the day of the first boot gets installed.
 

@@ -113,6 +113,8 @@ def main():
     ap.add_argument("--modelmap", help="MODELMAP")
     ap.add_argument("--bridge-backend", choices=["auto", "vlan_filtering", "bridges"])
     ap.add_argument("--l2-announce", choices=["0", "1"])
+    ap.add_argument("--ap-mode", choices=["0", "1"],
+                    help="AP_MODE: 1 = a fresh board boots as a bridge with no SSIDs, ready to adopt")
     ap.add_argument("--rootfs-size", type=int, help="rootfs_size_mb (READ the ASU docs first)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
@@ -128,6 +130,7 @@ def main():
         "OPENUF_REPO": a.repo, "OPENUF_REF": a.ref, "OPENUF_SHA256": a.sha256,
         "OPENUF_URL": a.url, "INFORM_URL": a.inform_url, "MODELMAP": a.modelmap,
         "BRIDGE_BACKEND": a.bridge_backend, "L2_ANNOUNCE": a.l2_announce,
+        "AP_MODE": a.ap_mode,
     })
     body = {
         "target": target, "profile": profile, "version": version,

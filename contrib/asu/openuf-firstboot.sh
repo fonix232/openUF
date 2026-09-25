@@ -28,9 +28,69 @@ MODELMAP="auto"                 # auto (derive from /etc/board.json) or a map na
 BRIDGE_BACKEND="auto"           # auto | vlan_filtering (controller owns the bridge) | bridges
 L2_ANNOUNCE="0"                 # 1: broadcast L2 discovery (the controller adopts over SSH)
 REGISTER_OWUT="1"               # 1: keep these packages in future `owut upgrade` builds
+AP_MODE="1"                     # 1: a fresh board boots as an AP ready to adopt (below)
 # ─────────────────────────────────────────────────────────────────────────────
 
 mkdir -p /etc/openuf
+
+# ─── Ready-to-adopt AP mode ──────────────────────────────────────────────────
+# A fresh OpenWrt is a router: sockets split into LAN and WAN, a DHCP server,
+# NAT, and a default "OpenWrt" SSID. An AP waiting for its controller is none
+# of those, so on a board openUF has never run on:
+#   * every Ethernet socket joins ONE bridge -- any socket can be the uplink --
+#     and the management address comes from DHCP on it
+#   * no DHCP/RA server, no firewall/NAT, no wan/wan6 interfaces
+#   * no SSIDs at all; the radios are enabled so the controller's WLANs can
+#     come up the moment they are provisioned
+# Never again after that: uci-defaults also run on the first boot of every
+# LATER image (owut upgrade, sysupgrade keeping settings), when the network
+# already belongs to the controller. state.json and the ap-mode marker are both
+# on the sysupgrade keep-list below.
+if [ "$AP_MODE" = 1 ] && [ ! -f /etc/openuf/state.json ] && [ ! -f /etc/openuf/ap-mode.done ]; then
+	bj=/etc/board.json
+	ports=$(jsonfilter -i "$bj" -e '@.network.lan.ports[*]' 2>/dev/null)
+	[ -n "$ports" ] || ports=$(jsonfilter -i "$bj" -e '@.network.lan.device' 2>/dev/null)
+	ports="$ports $(jsonfilter -i "$bj" -e '@.network.wan.device' 2>/dev/null)"
+	if [ -n "$(echo $ports)" ]; then
+		# Whatever bridge the defaults built goes; one owned by this script
+		# replaces it under the same name, so `lan` keeps pointing at br-lan.
+		for s in $(uci -X -q show network | sed -n "s/^network\.\([^.=]*\)=device$/\1/p"); do
+			[ "$(uci -q get "network.$s.type")" = bridge ] && uci -q delete "network.$s"
+		done
+		uci set network.openuf_ap=device
+		uci set network.openuf_ap.name=br-lan
+		uci set network.openuf_ap.type=bridge
+		for p in $ports; do uci add_list network.openuf_ap.ports="$p"; done
+		uci set network.lan.device=br-lan
+		uci set network.lan.proto=dhcp
+		for o in ipaddr netmask ip6assign gateway dns; do uci -q delete "network.lan.$o"; done
+		uci -q delete network.wan
+		uci -q delete network.wan6
+		uci commit network
+	fi
+	uci -q set dhcp.lan.ignore=1
+	uci -q set dhcp.lan.dhcpv6=disabled
+	uci -q set dhcp.lan.ra=disabled
+	uci -q commit dhcp
+	for svc in dnsmasq odhcpd firewall; do
+		[ -x "/etc/init.d/$svc" ] && "/etc/init.d/$svc" disable
+	done
+	[ -f /etc/config/wireless ] || wifi config >/dev/null 2>&1
+	for s in $(uci -X -q show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-iface$/\1/p"); do
+		uci -q delete "wireless.$s"
+	done
+	for r in $(uci -X -q show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-device$/\1/p"); do
+		uci set "wireless.$r.disabled=0"
+	done
+	uci -q commit wireless
+	date > /etc/openuf/ap-mode.done
+fi
+# An AP-mode DSA board: the controller owns the bridge from its first push
+# (netmodel.lua). A swconfig board has no per-socket netdevs to filter.
+if [ -f /etc/openuf/ap-mode.done ] && [ "$BRIDGE_BACKEND" = auto ] \
+		&& ! jsonfilter -i /etc/board.json -e '@.switch' >/dev/null 2>&1; then
+	BRIDGE_BACKEND=vlan_filtering
+fi
 
 cat > /etc/openuf/bootstrap.conf <<EOF
 OPENUF_REPO='$OPENUF_REPO'
