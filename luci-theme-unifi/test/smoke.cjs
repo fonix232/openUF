@@ -57,7 +57,7 @@ async function settle(page) {
 	await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
 
 	/* Attended Sysupgrade asks once whether it may check online; say no. */
-	const nag = page.locator('.modal button', { hasText: 'No, disable checking' });
+	const nag = page.locator('.modal .btn, .modal button', { hasText: 'No, disable checking' });
 
 	if (await nag.count()) {
 		await nag.click();

@@ -57,6 +57,10 @@ docker exec "$name" sh -c "printf '%s\n%s\n' '$password' '$password' | passwd ro
 docker exec "$name" sh -c 'cat /etc/openwrt_release' | sed -n "s/^DISTRIB_DESCRIPTION=/testing on /p"
 docker exec -i "$name" sh -c 'cat > /etc/config/wireless' < "$here/fixtures/wireless"
 
+# Answer Attended Sysupgrade's one-time "check online for upgrades?" prompt,
+# which otherwise opens over the Status overview on every visit.
+docker exec "$name" sh -c 'uci -q set attendedsysupgrade.client.login_check_for_upgrades=0 && uci commit attendedsysupgrade' || true
+
 # LuCI packages the image lacks, from a sparse checkout cached in test/.cache.
 if [ -n "$packages" ]; then
 	luci="$here/.cache/luci-$branch"

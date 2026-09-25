@@ -4150,3 +4150,4692 @@ body.uf-blank {
 		padding: 16px;
 	}
 }
+
+/* ==== page: dashboard ==== */
+
+/* luci-mod-dashboard, drawn as UniFi Network's Dashboard: KPI tiles with a
+ * tinted icon, thin-line charts on a faint grid, and the detail tabs as
+ * label/value rows. The module's custom.css lays out the grids and colours
+ * its charts from --dashboard-* variables; it is loaded after this file, so
+ * rules here carry one more class than the ones they replace.
+ *
+ * Everything is scoped by .Dashboard, not by data-page: the dashboard is
+ * also what /cgi-bin/luci/ and /cgi-bin/luci/admin render after sign-in. */
+
+:root {
+	--uf-dashboard-lime: #a4b81c;
+	--uf-dashboard-pink: #e0569f;
+	--uf-dashboard-area: .12;
+	--uf-dashboard-i-down: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'><path d='M12 4.5v15M6 13.5l6 6 6-6'/></svg>");
+	--uf-dashboard-i-up: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'><path d='M12 19.5v-15M6 10.5l6-6 6 6'/></svg>");
+	--uf-dashboard-i-grip: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='9' cy='6' r='1.6'/><circle cx='15' cy='6' r='1.6'/><circle cx='9' cy='12' r='1.6'/><circle cx='15' cy='12' r='1.6'/><circle cx='9' cy='18' r='1.6'/><circle cx='15' cy='18' r='1.6'/></svg>");
+}
+
+:root[data-darkmode="true"] {
+	--uf-dashboard-lime: #c3d84a;
+	--uf-dashboard-pink: #f07bbb;
+	--uf-dashboard-area: .2;
+}
+
+/* The module sets its variables on .Dashboard, once more for dark mode and
+ * again under prefers-color-scheme; setting them one level down wins over
+ * all three without a specificity race. Series follow UniFi's palette:
+ * CPU blue, memory green, then purple, cyan and the rest. */
+.Dashboard > * {
+	--dashboard-text: var(--uf-text-1);
+	--dashboard-text-muted: var(--uf-text-3);
+	--dashboard-border: var(--uf-border);
+	--dashboard-surface-alt: var(--uf-field);
+	--dashboard-primary: var(--uf-blue);
+	--dashboard-success: var(--uf-green);
+	--dashboard-warn: var(--uf-orange);
+	--dashboard-series-1: var(--uf-blue);
+	--dashboard-series-2: var(--uf-green);
+	--dashboard-series-3: var(--uf-purple);
+	--dashboard-series-4: var(--uf-cyan);
+	--dashboard-series-5: var(--uf-orange);
+	--dashboard-series-6: var(--uf-dashboard-lime);
+	--dashboard-series-7: var(--uf-dashboard-pink);
+	--dashboard-series-8: var(--uf-text-4);
+}
+
+/* A dashboard is a wall of widgets and, like UniFi's, uses a wide screen;
+ * the base width suits forms, not charts. */
+.uf-page:has(> #view > .Dashboard) {
+	max-width: 1720px;
+}
+
+/* KPI tiles: a small tertiary label, a big number, a tinted icon. */
+.Dashboard .dashboard-kpi-row > .dashboard-kpi {
+	gap: 14px;
+	min-height: 88px;
+	padding: 16px 20px;
+}
+
+.Dashboard .dashboard-kpi-icon {
+	width: 40px;
+	height: 40px;
+	border-radius: var(--uf-radius);
+	background: var(--uf-blue-soft);
+	color: var(--uf-blue);
+}
+
+.Dashboard .dashboard-kpi-icon::after {
+	inset: 9px;
+}
+
+/* Tints follow the charts (memory is green there) and the state. */
+.Dashboard .dashboard-kpi-icon[style*="/memory.svg"],
+.Dashboard .dashboard-kpi-icon[style*="/internet.svg"] {
+	background: rgba(var(--uf-green-rgb), .14);
+	color: var(--uf-green-text);
+}
+
+.Dashboard .dashboard-kpi-icon[style*="/not-internet.svg"] {
+	background: rgba(var(--uf-red-rgb), .12);
+	color: var(--uf-red-text);
+}
+
+.Dashboard .dashboard-kpi-text > small:first-child {
+	display: block;
+	color: var(--uf-text-3);
+	font-size: 12px;
+	line-height: 16px;
+}
+
+.Dashboard .dashboard-kpi-value {
+	margin: 2px 0 1px;
+	color: var(--uf-text-1);
+	font-size: 22px;
+	font-weight: 600;
+	line-height: 28px;
+	letter-spacing: -.01em;
+	font-variant-numeric: tabular-nums;
+}
+
+.Dashboard .dashboard-kpi-sub {
+	color: var(--uf-text-3);
+	font-size: 12px;
+	line-height: 16px;
+	font-variant-numeric: tabular-nums;
+}
+
+.Dashboard .dashboard-kpi-sub em {
+	font-style: normal;
+}
+
+/* Chart cards: title, a tertiary caption, then the plot. */
+.Dashboard .dashboard-charts > .cbi-section > h3 {
+	margin: 0;
+	font-size: 14px;
+	line-height: 20px;
+}
+
+.Dashboard .dashboard-charts > .cbi-section > .cbi-section-descr {
+	margin: 2px 0 16px;
+	color: var(--uf-text-3);
+	font-size: 12px;
+	line-height: 16px;
+}
+
+.Dashboard .dashboard-bars-axis,
+.Dashboard .dashboard-lines-time,
+.Dashboard .dashboard-bars-label {
+	color: var(--uf-text-3);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+}
+
+/* Faint grid, a firmer baseline (the first tick is always the lowest). */
+.Dashboard .dashboard-bars-grid i {
+	border-top-color: var(--uf-border);
+}
+
+.Dashboard .dashboard-bars-grid i:first-child {
+	border-top-color: var(--uf-border-strong);
+}
+
+.Dashboard .dashboard-lines-plot svg polyline {
+	stroke-width: 1.5;
+}
+
+.Dashboard .dashboard-lines-plot svg polygon {
+	opacity: var(--uf-dashboard-area);
+}
+
+.Dashboard .dashboard-bars-stack i {
+	max-width: 16px;
+	border-radius: 3px 3px 0 0;
+}
+
+.Dashboard .dashboard-bars-col:hover .dashboard-bars-stack i {
+	filter: none;
+	opacity: .8;
+}
+
+/* Legends: small coloured squares, tertiary names, values in primary. */
+.Dashboard .dashboard-legend-inline {
+	gap: 6px 16px;
+	margin-top: 14px;
+	color: var(--uf-text-3);
+	font-size: 12px;
+	line-height: 16px;
+}
+
+.Dashboard .dashboard-legend-inline i {
+	flex: 0 0 auto;
+	width: 8px;
+	height: 8px;
+	border-radius: 2px;
+}
+
+.Dashboard .dashboard-legend-inline b {
+	color: var(--uf-text-1);
+	font-weight: 500;
+	font-variant-numeric: tabular-nums;
+}
+
+/* WAN traffic is a throughput chart: download cyan with a down arrow,
+ * upload purple with an up arrow. Line charts get that, and System load
+ * gets CPU blue and memory green back: it is the one that fills only its
+ * first series and draws memory as a bare line. Told apart by structure,
+ * not by title, so it holds in every language and while WAN is empty. */
+.Dashboard .dashboard-charts > .cbi-section:has(.dashboard-lines-plot) {
+	--dashboard-series-1: var(--uf-cyan);
+	--dashboard-series-2: var(--uf-purple);
+}
+
+.Dashboard .dashboard-charts > .cbi-section:has(.dashboard-lines-plot) .dashboard-legend-inline i {
+	width: 10px;
+	height: 12px;
+	border-radius: 0;
+	-webkit-mask: var(--uf-dashboard-i-down) center / contain no-repeat;
+	mask: var(--uf-dashboard-i-down) center / contain no-repeat;
+}
+
+.Dashboard .dashboard-charts > .cbi-section:has(.dashboard-lines-plot) .dashboard-legend-inline i.dashboard-series-2 {
+	-webkit-mask-image: var(--uf-dashboard-i-up);
+	mask-image: var(--uf-dashboard-i-up);
+}
+
+.Dashboard .dashboard-charts > .cbi-section:has(.dashboard-lines-plot) .dashboard-legend-inline span:nth-child(1) b {
+	color: var(--uf-cyan);
+}
+
+.Dashboard .dashboard-charts > .cbi-section:has(.dashboard-lines-plot) .dashboard-legend-inline span:nth-child(2) b {
+	color: var(--uf-purple);
+}
+
+.Dashboard .dashboard-charts > .cbi-section:has(polyline.dashboard-series-2):not(:has(polygon.dashboard-series-2)) {
+	--dashboard-series-1: var(--uf-blue);
+	--dashboard-series-2: var(--uf-green);
+}
+
+.Dashboard .dashboard-charts > .cbi-section:has(polyline.dashboard-series-2):not(:has(polygon.dashboard-series-2)) .dashboard-legend-inline i {
+	width: 8px;
+	height: 8px;
+	border-radius: 2px;
+	-webkit-mask: none;
+	mask: none;
+}
+
+.Dashboard .dashboard-charts > .cbi-section:has(polyline.dashboard-series-2):not(:has(polygon.dashboard-series-2)) .dashboard-legend-inline b {
+	color: var(--uf-text-1);
+}
+
+/* Download is the figure people watch; upload's fill stays lighter. */
+.Dashboard .dashboard-lines-plot svg polygon.dashboard-series-2 {
+	opacity: calc(var(--uf-dashboard-area) * .6);
+}
+
+/* Per-client data usage, same convention (the module draws up first). */
+.Dashboard .dashboard-charts > .cbi-section:has([data-chart="traffic"]) {
+	--dashboard-series-1: var(--uf-purple);
+	--dashboard-series-2: var(--uf-cyan);
+}
+
+/* Empty states ("Not connected", "Collecting data..."): centred in the card
+ * under a faint chart glyph, the way UniFi leaves an idle widget. Centred
+ * on the whole card, so idle cards side by side line up whether or not
+ * they carry a caption. */
+.Dashboard .dashboard-charts > .cbi-section {
+	position: relative;
+	min-height: 220px;
+}
+
+.Dashboard .dashboard-charts > .cbi-section > em {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	padding: 40px 20px 0;
+	color: var(--uf-text-3);
+	font-style: normal;
+	text-align: center;
+	pointer-events: none;
+}
+
+.Dashboard .dashboard-charts > .cbi-section > em::before {
+	content: "";
+	width: 32px;
+	height: 32px;
+	background: var(--uf-text-4);
+	-webkit-mask: var(--uf-i-chart) center / contain no-repeat;
+	mask: var(--uf-i-chart) center / contain no-repeat;
+}
+
+/* Donut (wireless client distribution): a thinner ring. In a narrow card
+ * the legend moves under the ring instead of being squeezed beside it
+ * down to a letter per line. */
+.Dashboard .dashboard-donut {
+	flex-wrap: wrap;
+	justify-content: center;
+}
+
+.Dashboard .dashboard-donut .dashboard-legend {
+	flex: 1 1 180px;
+}
+
+.Dashboard .dashboard-donut-track,
+.Dashboard .dashboard-donut-seg {
+	stroke-width: 11;
+}
+
+.Dashboard .dashboard-donut-track {
+	stroke: var(--uf-field);
+}
+
+.Dashboard .dashboard-donut-value {
+	font-size: 20px;
+	font-weight: 600;
+}
+
+.Dashboard .dashboard-legend li {
+	font-size: 12px;
+	color: var(--uf-text-2);
+}
+
+.Dashboard .dashboard-legend i {
+	width: 8px;
+	height: 8px;
+	border-radius: 2px;
+	margin-top: calc((1.4em - 8px) / 2);
+}
+
+.Dashboard .dashboard-legend b {
+	color: var(--uf-text-1);
+	font-weight: 500;
+}
+
+.Dashboard .dashboard-legend-name small,
+.Dashboard .dashboard-legend li > small {
+	color: var(--uf-text-3);
+}
+
+/* Detail tabs
+ * ----------- */
+
+.Dashboard > .cbi-map {
+	margin-top: 8px;
+}
+
+/* The inactive panes are .cbi-section cards: collapsed to height 0 they
+ * would still show their padding and border as empty strips. */
+.Dashboard .cbi-map-tabbed > [data-tab]:not([data-tab-active="true"]) {
+	display: none;
+}
+
+.Dashboard .cbi-map-tabbed > .cbi-section h3 {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px;
+	margin-bottom: 8px;
+	font-size: 14px;
+	line-height: 20px;
+}
+
+.Dashboard .cbi-map-tabbed > .cbi-section h3 > .label {
+	margin: 0 0 0 4px;
+}
+
+/* Internet, System and Resources are UniFi's detail rows: the label in
+ * tertiary grey, the value right-aligned in primary. */
+.Dashboard :is([data-tab="internet"], [data-tab="system"], [data-tab="resources"]) .table {
+	display: block;
+}
+
+.Dashboard :is([data-tab="internet"], [data-tab="system"], [data-tab="resources"]) .table > tbody {
+	display: contents;
+}
+
+.Dashboard :is([data-tab="internet"], [data-tab="system"], [data-tab="resources"]) .tr {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 2px 16px;
+	min-height: 33px;
+	padding: 7px 0;
+	border-top: 1px solid var(--uf-divider);
+}
+
+.Dashboard :is([data-tab="internet"], [data-tab="system"], [data-tab="resources"]) .tr:first-child {
+	border-top: 0;
+}
+
+.Dashboard :is([data-tab="internet"], [data-tab="system"], [data-tab="resources"]) .td {
+	display: block;
+	width: auto;
+	padding: 0;
+	border: 0;
+}
+
+.Dashboard :is([data-tab="internet"], [data-tab="system"], [data-tab="resources"]) .td:first-child {
+	flex: 1 0 auto;
+	color: var(--uf-text-3);
+}
+
+/* margin-left: auto keeps a value that wrapped under its label on the right. */
+.Dashboard :is([data-tab="internet"], [data-tab="system"], [data-tab="resources"]) .td + .td {
+	flex: 0 1 auto;
+	min-width: 0;
+	margin-left: auto;
+	color: var(--uf-text-1);
+	text-align: right;
+	overflow-wrap: anywhere;
+	font-variant-numeric: tabular-nums;
+}
+
+/* A usage bar runs under its row, its figure at the right of the label
+ * ("TX Retries  Low (13%)" in UniFi's device panel). */
+.Dashboard [data-tab="resources"] .td:has(> .cbi-progressbar) {
+	flex-basis: 100%;
+	overflow: visible;
+}
+
+.Dashboard [data-tab="resources"] .cbi-progressbar {
+	min-width: 0;
+	margin: 6px 0 2px;
+}
+
+.Dashboard [data-tab="resources"] .cbi-progressbar::before {
+	top: -26px;
+	left: auto;
+	color: var(--uf-text-1);
+	font-size: 13px;
+	line-height: 18px;
+}
+
+.Dashboard [data-tab="resources"] em {
+	color: var(--uf-text-3);
+	font-style: normal;
+}
+
+/* A hover tooltip hangs off the CPU labels. */
+.Dashboard [data-tab="resources"] [data-tooltip] {
+	border-bottom: 1px dotted var(--uf-text-4);
+	cursor: help;
+}
+
+.Dashboard [data-tab="internet"] > div > div > em {
+	display: block;
+	padding: 7px 0;
+	color: var(--uf-text-3);
+	font-style: normal;
+}
+
+.Dashboard [data-tab="internet"] > div > div + div {
+	margin-top: 16px;
+}
+
+/* Wide enough, the rows run in two columns: IPv4 beside IPv6, and the
+ * system and resource rows pairwise. */
+@media screen and (min-width: 800px) {
+	.Dashboard [data-tab="internet"] > div {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 16px 48px;
+	}
+
+	.Dashboard [data-tab="internet"] > div > div + div {
+		margin-top: 0;
+	}
+
+	.Dashboard :is([data-tab="system"], [data-tab="resources"]) > .table {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		column-gap: 48px;
+	}
+
+	.Dashboard :is([data-tab="system"], [data-tab="resources"]) > .table > .tr:nth-child(2) {
+		border-top: 0;
+	}
+}
+
+/* DHCP and wireless client lists: UniFi's client table, a status dot
+ * before the name and the MAC as secondary grey. */
+.Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .table .th,
+.Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .table .td {
+	padding: 7px 8px;
+}
+
+.Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .table .th {
+	padding-top: 0;
+}
+
+.Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .tr[class*="cbi-rowstyle"]:hover > .td {
+	background: var(--uf-hover);
+}
+
+.Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .tr[class*="cbi-rowstyle"]:hover > .td:first-child {
+	border-radius: var(--uf-radius-sm) 0 0 var(--uf-radius-sm);
+}
+
+.Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .tr[class*="cbi-rowstyle"]:hover > .td:last-child {
+	border-radius: 0 var(--uf-radius-sm) var(--uf-radius-sm) 0;
+}
+
+.Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .tr[class*="cbi-rowstyle"] > .td:first-child {
+	color: var(--uf-text-1);
+}
+
+.Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .tr[class*="cbi-rowstyle"] > .td:first-child::before {
+	content: "";
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	margin: 0 10px 1px 0;
+	border-radius: 50%;
+	background: var(--uf-green);
+	vertical-align: middle;
+}
+
+.Dashboard [data-tab="dhcp"] .tr[class*="cbi-rowstyle"] > .td:nth-child(2) {
+	color: var(--uf-text-1);
+	font-variant-numeric: tabular-nums;
+}
+
+.Dashboard [data-tab="dhcp"] .tr[class*="cbi-rowstyle"] > .td:nth-child(3) {
+	color: var(--uf-text-3);
+	font-variant-numeric: tabular-nums;
+}
+
+/* The empty list's message is followed by the "Total" row here, so it
+ * cannot hang at the table's bottom edge as elsewhere; and "Total 0"
+ * under "No active leases" says nothing more. */
+.Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .tr.placeholder {
+	height: auto;
+}
+
+.Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .tr.placeholder > .td {
+	position: static;
+	padding: 24px 8px;
+}
+
+.Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .tr.placeholder + .tr {
+	display: none;
+}
+
+/* The closing "Total" row. */
+.Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .tr:last-child:not([class*="cbi-rowstyle"]):not(.table-titles):not(.placeholder) > .td {
+	border-top: 1px solid var(--uf-border);
+	color: var(--uf-text-3);
+}
+
+.Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .tr:last-child:not([class*="cbi-rowstyle"]):not(.table-titles):not(.placeholder) > .td + .td {
+	color: var(--uf-text-1);
+	font-weight: 600;
+}
+
+/* Wireless networks: UniFi-style cards, a dot for the radio's state
+ * instead of a solid blue header. */
+.Dashboard .dashboard-net-grid .ifacebox {
+	display: flex;
+	border-color: var(--uf-border);
+	background: var(--uf-surface);
+	text-align: left;
+}
+
+.Dashboard .dashboard-net-grid .ifacebox-head,
+.Dashboard .dashboard-net-grid .ifacebox-head.active {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 14px;
+	background: none;
+	border-bottom: 1px solid var(--uf-divider);
+	color: var(--uf-text-1);
+}
+
+.Dashboard .dashboard-net-grid .ifacebox-head::before {
+	content: "";
+	flex: 0 0 auto;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--uf-text-4);
+}
+
+.Dashboard .dashboard-net-grid .ifacebox-head.active::before {
+	background: var(--uf-green);
+}
+
+.Dashboard .dashboard-net-count b {
+	color: var(--uf-text-1);
+	font-size: 22px;
+	font-weight: 600;
+	line-height: 26px;
+}
+
+.Dashboard .dashboard-net-count small,
+.Dashboard .dashboard-net-fields span,
+.Dashboard .dashboard-net-note {
+	color: var(--uf-text-3);
+	font-size: 12px;
+}
+
+.Dashboard .dashboard-net-fields {
+	font-size: 13px;
+}
+
+.Dashboard .dashboard-net-fields b {
+	color: var(--uf-text-1);
+	font-weight: 500;
+}
+
+.Dashboard [data-tab="wifi"] .dashboard-net-grid + h3 {
+	margin-top: 8px;
+}
+
+/* Layout editor: the lists are reordered by dragging, so show a grip. */
+.Dashboard [data-tab="layout"] .cbi-dynlist > .item {
+	padding-left: 28px;
+}
+
+.Dashboard [data-tab="layout"] .cbi-dynlist > .item::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 6px;
+	width: 16px;
+	background: var(--uf-text-4);
+	-webkit-mask: var(--uf-dashboard-i-grip) center / 16px no-repeat;
+	mask: var(--uf-dashboard-i-grip) center / 16px no-repeat;
+}
+
+.Dashboard [data-tab="layout"] .cbi-dynlist > .item:hover::before {
+	background: var(--uf-text-3);
+}
+
+/* Inside the tab's card the actions are its footer, not a second card. */
+.Dashboard [data-tab="layout"] .cbi-page-actions {
+	margin: 12px 0 0;
+	padding: 12px 0 0;
+	border: 0;
+	border-top: 1px solid var(--uf-border);
+	border-radius: 0;
+	box-shadow: none;
+}
+
+.Dashboard [data-tab="layout"] .cbi-map {
+	margin-bottom: 0;
+}
+
+/* Phones: the KPI tiles pair up, icon above the figures; the tab strip
+ * scrolls instead of cutting its titles short. */
+@media screen and (max-width: 640px) {
+	.Dashboard .dashboard-kpi-row > .dashboard-kpi {
+		flex: 1 1 calc(50% - var(--dashboard-gap));
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 10px;
+		min-width: calc(50% - var(--dashboard-gap));
+		padding: 14px;
+	}
+
+	.Dashboard .dashboard-kpi-icon {
+		width: 32px;
+		height: 32px;
+	}
+
+	.Dashboard .dashboard-kpi-icon::after {
+		inset: 7px;
+	}
+
+	.Dashboard .dashboard-kpi-text {
+		max-width: 100%;
+	}
+
+	.Dashboard .dashboard-kpi-value {
+		font-size: 19px;
+		line-height: 24px;
+	}
+
+	.Dashboard .cbi-tabmenu > li {
+		flex: 0 0 auto;
+	}
+
+	.Dashboard .cbi-tabmenu > li > a {
+		overflow: visible;
+	}
+
+	/* The stacked-table rules pad every cell; keep the rows flush, and lift
+	 * a bar's figure by that padding back onto its label's line. */
+	.Dashboard :is([data-tab="internet"], [data-tab="system"], [data-tab="resources"]) .tr {
+		margin: 0 -6px;
+		padding: 4px 0;
+	}
+
+	.Dashboard [data-tab="resources"] .cbi-progressbar::before {
+		top: -34px;
+	}
+
+	/* The header row is hidden here; no rule above the empty message. */
+	.Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .tr.placeholder {
+		border-top: 0;
+	}
+
+	/* A stacked client is headed by its name, its addresses paired below. */
+	.Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .tr[class*="cbi-rowstyle"] > .td:first-child {
+		flex-basis: 100%;
+		font-weight: 500;
+	}
+}
+
+/* ==== end page: dashboard ==== */
+
+/* ==== page: status ==== */
+/* Status pages: Overview, Routing, Firewall, System and Kernel Log,
+ * Processes, Channel Analysis and Realtime Graphs.
+ *
+ * The overview is recognised by the div.includes its template renders
+ * beside #view rather than by data-page: it is also served at
+ * /admin/status, which carries another one. */
+
+:root {
+	/* An RJ45 port: a rounded tile with the jack cut out of it. */
+	--uf-status-i-port: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 20'><path fill-rule='evenodd' d='M3.5 0h17A3.5 3.5 0 0 1 24 3.5v13a3.5 3.5 0 0 1-3.5 3.5h-17A3.5 3.5 0 0 1 0 16.5v-13A3.5 3.5 0 0 1 3.5 0ZM7 5v8h2.5v2.5h5V13H17V5Z'/></svg>");
+	/* Signal strength as four bars, one per quarter of the width, so a
+	 * gradient stop at 25/50/75% fills whole bars. */
+	--uf-status-i-bars: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='.5' y='11' width='3' height='4' rx='1'/><rect x='4.5' y='8' width='3' height='7' rx='1'/><rect x='8.5' y='5' width='3' height='10' rx='1'/><rect x='12.5' y='2' width='3' height='13' rx='1'/></svg>");
+	--uf-status-i-wifi: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round'><path d='M2.75 9.25a13.5 13.5 0 0 1 18.5 0M5.75 12.75a9 9 0 0 1 12.5 0M8.75 16.25a4.6 4.6 0 0 1 6.5 0'/><circle cx='12' cy='19.5' r='1.4' fill='black' stroke='none'/></svg>");
+
+	/* A second chart series beside the accent blue: amber stays apart from
+	 * blue for every kind of colour vision (cyan does not, in the dark
+	 * scheme), and is a step off the warning orange. */
+	--uf-status-series-2: #e8890c;
+}
+
+:root[data-darkmode="true"] {
+	--uf-status-series-2: #f0a040;
+}
+
+/* Overview: a grid of cards
+ * ------------------------- */
+
+/* One column; two on a wide page, where the label/value cards (System,
+ * Memory, Storage) and the ports sit side by side and anything with a
+ * wide table spans both. */
+.uf-page:has(> .includes) {
+	container: uf-status-overview / inline-size;
+}
+
+.uf-page:has(> .includes) #view {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: 16px;
+}
+
+.uf-page:has(> .includes) #view > .cbi-section {
+	grid-column: 1 / -1;
+	min-width: 0;
+	margin: 0;
+}
+
+@container uf-status-overview (min-width: 820px) {
+	.uf-page:has(> .includes) #view {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.uf-page:has(> .includes) #view > .cbi-section:has(> div > .table:only-child .td[width="33%"]),
+	.uf-page:has(> .includes) #view > .cbi-section:has(> div > div[style*="grid-template-columns"]:only-child) {
+		grid-column: auto;
+	}
+}
+
+/* A collapsed card is its title bar only; it does not stretch to the
+ * height of the card beside it. */
+.uf-page:has(> .includes) #view > .cbi-section:has(> .cbi-title .label.notice) {
+	align-self: start;
+}
+
+/* Card title, with UniFi's chevron to collapse it rather than a "Hide"
+ * label; the word stays for screen readers. */
+.uf-page:has(> .includes) #view > .cbi-section > .cbi-title > h3 {
+	align-items: center;
+	gap: 12px;
+	margin-bottom: 8px;
+}
+
+.uf-page:has(> .includes) #view > .cbi-section:has(> .cbi-title .label.notice) > .cbi-title > h3 {
+	margin-bottom: 0;
+}
+
+.uf-page:has(> .includes) .cbi-title .label[data-clickable] {
+	flex: 0 0 auto;
+	width: 24px;
+	min-width: 0 !important; /* over the inline min-width: 4em */
+	height: 24px;
+	margin: -2px -6px -2px 0;
+	padding: 0;
+	border-radius: var(--uf-radius-sm);
+	background: none;
+	color: var(--uf-text-3);
+	font-size: 0;
+	cursor: pointer;
+	transition: background-color .15s, color .15s;
+}
+
+.uf-page:has(> .includes) .cbi-title .label[data-clickable]::after {
+	content: "";
+	width: 16px;
+	height: 16px;
+	background: currentColor;
+	-webkit-mask: var(--uf-i-chevron) center / contain no-repeat;
+	mask: var(--uf-i-chevron) center / contain no-repeat;
+	transform: rotate(180deg);
+	transition: transform .15s ease;
+}
+
+.uf-page:has(> .includes) .cbi-title .label[data-clickable]:hover {
+	background: var(--uf-hover);
+	color: var(--uf-text-1);
+}
+
+.uf-page:has(> .includes) .cbi-title .label.notice[data-clickable]::after {
+	transform: none;
+}
+
+/* Sub-headings inside a card ("Active DHCPv4 Leases"). */
+.uf-page:has(> .includes) #view > .cbi-section > div:not(.cbi-title) > h3 {
+	margin: 20px 0 6px;
+	color: var(--uf-text-2);
+	font-size: 13px;
+	line-height: 18px;
+}
+
+.uf-page:has(> .includes) #view > .cbi-section > div:not(.cbi-title) > h3:first-child {
+	margin-top: 4px;
+}
+
+.uf-page:has(> .includes) #view > .cbi-section > div > em {
+	color: var(--uf-text-3);
+	font-style: normal;
+}
+
+/* Label/value rows, as in UniFi's device panel: the label on the left in
+ * grey, the value on the right. */
+.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) {
+	display: block;
+}
+
+.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) > .tr {
+	position: relative;
+	display: flex;
+	align-items: flex-start;
+	gap: 16px;
+	padding: 7px 0;
+	border-top: 1px solid var(--uf-divider);
+}
+
+.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) > .tr:first-child {
+	border-top: 0;
+}
+
+.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) > .tr > .td {
+	display: block;
+	width: auto;
+	padding: 0;
+	border: 0;
+}
+
+.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) > .tr > .td[width="33%"] {
+	flex: 0 1 auto;
+	max-width: 50%;
+	color: var(--uf-text-3);
+}
+
+.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) > .tr > .td[width="33%"] + .td {
+	flex: 1 1 0;
+	min-width: 0;
+	color: var(--uf-text-1);
+	text-align: right !important; /* over .left */
+	overflow-wrap: anywhere;
+}
+
+/* Usage, as UniFi's "TX Retries  Low (13%)": the figure on the label's
+ * line, in flow so the two never overlap, and the bar under both across
+ * the whole row. The fill is placed against the row, so its inline width
+ * is a share of the row, and the row draws the track. The bars part the
+ * rows, so there is no rule between them. */
+.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) > .tr:has(.cbi-progressbar) {
+	padding-bottom: 20px;
+	border-top: 0;
+}
+
+.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) > .tr:has(.cbi-progressbar)::after {
+	content: "";
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 7px;
+	height: 6px;
+	border-radius: 3px;
+	background: var(--uf-border);
+}
+
+.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) > .tr .cbi-progressbar {
+	position: static;
+	min-width: 0;
+	height: auto;
+	margin: 0;
+	background: none;
+}
+
+.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) > .tr .cbi-progressbar::before {
+	position: static;
+	display: block;
+	color: var(--uf-text-1);
+	font-size: 13px;
+	line-height: 18px;
+	white-space: normal;
+}
+
+.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) > .tr .cbi-progressbar > div {
+	position: absolute;
+	z-index: 1;
+	left: 0;
+	bottom: 7px;
+	height: 6px;
+}
+
+/* Port status: UniFi's port tiles, green at gigabit and above, lime at
+ * Fast Ethernet, grey with no link; traffic in the throughput colours. */
+.uf-page:has(> .includes) div[style*="grid-template-columns"]:has(> .ifacebox) {
+	grid-template-columns: repeat(auto-fill, minmax(88px, 104px)) !important; /* over the inline grid */
+	gap: 8px;
+	margin-bottom: 0 !important; /* over the inline 1em */
+}
+
+.uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox {
+	min-width: 0 !important; /* over the inline sizes */
+	max-width: none !important;
+	margin: 0 !important;
+	padding: 10px 8px 8px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	overflow: visible;
+}
+
+.uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox > .ifacebox-head:first-child {
+	padding: 0;
+	background: none !important; /* over the zone tint the base gives styled heads */
+	border: 0;
+	color: var(--uf-text-1);
+	font-size: 12px;
+	line-height: 16px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox > .ifacebox-body:has(> img) {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 4px;
+	padding: 8px 0 6px;
+	color: var(--uf-text-2);
+	font-size: 12px;
+	line-height: 16px;
+	white-space: nowrap;
+}
+
+.uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox > .ifacebox-body > img,
+.uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox > .ifacebox-body > br {
+	display: none;
+}
+
+.uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox > .ifacebox-body:has(> img)::before {
+	content: "";
+	width: 30px;
+	height: 25px;
+	background: var(--uf-text-4);
+	-webkit-mask: var(--uf-status-i-port) center / contain no-repeat;
+	mask: var(--uf-status-i-port) center / contain no-repeat;
+}
+
+.uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox > .ifacebox-body:has(> img[src*="_up."])::before {
+	background: var(--uf-green);
+}
+
+.uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox > .ifacebox-body:has(> img[src*="_up."]):has(> span[title^="Speed: 10 "], > span[title^="Speed: 100 "])::before {
+	background: var(--uf-lime);
+}
+
+/* The zone colours, as a slim stripe under the port. */
+.uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox > .ifacebox-head.cbi-tooltip-container {
+	gap: 2px;
+	padding: 0 6px;
+	background: none !important; /* over the zone tint the base gives styled heads */
+	border: 0;
+}
+
+.uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox > .ifacebox-head.cbi-tooltip-container > .zonebadge {
+	padding: 0;
+	border-radius: 2px;
+}
+
+.uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox > .ifacebox-body:last-child {
+	padding: 6px 0 0;
+}
+
+.uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox > .ifacebox-body:last-child > .cbi-tooltip-container {
+	color: var(--uf-cyan);
+	font-size: 11px !important; /* over the inline 80% */
+	line-height: 15px;
+	text-align: center !important; /* over the inline left */
+	font-variant-numeric: tabular-nums;
+}
+
+/* "▲ sent" on the first line, "▼ received" on the second. */
+.uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox > .ifacebox-body:last-child > .cbi-tooltip-container::first-line {
+	color: var(--uf-purple);
+}
+
+.uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox .cbi-tooltip {
+	text-align: left;
+}
+
+/* PoE figures are inline black or grey. */
+.uf-page:has(> .includes) div[style*="grid-template-columns"] span[style*="color:#000"],
+.uf-page:has(> .includes) div[style*="grid-template-columns"] span[style*="color:#888"] {
+	color: var(--uf-text-2) !important;
+}
+
+.uf-page:has(> .includes) div[style*="grid-template-columns"] span[style*="color:#d9534f"] {
+	color: var(--uf-red-text) !important;
+}
+
+/* Upstream and radio boxes: small bordered panels with a status dot, and
+ * the same label/value rows as the cards. */
+.uf-page:has(> .includes) .network-status-table {
+	gap: 12px;
+	margin-bottom: 8px;
+}
+
+.uf-page:has(> .includes) .network-status-table .ifacebox {
+	background: none;
+	border-color: var(--uf-border);
+	text-align: left;
+	white-space: normal;
+}
+
+.uf-page:has(> .includes) .network-status-table .ifacebox-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 14px;
+	background: none;
+	border-bottom: 1px solid var(--uf-divider);
+	color: var(--uf-text-1);
+	text-align: left !important; /* over .center */
+}
+
+.uf-page:has(> .includes) .network-status-table .ifacebox-head::before {
+	content: "";
+	flex: 0 0 auto;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--uf-text-4);
+}
+
+.uf-page:has(> .includes) .network-status-table .ifacebox-head.active {
+	background: none;
+	color: var(--uf-text-1);
+}
+
+.uf-page:has(> .includes) .network-status-table .ifacebox-head.active::before {
+	background: var(--uf-green);
+}
+
+.uf-page:has(> .includes) .network-status-table .ifacebox-body {
+	gap: 10px;
+	padding: 8px 14px 14px;
+}
+
+.uf-page:has(> .includes) .network-status-table .ifacebox-body > span,
+.uf-page:has(> .includes) .network-status-table .ifacebadge > span {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.uf-page:has(> .includes) .network-status-table .ifacebox-body > span > br,
+.uf-page:has(> .includes) .network-status-table .ifacebadge > span > br {
+	display: none;
+}
+
+.uf-page:has(> .includes) .network-status-table span.nowrap {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 12px;
+	padding: 3px 0;
+	color: var(--uf-text-1);
+	text-align: right;
+	overflow-wrap: anywhere;
+}
+
+.uf-page:has(> .includes) .network-status-table span.nowrap > strong {
+	flex: 0 0 auto;
+	color: var(--uf-text-3);
+	font-weight: 400;
+	text-align: left;
+}
+
+.uf-page:has(> .includes) .network-status-table span.nowrap > em {
+	color: var(--uf-text-3);
+}
+
+/* The device and SSID badges: a tinted well with a glyph for LuCI's
+ * bitmap icon. */
+.uf-page:has(> .includes) .network-status-table .ifacebox-body .ifacebadge {
+	align-items: flex-start;
+	gap: 10px;
+	min-width: min(220px, 100%);
+	padding: 8px 12px;
+	background: var(--uf-field);
+	border: 0;
+	border-radius: var(--uf-radius);
+	font-weight: 400;
+}
+
+.uf-page:has(> .includes) .network-status-table .ifacebox-body .ifacebadge > span {
+	flex: 1 1 auto;
+}
+
+.uf-page:has(> .includes) .network-status-table .ifacebadge > img {
+	display: none;
+}
+
+.uf-page:has(> .includes) .network-status-table .ifacebadge::before {
+	content: "";
+	flex: 0 0 auto;
+	width: 18px;
+	height: 18px;
+	margin-top: 3px;
+	background: var(--uf-text-3);
+	-webkit-mask: var(--uf-status-i-port) center / 18px 15px no-repeat;
+	mask: var(--uf-status-i-port) center / 18px 15px no-repeat;
+}
+
+/* An upstream over Wi-Fi (a client interface) gets the Wi-Fi glyph. */
+.uf-page:has(> .includes) .network-status-table .ifacebadge:has(> img[src*="/wifi"])::before {
+	-webkit-mask: var(--uf-status-i-wifi) center / contain no-repeat;
+	mask: var(--uf-status-i-wifi) center / contain no-repeat;
+}
+
+.uf-page:has(> .includes) .network-status-table .ifacebadge:has(> img[src*="_disabled"])::before {
+	background: var(--uf-text-4);
+}
+
+/* Signal strength: bars filled by quality, in UniFi's experience colours
+ * (Excellent green, Good lime, Fair orange, Poor red). */
+.uf-page:has(> .includes) .ifacebadge:has(> img[src*="/signal-"])::before,
+body[data-page="admin-status-channel_analysis"] .ifacebadge:has(> img[src*="/signal-"])::before {
+	--uf-status-sig: 0%;
+	--uf-status-sig-color: var(--uf-text-4);
+
+	content: "";
+	flex: 0 0 auto;
+	width: 16px;
+	height: 16px;
+	background: linear-gradient(to right, var(--uf-status-sig-color) var(--uf-status-sig), var(--uf-border-strong) var(--uf-status-sig));
+	-webkit-mask: var(--uf-status-i-bars) center / contain no-repeat;
+	mask: var(--uf-status-i-bars) center / contain no-repeat;
+}
+
+.uf-page:has(> .includes) .ifacebadge:has(> img[src*="/signal-000-025"])::before,
+body[data-page="admin-status-channel_analysis"] .ifacebadge:has(> img[src*="/signal-000-025"])::before {
+	--uf-status-sig: 25%;
+	--uf-status-sig-color: var(--uf-red);
+}
+
+.uf-page:has(> .includes) .ifacebadge:has(> img[src*="/signal-025-050"])::before,
+body[data-page="admin-status-channel_analysis"] .ifacebadge:has(> img[src*="/signal-025-050"])::before {
+	--uf-status-sig: 50%;
+	--uf-status-sig-color: var(--uf-orange);
+}
+
+.uf-page:has(> .includes) .ifacebadge:has(> img[src*="/signal-050-075"])::before,
+body[data-page="admin-status-channel_analysis"] .ifacebadge:has(> img[src*="/signal-050-075"])::before {
+	--uf-status-sig: 75%;
+	--uf-status-sig-color: var(--uf-lime);
+}
+
+.uf-page:has(> .includes) .ifacebadge:has(> img[src*="/signal-075-100"])::before,
+body[data-page="admin-status-channel_analysis"] .ifacebadge:has(> img[src*="/signal-075-100"])::before {
+	--uf-status-sig: 100%;
+	--uf-status-sig-color: var(--uf-green);
+}
+
+.uf-page:has(> .includes) .network-status-table .ifacebadge:has(> img[src*="/signal-"])::before {
+	margin-top: 2px;
+}
+
+.uf-page:has(> .includes) .ifacebadge > img[src*="/signal-"],
+body[data-page="admin-status-channel_analysis"] .ifacebadge > img[src*="/signal-"] {
+	display: none;
+}
+
+/* Tables: the first column is the name, the rest secondary. */
+.uf-page:has(> .includes) #view .table:not(:has(> .tr > .td[width="33%"])) .tr:not(.placeholder) > .td:first-child {
+	color: var(--uf-text-1);
+}
+
+.uf-page:has(> .includes) #view .table .td .cbi-button {
+	height: 28px;
+	padding: 0 12px;
+}
+
+/* DUIDs and IPv6 addresses are long unbroken strings; let them wrap
+ * rather than push the table out of its card. */
+.uf-page:has(> .includes) #status_leases6 .td {
+	overflow-wrap: anywhere;
+}
+
+/* Associated stations: the network as a Wi-Fi glyph and a name, the
+ * interface after it in grey, as UniFi writes "Speaker 57:7e". */
+.uf-page:has(> .includes) .assoclist .ifacebadge {
+	display: inline-flex;
+	flex-direction: row;
+	align-items: center;
+	gap: 8px;
+	padding: 0;
+	background: none;
+	border: 0;
+	color: var(--uf-text-1);
+	text-align: left;
+}
+
+.uf-page:has(> .includes) .assoclist .ifacebadge[data-ifname]::before {
+	content: "";
+	flex: 0 0 auto;
+	width: 18px;
+	height: 18px;
+	background: var(--uf-text-3);
+	-webkit-mask: var(--uf-status-i-wifi) center / contain no-repeat;
+	mask: var(--uf-status-i-wifi) center / contain no-repeat;
+}
+
+.uf-page:has(> .includes) .assoclist .ifacebadge[data-ifname] > img {
+	display: none;
+}
+
+.uf-page:has(> .includes) .assoclist .ifacebadge small {
+	color: var(--uf-text-3);
+	font-size: 12px;
+}
+
+.uf-page:has(> .includes) .assoclist .td:last-child:not(:first-child) {
+	text-align: right;
+}
+
+/* Routing
+ * ------- */
+
+/* Neighbours, routes and rules share one card per family; space and a
+ * hairline set each table apart. */
+body[data-page^="admin-status-routes"] .cbi-section > .table + h3 {
+	margin-top: 20px;
+	padding-top: 18px;
+	border-top: 1px solid var(--uf-border);
+}
+
+body[data-page^="admin-status-routes"] .cbi-section > .table .tr:last-child .td {
+	padding-bottom: 0;
+}
+
+body[data-page^="admin-status-routes"] .table .tr:not(.placeholder) > .td:first-child {
+	color: var(--uf-text-1);
+}
+
+body[data-page^="admin-status-routes"] .ifacebadge {
+	padding: 1px 8px;
+	border: 0;
+	border-radius: 10px;
+	font-size: 12px;
+	line-height: 18px;
+}
+
+body[data-page^="admin-status-routes"] .th[title] {
+	cursor: help;
+}
+
+/* Firewall (nftables)
+ * ------------------- */
+
+/* A table's chains as cards, each with its hook and policy in a line of
+ * grey under the title, and its rules as chips. */
+body[data-page^="admin-status-nftables"] .nft-table > h3 {
+	margin: 4px 0 16px;
+	font-size: 20px;
+	line-height: 28px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-chain {
+	margin: 0 0 16px;
+	padding: 16px 20px 12px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+body[data-page^="admin-status-nftables"] .nft-chain > h4 {
+	margin: 0 0 2px;
+	font-size: 15px;
+	line-height: 22px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-chain-hook ul {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0 20px;
+	margin: 0 0 8px;
+	list-style: none;
+	color: var(--uf-text-3);
+	font-size: 12px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-chain-hook strong {
+	color: var(--uf-text-2);
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules {
+	margin-top: 6px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .tr > .td {
+	padding: 6px 8px !important; /* over the view's own .25em */
+	vertical-align: top;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge {
+	display: inline-block;
+	margin: 2px 4px 2px 0 !important; /* over the view's own .125em */
+	padding: 2px 8px;
+	background: var(--uf-field);
+	border: 0;
+	border-radius: var(--uf-radius-sm);
+	color: var(--uf-text-2);
+	font-size: 12px;
+	line-height: 18px;
+	white-space: normal;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge var,
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge em {
+	color: var(--uf-text-3);
+	font-style: normal;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge strong {
+	color: var(--uf-text-1);
+}
+
+/* A long set stays one line and ellipsised, as the view intends; its
+ * tooltip lists it in full. */
+body[data-page^="admin-status-nftables"] .nft-rules .nft-set-items,
+body[data-page^="admin-status-nftables"] .nft-rules .nft-list-items {
+	white-space: nowrap;
+}
+
+/* Counters and comments are secondary: outlined rather than filled. */
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge.nft-counter,
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge.nft-comment {
+	padding: 2px 6px;
+	background: none;
+	box-shadow: inset 0 0 0 1px var(--uf-border);
+	font-variant-numeric: tabular-nums;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .td > div {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--uf-text-3);
+	font-size: 12px;
+}
+
+/* The legacy iptables view (linked from here while old rules remain):
+ * the same chain cards, with LuCI's dotted blue #00f underlines turned
+ * into links and grey hints. */
+body[data-page^="admin-status-nftables"] [data-table] > h3 {
+	margin: 8px 0 14px;
+	font-size: 17px;
+	line-height: 24px;
+}
+
+body[data-page^="admin-status-nftables"] [data-chain] {
+	margin: 0 0 16px;
+	padding: 16px 20px 12px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+body[data-page^="admin-status-nftables"] [data-chain] > h4 {
+	margin: 0 0 6px;
+	font-size: 15px;
+	line-height: 22px;
+}
+
+body[data-page^="admin-status-nftables"] [data-chain] > h4 em {
+	font-style: normal;
+}
+
+body[data-page^="admin-status-nftables"] [data-chain] > h4 > span {
+	margin-left: 4px;
+	color: var(--uf-text-3);
+	font-size: 12px;
+	font-weight: 400;
+}
+
+body[data-page^="admin-status-nftables"] [data-chain] > h4 > span em {
+	color: var(--uf-text-2);
+	font-weight: 600;
+}
+
+body[data-page^="admin-status-nftables"] [data-chain] span.jump {
+	border-bottom: 0;
+	color: var(--uf-blue);
+}
+
+body[data-page^="admin-status-nftables"] [data-chain] span.jump:hover {
+	color: var(--uf-blue-strong);
+}
+
+body[data-page^="admin-status-nftables"] [data-chain] .references {
+	border-bottom-color: var(--uf-border-strong);
+}
+
+body[data-page^="admin-status-nftables"] [data-chain] .table .td {
+	font-variant-numeric: tabular-nums;
+}
+
+body[data-page^="admin-status-nftables"] [data-chain] .table .ifacebadge {
+	padding: 1px 8px;
+	border: 0;
+	border-radius: 10px;
+	font-size: 12px;
+	line-height: 18px;
+}
+
+/* Logs
+ * ---- */
+
+/* Filters on top, the log in a recessed well under them, all one card. */
+body[data-page^="admin-status-logs"] #content_syslog {
+	padding: 16px 20px 4px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+body[data-page^="admin-status-logs"] #content_syslog > .cbi-section-descr:empty {
+	display: none;
+}
+
+body[data-page^="admin-status-logs"] #content_syslog > div[style*="margin-bottom"] {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 12px !important; /* over the inline 10px */
+}
+
+body[data-page^="admin-status-logs"] #content_syslog > div > label {
+	margin: 0 !important; /* over the inline margins; the row has a gap */
+	color: var(--uf-text-2);
+}
+
+body[data-page^="admin-status-logs"] #content_syslog > div > label + input[type="checkbox"] {
+	margin-right: 8px;
+}
+
+/* A second filter on the same line starts a new group. */
+body[data-page^="admin-status-logs"] #content_syslog > div > select + label[for^="invert"],
+body[data-page^="admin-status-logs"] #content_syslog > div > #logTextFilter + label[for="logMaxRows"] {
+	margin-left: 16px !important; /* over the inline margins */
+}
+
+body[data-page^="admin-status-logs"] #content_syslog > div > select,
+body[data-page^="admin-status-logs"] #content_syslog > div > input:not([type="checkbox"]) {
+	width: 180px;
+	min-width: 0;
+	margin: 0 !important; /* over the inline margin-bottom */
+}
+
+body[data-page^="admin-status-logs"] #content_syslog > div > #logTextFilter {
+	width: 260px;
+}
+
+body[data-page^="admin-status-logs"] #content_syslog > div > #logMaxRows {
+	width: 96px;
+}
+
+body[data-page^="admin-status-logs"] #content_syslog > div[style*="padding-bottom"] {
+	padding-bottom: 12px !important; /* over the inline 20px */
+}
+
+body[data-page^="admin-status-logs"] #syslog {
+	display: block;
+	margin-bottom: 12px;
+	padding: 12px 14px;
+	background: var(--uf-canvas);
+	border-color: var(--uf-border);
+	color: var(--uf-text-2);
+	line-height: 20px;
+	resize: vertical;
+}
+
+/* Processes
+ * --------- */
+
+/* The process list is a bare table in the view; give it the card the
+ * other pages' tables sit in. */
+body[data-page="admin-status-processes"] #view > .table {
+	border-collapse: separate;
+	border-spacing: 0;
+	padding: 8px 16px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+body[data-page="admin-status-processes"] #view > .table .td {
+	font-variant-numeric: tabular-nums;
+}
+
+body[data-page="admin-status-processes"] #view > .table .tr:not(.placeholder) > .td:first-child {
+	color: var(--uf-text-3);
+}
+
+body[data-page="admin-status-processes"] #view > .table .td:nth-child(3) {
+	color: var(--uf-text-1);
+}
+
+body[data-page="admin-status-processes"] #view > .table .td.cbi-section-actions .btn {
+	height: 28px;
+	padding: 0 10px;
+}
+
+/* Realtime graphs
+ * --------------- */
+
+/* The views draw into a framed white box with black grid lines and white
+ * labels, all inline. UniFi's charts have no frame: faint horizontal grid
+ * lines, a baseline, muted axis labels and thin series. */
+body[data-page^="admin-status-realtime"] #view div[style*="height:300px"] {
+	background: none !important; /* over the inline white box */
+	border: 0 !important;
+	border-bottom: 1px solid var(--uf-border-strong) !important;
+}
+
+body[data-page^="admin-status-realtime"] #view div[style*="height:300px"] > svg {
+	background: none !important;
+	border-radius: 0;
+}
+
+body[data-page^="admin-status-realtime"] #view svg line[style] {
+	stroke: var(--uf-border) !important; /* over the inline black */
+	stroke-width: 1 !important;
+}
+
+/* Vertical lines mark the minutes; dashed, so the grid stays horizontal. */
+body[data-page^="admin-status-realtime"] #view svg line[y1="0"][y2="100%"] {
+	stroke-dasharray: 2 4;
+}
+
+body[data-page^="admin-status-realtime"] #view svg text {
+	fill: var(--uf-text-3) !important; /* over the inline #eee */
+	font-family: var(--uf-font) !important;
+	font-size: 11px !important;
+	text-shadow: none !important;
+}
+
+body[data-page^="admin-status-realtime"] #view svg polyline {
+	fill-opacity: .12 !important;
+	stroke-width: 1.5px !important;
+	stroke-linejoin: round;
+}
+
+/* Series colours, over the ones each polyline carries inline. Throughput
+ * follows UniFi: download cyan, upload purple (and upload drawn as a line
+ * over a fainter fill, so the two differ by more than hue). Load is one
+ * measure over three windows, so one blue in three strengths; connections
+ * are identities: TCP blue, UDP amber, the rest grey. Signal is green,
+ * noise red, the PHY rate blue. */
+body[data-page^="admin-status-realtime"] #view svg #rx { fill: var(--uf-cyan) !important; stroke: var(--uf-cyan) !important; }
+body[data-page^="admin-status-realtime"] #view svg #tx { fill: var(--uf-purple) !important; stroke: var(--uf-purple) !important; fill-opacity: .06 !important; }
+body[data-page^="admin-status-realtime"] #view svg #load01 { fill: var(--uf-blue) !important; stroke: var(--uf-blue) !important; }
+body[data-page^="admin-status-realtime"] #view svg #load05 { fill: var(--uf-blue) !important; stroke: var(--uf-blue) !important; stroke-opacity: .6; fill-opacity: .08 !important; }
+body[data-page^="admin-status-realtime"] #view svg #load15 { fill: var(--uf-blue) !important; stroke: var(--uf-blue) !important; stroke-opacity: .35; fill-opacity: .05 !important; }
+body[data-page^="admin-status-realtime"] #view svg #tcp { fill: var(--uf-blue) !important; stroke: var(--uf-blue) !important; }
+body[data-page^="admin-status-realtime"] #view svg #udp { fill: var(--uf-status-series-2) !important; stroke: var(--uf-status-series-2) !important; }
+body[data-page^="admin-status-realtime"] #view svg #other { fill: var(--uf-text-3) !important; stroke: var(--uf-text-3) !important; }
+body[data-page^="admin-status-realtime"] #view svg #rssi { fill: var(--uf-green) !important; stroke: var(--uf-green) !important; }
+body[data-page^="admin-status-realtime"] #view svg #noise { fill: var(--uf-red) !important; stroke: var(--uf-red) !important; fill-opacity: .06 !important; }
+body[data-page^="admin-status-realtime"] #view svg #rate { fill: var(--uf-blue) !important; stroke: var(--uf-blue) !important; }
+
+/* The Wireless tab stacks a second graph under the first one's figures. */
+body[data-page^="admin-status-realtime"] #view .cbi-section > .table + br + div[style*="height:300px"] {
+	margin-top: 20px;
+}
+
+/* "(3 minute window, 3 second interval)" */
+body[data-page^="admin-status-realtime"] #view .cbi-section > .right {
+	margin-top: 6px;
+	color: var(--uf-text-3);
+	font-size: 12px;
+}
+
+/* The legend and figures under a graph: a small square in the series
+ * colour instead of LuCI's underline, labels in grey, figures in ink. */
+body[data-page^="admin-status-realtime"] #view .table[style*="table-layout"] .td {
+	padding-top: 6px;
+	padding-bottom: 6px;
+	color: var(--uf-text-1);
+	font-variant-numeric: tabular-nums;
+}
+
+body[data-page^="admin-status-realtime"] #view .table[style*="table-layout"] .td > strong {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	border-bottom: 0 !important; /* over the inline coloured underline */
+	color: var(--uf-text-3);
+	font-weight: 500;
+}
+
+body[data-page^="admin-status-realtime"] #view .table[style*="table-layout"] .td > strong[style]::before {
+	content: "";
+	flex: 0 0 auto;
+	width: 10px;
+	height: 10px;
+	border-radius: 2px;
+	background: var(--uf-status-series, var(--uf-text-3));
+}
+
+body[data-page^="admin-status-realtime"] #view .td:has(+ #rx_bw_cur) { --uf-status-series: var(--uf-cyan); }
+body[data-page^="admin-status-realtime"] #view .td:has(+ #tx_bw_cur) { --uf-status-series: var(--uf-purple); }
+body[data-page^="admin-status-realtime"] #view .td:has(+ #lb_load01_cur) { --uf-status-series: var(--uf-blue); }
+body[data-page^="admin-status-realtime"] #view .td:has(+ #lb_load05_cur) { --uf-status-series: rgba(var(--uf-blue-rgb), .6); }
+body[data-page^="admin-status-realtime"] #view .td:has(+ #lb_load15_cur) { --uf-status-series: rgba(var(--uf-blue-rgb), .35); }
+body[data-page^="admin-status-realtime"] #view .td:has(+ #lb_tcp_cur) { --uf-status-series: var(--uf-blue); }
+body[data-page^="admin-status-realtime"] #view .td:has(+ #lb_udp_cur) { --uf-status-series: var(--uf-status-series-2); }
+body[data-page^="admin-status-realtime"] #view .td:has(+ #lb_otr_cur) { --uf-status-series: var(--uf-text-3); }
+body[data-page^="admin-status-realtime"] #view .td:has(+ #rssi_bw_cur) { --uf-status-series: var(--uf-green); }
+body[data-page^="admin-status-realtime"] #view .td:has(+ #noise_bw_cur) { --uf-status-series: var(--uf-red); }
+body[data-page^="admin-status-realtime"] #view .td:has(+ #rate_bw_cur) { --uf-status-series: var(--uf-blue); }
+
+/* Connections: the filter and the lookup toggle on one line. */
+body[data-page^="admin-status-realtime"] #settings-row {
+	gap: 12px;
+	align-items: center;
+}
+
+body[data-page^="admin-status-realtime"] #settings-row > .right {
+	flex: 0 0 auto !important; /* over the inline flex: auto */
+}
+
+body[data-page^="admin-status-realtime"] #connections .td:nth-child(3),
+body[data-page^="admin-status-realtime"] #connections .td:nth-child(4) {
+	color: var(--uf-text-1);
+}
+
+/* Channel analysis
+ * ---------------- */
+
+body[data-page="admin-status-channel_analysis"] .cbi-title-section {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	margin-bottom: 16px;
+}
+
+body[data-page="admin-status-channel_analysis"] .cbi-title-section > h2 {
+	margin: 0;
+}
+
+/* The graph, framed and white inline: a card like the others. */
+body[data-page="admin-status-channel_analysis"] #channel_graph {
+	padding: 0;
+	background: var(--uf-surface) !important; /* over the inline #fff */
+	border: 1px solid var(--uf-border) !important; /* over the inline black */
+	border-radius: var(--uf-radius);
+	overflow: hidden;
+}
+
+body[data-page="admin-status-channel_analysis"] #channel_graph line[style] {
+	stroke: var(--uf-border) !important; /* over the inline black */
+}
+
+body[data-page="admin-status-channel_analysis"] #channel_graph line[style*="width:0.5"] {
+	stroke: var(--uf-border-strong) !important;
+}
+
+body[data-page="admin-status-channel_analysis"] #channel_graph svg > text {
+	fill: var(--uf-text-3) !important; /* over the inline #eee */
+	font-family: var(--uf-font) !important;
+	font-size: 11px !important;
+	text-shadow: none !important;
+}
+
+/* Network names in ink: the hue is on the area and on the table's dot. */
+body[data-page="admin-status-channel_analysis"] #channel_graph g > text {
+	fill: var(--uf-text-1) !important;
+	font-family: var(--uf-font) !important;
+	font-size: 11px !important;
+	font-weight: 600;
+	text-shadow: none !important;
+}
+
+body[data-page="admin-status-channel_analysis"] #channel_graph g > polyline:first-child {
+	stroke-width: 1.5px !important;
+}
+
+/* The scan results, in a card under the graph like the other tables. */
+body[data-page="admin-status-channel_analysis"] [data-tab] > .table {
+	border-collapse: separate;
+	border-spacing: 0;
+	padding: 8px 16px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+/* The bars and the figure; the figure drops under the bars in a narrow
+ * column rather than being clipped. */
+body[data-page="admin-status-channel_analysis"] .table .ifacebadge {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 2px 6px;
+	padding: 0;
+	background: none;
+	border: 0;
+	font-variant-numeric: tabular-nums;
+}
+
+/* The network's colour as a status-sized dot before its name. */
+body[data-page="admin-status-channel_analysis"] .table span[style^="color:"] {
+	font-size: 9px;
+	vertical-align: 1px;
+}
+
+body[data-page="admin-status-channel_analysis"] .table .td:nth-child(2) {
+	color: var(--uf-text-1);
+}
+
+/* Narrow screens
+ * -------------- */
+
+@media screen and (max-width: 640px) {
+	/* The base stacks table cells; label/value rows stay one line. */
+	.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) > .tr {
+		flex-wrap: nowrap;
+		align-items: flex-start;
+		padding: 6px 0;
+	}
+
+	.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) > .tr:has(.cbi-progressbar) {
+		padding-bottom: 20px;
+	}
+
+	.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) > .tr > .td {
+		flex-basis: auto;
+		padding: 0 !important; /* over the base's stacked-cell padding */
+	}
+
+	.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) > .tr > .td[width="33%"] + .td {
+		flex: 1 1 0;
+	}
+
+	.uf-page:has(> .includes) .network-status-table .ifacebox {
+		flex-basis: 100%;
+	}
+
+	body[data-page^="admin-status-logs"] #content_syslog {
+		padding: 14px 14px 2px;
+	}
+
+	/* Each filter's field on a line of its own under its label. */
+	body[data-page^="admin-status-logs"] #content_syslog > div > select,
+	body[data-page^="admin-status-logs"] #content_syslog > div > input:not([type="checkbox"]),
+	body[data-page^="admin-status-logs"] #content_syslog > div > #logTextFilter,
+	body[data-page^="admin-status-logs"] #content_syslog > div > #logMaxRows {
+		flex: 1 1 100%;
+		width: auto;
+	}
+
+	body[data-page^="admin-status-logs"] #content_syslog > div > select + label[for^="invert"],
+	body[data-page^="admin-status-logs"] #content_syslog > div > #logTextFilter + label[for="logMaxRows"] {
+		margin-left: 0 !important; /* over the inline margins */
+	}
+
+	body[data-page="admin-status-processes"] #view > .table {
+		padding: 4px 14px;
+	}
+
+	/* The three signal buttons on a line of their own. */
+	body[data-page="admin-status-processes"] #view > .table .td.cbi-section-actions {
+		flex-basis: 100% !important; /* over the base's 50% for this page */
+	}
+
+	body[data-page^="admin-status-nftables"] .nft-chain {
+		padding: 14px;
+	}
+
+	body[data-page^="admin-status-nftables"] .nft-rules .tr > .td {
+		flex-basis: 100%;
+	}
+
+	body[data-page="admin-status-channel_analysis"] #channel_graph svg > text {
+		font-size: 9px !important;
+	}
+}
+/* ==== end page: status ==== */
+
+/* ==== page: network ==== */
+/* Network pages: Interfaces, Wireless, Routing, DHCP, DNS and Diagnostics.
+ * UniFi draws state as a small dot before a name, device kinds as quiet
+ * line icons and signal as a bar meter; LuCI's views bring their own
+ * full-colour icons and bold "Label:" runs, so those are redrawn here. */
+
+:root {
+	/* Device kinds, on the same 24px grid as the chrome's icons. */
+	--uf-network-i-ethernet: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'><rect x='3.75' y='4.75' width='16.5' height='14.5' rx='2.5'/><path d='M8 8.75h8v5.5h-2v2h-4v-2H8Z'/></svg>");
+	--uf-network-i-bridge: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><rect x='2.75' y='7.75' width='7' height='8.5' rx='1.75'/><rect x='14.25' y='7.75' width='7' height='8.5' rx='1.75'/><path d='M9.75 12h4.5M6.25 7.75V5.5h11.5v2.25'/></svg>");
+	--uf-network-i-wifi: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><path d='M3.25 9.25a12.5 12.5 0 0 1 17.5 0M6.25 12.5a8.25 8.25 0 0 1 11.5 0M9.25 15.75a4 4 0 0 1 5.5 0'/><circle cx='12' cy='19' r='1.1' fill='black'/></svg>");
+	--uf-network-i-vlan: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'><path d='M3.75 3.75h7l9.5 9.5-7 7-9.5-9.5Z'/><circle cx='7.75' cy='7.75' r='1.5'/></svg>");
+	--uf-network-i-alias: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><path d='M10.25 13.75a3.75 3.75 0 0 0 5.3 0l3.2-3.2a3.75 3.75 0 0 0-5.3-5.3l-1.2 1.2M13.75 10.25a3.75 3.75 0 0 0-5.3 0l-3.2 3.2a3.75 3.75 0 0 0 5.3 5.3l1.2-1.2'/></svg>");
+	--uf-network-i-tunnel: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><path d='M3.75 19.75V11.5a8.25 8.25 0 0 1 16.5 0v8.25ZM8.25 19.75V12a3.75 3.75 0 0 1 7.5 0v7.75'/></svg>");
+	--uf-network-i-wireguard: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><rect x='4.75' y='10.25' width='14.5' height='10' rx='2'/><path d='M8 10.25V7.75a4 4 0 0 1 8 0v2.5M12 14.25v2'/></svg>");
+	--uf-network-i-switch: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><rect x='2.75' y='6.75' width='18.5' height='10.5' rx='2'/><path d='M6.5 11h2M11 11h2M15.5 11h2M6.5 14h11'/></svg>");
+	--uf-network-i-vrf: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><path d='M12 3.75 20.25 8 12 12.25 3.75 8Z'/><path d='m3.75 12 8.25 4.25L20.25 12M3.75 16l8.25 4.25L20.25 16'/></svg>");
+	/* Four bars, each in its own quarter of the width, so a hard-stop
+	 * gradient under the mask fills exactly as many as the level says. */
+	--uf-network-i-signal: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect x='1.5' y='15' width='3' height='5.5' rx='1'/><rect x='7.5' y='11' width='3' height='9.5' rx='1'/><rect x='13.5' y='7' width='3' height='13.5' rx='1'/><rect x='19.5' y='3' width='3' height='17.5' rx='1'/></svg>");
+}
+
+/* Device icons
+ * ------------
+ * LuCI's icons are Tango-style drawings in fixed greys and blues, which
+ * glare in dark mode. Keep the <img> (its size and title still matter),
+ * push its own picture out of its box and paint a line icon in its place,
+ * in the text colour, dimmed when the device is down. */
+
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img:is([src*="/icons/ethernet"], [src*="/icons/bridge"], [src*="/icons/wifi"], [src*="/icons/vlan"], [src*="/icons/alias"], [src*="/icons/tunnel"], [src*="/icons/wireguard"], [src*="/icons/switch"], [src*="/icons/vrf"], [src*="/icons/port_"]) {
+	object-position: -9999px 0;
+	background-color: var(--uf-network-icon-color, var(--uf-text-2));
+	-webkit-mask: var(--uf-network-icon, var(--uf-network-i-ethernet)) center / contain no-repeat;
+	mask: var(--uf-network-icon, var(--uf-network-i-ethernet)) center / contain no-repeat;
+}
+
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img[src*="/icons/bridge"] { --uf-network-icon: var(--uf-network-i-bridge); }
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img[src*="/icons/wifi"] { --uf-network-icon: var(--uf-network-i-wifi); }
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img[src*="/icons/vlan"] { --uf-network-icon: var(--uf-network-i-vlan); }
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img[src*="/icons/alias"] { --uf-network-icon: var(--uf-network-i-alias); }
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img[src*="/icons/tunnel"] { --uf-network-icon: var(--uf-network-i-tunnel); }
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img[src*="/icons/wireguard"] { --uf-network-icon: var(--uf-network-i-wireguard); }
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img[src*="/icons/switch"] { --uf-network-icon: var(--uf-network-i-switch); }
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img[src*="/icons/vrf"] { --uf-network-icon: var(--uf-network-i-vrf); }
+
+/* A port with link is green, as on UniFi's port map. */
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img:is([src*="/icons/port_up"], [src*="/icons/port_pse_up"]) {
+	--uf-network-icon-color: var(--uf-green);
+}
+
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img:is([src*="_disabled."], [src*="/icons/port_down"], [src*="/icons/port_pse_down"]) {
+	--uf-network-icon-color: var(--uf-text-4);
+}
+
+/* Signal: UniFi's bar meter, filled to the level in the colour of its
+ * rating (Excellent, Good, Fair, Poor), grey bars for the rest. */
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) img[src*="/icons/signal-"] {
+	width: 20px;
+	height: 20px;
+	object-position: -9999px 0;
+	background: linear-gradient(90deg, var(--uf-network-bars, var(--uf-green)) var(--uf-network-level, 0%), var(--uf-border-strong) 0);
+	-webkit-mask: var(--uf-network-i-signal) center / contain no-repeat;
+	mask: var(--uf-network-i-signal) center / contain no-repeat;
+	vertical-align: middle;
+}
+
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) img[src*="/icons/signal-075-100"] { --uf-network-level: 100%; }
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) img[src*="/icons/signal-050-075"] { --uf-network-level: 75%; --uf-network-bars: var(--uf-lime); }
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) img[src*="/icons/signal-025-050"] { --uf-network-level: 50%; --uf-network-bars: var(--uf-orange); }
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) img[src*="/icons/signal-000-025"] { --uf-network-level: 25%; --uf-network-bars: var(--uf-red); }
+
+/* Disabled: the empty meter, fainter still. */
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) img[src*="/icons/signal-none"] {
+	opacity: .55;
+}
+
+/* Values LuCI marks as unset ("none", "unspecified", "any") are grey, as
+ * UniFi's "-" is, not italic. */
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) .cbi-section-table .td.cbi-value-field > em {
+	font-style: normal;
+	color: var(--uf-text-3);
+}
+
+/* Interfaces
+ * ----------
+ * One row per network: a tile with the name (its zone as the tint, its
+ * state as the dot) over the device, then the status as label/value
+ * pairs in two columns, like UniFi's device panel. */
+
+[data-page="admin-network-network"] #cbi-network-interface .td[data-name="_ifacebox"] {
+	width: 1%;
+	padding-right: 24px;
+}
+
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox {
+	width: 136px;
+	margin: 0;
+	border-color: var(--uf-border);
+	box-shadow: var(--uf-shadow-sm);
+}
+
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox-head {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	padding: 5px 10px;
+	border-bottom-color: transparent;
+}
+
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox-head > strong {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-weight: 600;
+}
+
+/* The state dot. LuCI says whether a network is up only through its
+ * buttons: Stop is disabled while it is down, Restart while it is
+ * still coming up. */
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox-head::before {
+	content: "";
+	flex: 0 0 auto;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--uf-network-state, var(--uf-text-4));
+	/* A ring in the card colour keeps a grey dot apart from a grey tint. */
+	box-shadow: 0 0 0 2px var(--uf-surface);
+}
+
+[data-page="admin-network-network"] #cbi-network-interface .tr:has(.cbi-section-actions .reconnect:enabled):has(.cbi-section-actions .down:enabled) {
+	--uf-network-state: var(--uf-green);
+}
+
+/* Orange too while its changes wait to be applied (the status then links
+ * to them, the only unlabelled link there). */
+[data-page="admin-network-network"] #cbi-network-interface .tr:has(.cbi-section-actions .reconnect:disabled):has(.cbi-section-actions .down:enabled),
+[data-page="admin-network-network"] #cbi-network-interface .tr:has(> [data-name="_ifacestat"] > div > .nowrap > a:first-child) {
+	--uf-network-state: var(--uf-orange);
+}
+
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox-body {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: center;
+	gap: 2px 4px;
+	padding: 10px 8px 9px;
+	color: var(--uf-text-3);
+}
+
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > br {
+	display: none;
+}
+
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > small {
+	flex: 1 1 100%;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: var(--uf-text-2);
+	font-size: 12px;
+	line-height: 16px;
+}
+
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > small > em {
+	font-style: normal;
+	color: var(--uf-text-3);
+}
+
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox-body img {
+	width: 24px;
+	height: 24px;
+	vertical-align: middle;
+}
+
+/* A bridge's ports, in brackets after it: smaller, and quieter. */
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > span:not(.cbi-tooltip-container) {
+	display: inline-flex;
+	align-items: center;
+	gap: 1px;
+	font-size: 12px;
+}
+
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > span:not(.cbi-tooltip-container) img {
+	width: 16px;
+	height: 16px;
+}
+
+/* The device card that pops up over an icon. */
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .cbi-tooltip.ifacebadge.large {
+	gap: 10px;
+	padding: 10px 12px;
+	background: var(--uf-raised);
+	border: 1px solid var(--uf-border);
+	color: var(--uf-text-1);
+	text-align: left;
+	white-space: nowrap;
+}
+
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .cbi-tooltip.ifacebadge.large > img {
+	align-self: flex-start;
+}
+
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .cbi-tooltip.ifacebadge.large .nowrap > strong {
+	color: var(--uf-text-3);
+	font-weight: 400;
+}
+
+/* Status: "Label: value" runs as pairs, the label grey and in a column
+ * of its own, long values wrapping under their value, not the label;
+ * two pairs to a line where there is room, so RX sits beside TX. */
+[data-page="admin-network-network"] #cbi-network-interface .td[data-name="_ifacestat"] > div {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+	gap: 0 32px;
+	color: var(--uf-text-1);
+	line-height: 20px;
+}
+
+[data-page="admin-network-network"] #cbi-network-interface .td[data-name="_ifacestat"] > div > br {
+	display: none;
+}
+
+:is([data-page="admin-network-network"] #cbi-network-interface .td[data-name="_ifacestat"] > div, [data-page="admin-network-network"] [id$="-ifc-status"] > span) > .nowrap {
+	display: block;
+	padding-left: 88px;
+	text-indent: -88px;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
+:is([data-page="admin-network-network"] #cbi-network-interface .td[data-name="_ifacestat"] > div, [data-page="admin-network-network"] [id$="-ifc-status"] > span) > .nowrap > strong {
+	display: inline-block;
+	width: 88px;
+	padding-right: 8px;
+	text-indent: 0;
+	color: var(--uf-text-3);
+	font-weight: 400;
+	vertical-align: top;
+}
+
+/* No label: a pending-changes link or a message, full width. */
+:is([data-page="admin-network-network"] #cbi-network-interface .td[data-name="_ifacestat"] > div, [data-page="admin-network-network"] [id$="-ifc-status"] > span) > .nowrap:not(:has(> strong)) {
+	grid-column: 1 / -1;
+	padding-left: 0;
+	text-indent: 0;
+}
+
+/* "Interface is starting…" and the like: a quiet status line. */
+[data-page="admin-network-network"] #cbi-network-interface .td[data-name="_ifacestat"] em {
+	font-style: normal;
+	color: var(--uf-text-3);
+}
+
+/* Devices tab: device name with its icon, as UniFi lists ports. */
+[data-page="admin-network-network"] #cbi-network-device .ifacebadge {
+	gap: 8px;
+	padding: 0;
+	background: none;
+	font-weight: 600;
+}
+
+[data-page="admin-network-network"] #cbi-network-device .ifacebadge img {
+	width: 20px;
+	height: 20px;
+}
+
+[data-page="admin-network-network"] #cbi-network-device .td > em {
+	font-style: normal;
+	color: var(--uf-text-3);
+}
+
+/* A MAC or MTU set in the configuration rather than read from the device. */
+[data-page="admin-network-network"] #cbi-network-device .td > strong[data-tooltip] {
+	font-weight: 500;
+	color: var(--uf-text-1);
+	border-bottom: 1px dotted var(--uf-text-3);
+	cursor: help;
+}
+
+/* Bridge VLAN filtering: each port column is headed by the port and its
+ * link, as UniFi heads its port table, not by two grey boxes. */
+[data-page="admin-network-network"] .ifacebadge:is(.port-status-device, .port-status-link) {
+	align-items: center;
+	gap: 6px;
+	padding: 0;
+	background: none;
+	white-space: nowrap;
+}
+
+[data-page="admin-network-network"] .ifacebadge:is(.port-status-device, .port-status-link) > img {
+	width: 18px;
+	height: 18px;
+}
+
+[data-page="admin-network-network"] .ifacebadge.port-status-device {
+	color: var(--uf-text-1);
+}
+
+[data-page="admin-network-network"] .ifacebadge.port-status-link {
+	color: var(--uf-text-3);
+	font-size: 12px;
+	font-weight: 400;
+}
+
+/* A chosen device in a multiple choice (Bridge ports) is a blue chip: its
+ * icon small and in the chip's blue, centred on the name. */
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .cbi-dropdown[multiple]:not([open]) > ul > li[display] > label {
+	align-items: center;
+	gap: 4px;
+}
+
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .cbi-dropdown[multiple]:not([open]) > ul > li[display] > label > span {
+	align-self: center;
+}
+
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .cbi-dropdown[multiple]:not([open]) > ul > li[display] img {
+	width: 14px;
+	height: 14px;
+	--uf-network-icon-color: currentColor;
+}
+
+/* The status block at the top of the interface and wireless dialogs:
+ * UniFi's device panel, a tinted block with the icon (or the meter) and
+ * label/value lines beside it. */
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .modal .ifacebadge.large {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+	max-width: 100%;
+	padding: 10px 14px;
+	background: var(--uf-field);
+	border: 0;
+	border-radius: var(--uf-radius);
+	color: var(--uf-text-1);
+	font-weight: 400;
+	line-height: 20px;
+	white-space: normal;
+}
+
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .modal .ifacebadge.large > img {
+	flex: 0 0 auto;
+	width: 24px;
+	height: 24px;
+	margin-top: 8px;
+}
+
+[data-page="admin-network-network"] .modal [id$="-ifc-status"] > span {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+[data-page="admin-network-network"] .modal [id$="-ifc-status"] > span > br {
+	display: none;
+}
+
+/* Wireless
+ * --------
+ * Radios head their group of SSIDs, as UniFi's radio rows ("Ch. 36 (5 GHz,
+ * 80 MHz)") head a device's WiFi; SSIDs are indented beneath them, each
+ * with its signal meter. A dot before the first line is the state. */
+
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_badge"] {
+	width: 1%;
+	padding-right: 24px;
+	white-space: nowrap;
+}
+
+/* LuCI centres the badges (.center, with !important); a flex row lines
+ * them up on the left instead, radio and SSIDs alike. */
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_badge"] > .center {
+	display: flex;
+}
+
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .ifacebadge {
+	gap: 8px;
+	padding: 0;
+	background: none;
+	border: 0;
+	color: var(--uf-text-2);
+	font-variant-numeric: tabular-nums;
+}
+
+/* Radio: the icon and its name, as a device's name reads in UniFi. */
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device span.ifacebadge {
+	color: var(--uf-text-1);
+	font-weight: 600;
+}
+
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device span.ifacebadge > img {
+	width: 20px;
+	height: 20px;
+}
+
+/* SSIDs sit under their radio. */
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not(:has(> [data-name="_stat"] big)) > .td[data-name="_badge"] {
+	padding-left: 36px;
+}
+
+/* A new radio starts a new group. */
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> [data-name="_stat"] big):not(:first-child) > .td {
+	border-top-color: var(--uf-border-strong);
+}
+
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .ifacebadge em,
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .ifacebadge small {
+	font-style: normal;
+	font-size: 12px;
+	color: var(--uf-text-3);
+}
+
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_stat"] {
+	color: var(--uf-text-4);
+	line-height: 20px;
+}
+
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_stat"] big {
+	font-size: 14px;
+}
+
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_stat"] big > strong {
+	color: var(--uf-text-1);
+	font-weight: 600;
+}
+
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_stat"] .nowrap {
+	color: var(--uf-text-1);
+}
+
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_stat"] .nowrap > strong {
+	color: var(--uf-text-3);
+	font-weight: 400;
+}
+
+/* The SSID itself is the name of the row. */
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_stat"] > div > .nowrap:first-child {
+	font-weight: 600;
+}
+
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_stat"] > div > .nowrap:first-child > strong {
+	font-weight: 400;
+}
+
+/* "Device is not active", "Wireless is not associated": UniFi's grey
+ * "Disconnected", not an italic aside. */
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_stat"] em {
+	font-style: normal;
+	color: var(--uf-text-3);
+}
+
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_stat"] big + div {
+	color: var(--uf-text-4);
+}
+
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_stat"] big + div > .nowrap {
+	color: var(--uf-text-2);
+}
+
+/* The state dot: green when the radio is up or the SSID is broadcasting,
+ * grey when it is not, orange while changes wait to be applied. */
+:is([data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_stat"] big, [data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_stat"] > div:not(:has(> big)) > .nowrap:first-child)::before {
+	content: "";
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	margin: 0 8px 1px 0;
+	border-radius: 50%;
+	background: var(--uf-network-state, var(--uf-green));
+	vertical-align: middle;
+}
+
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_stat"] > div:has(em) {
+	--uf-network-state: var(--uf-text-4);
+}
+
+[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_stat"] > div:has(a) {
+	--uf-network-state: var(--uf-orange);
+}
+
+/* Associated stations: UniFi's client list, as a card of its own. */
+[data-page="admin-network-wireless"] #view > h3 {
+	margin: 24px 0 10px;
+}
+
+[data-page="admin-network-wireless"] #wifi_assoclist_table {
+	margin-bottom: 16px;
+	padding: 4px 20px 8px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+	border-collapse: separate;
+	border-spacing: 0;
+}
+
+[data-page="admin-network-wireless"] #wifi_assoclist_table .th {
+	padding-top: 10px;
+	padding-bottom: 8px;
+}
+
+/* The empty state sits on the card's padding, not in it. */
+[data-page="admin-network-wireless"] #wifi_assoclist_table .tr.placeholder > .td {
+	bottom: 8px;
+}
+
+[data-page="admin-network-wireless"] #wifi_assoclist_table .tr:not(.table-titles):not(.placeholder):hover > .td {
+	background: var(--uf-hover);
+}
+
+[data-page="admin-network-wireless"] #wifi_assoclist_table .ifacebadge {
+	display: inline-flex;
+	flex-direction: row;
+	align-items: center;
+	gap: 6px;
+	padding: 0;
+	background: none;
+	text-align: left;
+	white-space: nowrap;
+	color: var(--uf-text-1);
+}
+
+[data-page="admin-network-wireless"] #wifi_assoclist_table .ifacebadge > img {
+	width: 16px;
+	height: 16px;
+	margin: 0;
+}
+
+[data-page="admin-network-wireless"] #wifi_assoclist_table .ifacebadge small {
+	color: var(--uf-text-3);
+	font-size: 12px;
+}
+
+[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(3) {
+	color: var(--uf-text-1);
+}
+
+[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(3) .hide-xs {
+	color: var(--uf-text-3);
+}
+
+/* Rates: receive marked with UniFi's download arrow in cyan, transmit
+ * with the upload arrow in purple; the long PHY details stay grey. */
+[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(5) {
+	min-width: 220px;
+	font-size: 12px;
+	line-height: 17px;
+}
+
+[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(5) > span > span:first-child::before {
+	content: "\2193";
+	display: inline-block;
+	width: 1em;
+	text-indent: 0;
+	color: var(--uf-cyan);
+	font-weight: 600;
+}
+
+[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(5) > span > span:last-child::before {
+	content: "\2191";
+	display: inline-block;
+	width: 1em;
+	text-indent: 0;
+	color: var(--uf-purple);
+	font-weight: 600;
+}
+
+[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(5) > span > span {
+	display: block;
+	padding-left: 1em;
+	text-indent: -1em;
+}
+
+[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(5) > span > br {
+	display: none;
+}
+
+/* Signal badges: the meter beside the reading ("-48/-95 dBm"), or above
+ * it where LuCI wraps it (scan results, the dialog's status). */
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .ifacebadge[data-signal],
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .center[data-signal] {
+	color: var(--uf-text-2);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .ifacebadge[data-signal] {
+	display: inline-flex;
+	flex-direction: row;
+	align-items: center;
+	gap: 8px;
+	padding: 0;
+	background: none;
+	border: 0;
+	/* Centred on the line, not sat on its baseline by the meter. */
+	vertical-align: middle;
+}
+
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .center[data-signal] {
+	display: inline-flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 2px;
+	font-size: 12px;
+	line-height: 16px;
+}
+
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .center[data-signal] br {
+	display: none;
+}
+
+:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .center[data-signal] em {
+	font-style: normal;
+	color: var(--uf-text-3);
+}
+
+/* The wireless dialog's status: the meter on the left, the facts beside. */
+[data-page="admin-network-wireless"] .modal .ifacebadge.large > small {
+	flex: 0 0 auto;
+	min-width: 56px;
+	padding-top: 4px;
+	text-align: center;
+}
+
+[data-page="admin-network-wireless"] .modal .ifacebadge.large > span {
+	flex: 1 1 auto;
+	min-width: 0;
+	color: var(--uf-text-4);
+}
+
+[data-page="admin-network-wireless"] .modal .ifacebadge.large > span > .nowrap {
+	color: var(--uf-text-1);
+}
+
+[data-page="admin-network-wireless"] .modal .ifacebadge.large > span > .nowrap > strong {
+	color: var(--uf-text-3);
+	font-weight: 400;
+}
+
+[data-page="admin-network-wireless"] .modal .ifacebadge.large em {
+	display: block;
+	font-style: normal;
+	color: var(--uf-text-3);
+}
+
+/* Scan results: figures in even columns, and the spinner beside its
+ * "Starting wireless scan…" rather than over it. */
+[data-page="admin-network-wireless"] .modal .table .td {
+	font-variant-numeric: tabular-nums;
+}
+
+[data-page="admin-network-wireless"] .modal .table .tr.placeholder > .td {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+}
+
+/* Routing, DHCP, DNS
+ * ------------------
+ * Mostly forms and grid sections the shared styles cover; what is left
+ * is which column names a row, networks shown in cells, and the lease
+ * tables LuCI renders by hand. */
+
+/* The first column names the row (a host, a route's network), so it reads
+ * in the primary colour, the data after it in the secondary. */
+:is([data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) .cbi-section-table .tr.cbi-section-table-row > .td:first-child {
+	color: var(--uf-text-1);
+}
+
+/* A network in a table cell ("wan" and its device): the name, then its
+ * devices as small icons, not a grey box. Out of a dropdown both of the
+ * badge's texts show; keep the one that says what is missing. */
+:is([data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) .cbi-section-table .td > .ifacebadge {
+	flex-wrap: wrap;
+	gap: 0 4px;
+	padding: 0;
+	background: none;
+	color: var(--uf-text-1);
+}
+
+:is([data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) .cbi-section-table .td > .ifacebadge > img {
+	width: 16px;
+	height: 16px;
+}
+
+:is([data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) .cbi-section-table .td > .ifacebadge > em {
+	font-style: normal;
+	color: var(--uf-text-3);
+}
+
+:is([data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) .cbi-section-table .td > .ifacebadge > .hide-open {
+	display: none;
+}
+
+:is([data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) .cbi-value > h4 {
+	margin: 4px 0 8px;
+	font-size: 14px;
+	font-weight: 600;
+}
+
+:is([data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) :is(#lease_status_table, #lease6_status_table) .tr:not(.table-titles):not(.placeholder):hover > .td {
+	background: var(--uf-hover);
+}
+
+/* The host is the name of the row; addresses and times read as data. */
+:is([data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) #lease_status_table .td:first-child,
+:is([data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) #lease6_status_table .td:nth-child(2) {
+	color: var(--uf-text-1);
+	font-weight: 500;
+}
+
+:is([data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) :is(#lease_status_table, #lease6_status_table) .td {
+	font-variant-numeric: tabular-nums;
+}
+
+/* Diagnostics
+ * -----------
+ * Three tools, each a target field with its run button beside it, in a
+ * card over the output, which reads as a console. */
+
+[data-page="admin-network-diagnostics"] .cbi-map > .table {
+	display: block;
+	margin-bottom: 16px;
+	padding: 16px 20px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+[data-page="admin-network-diagnostics"] .cbi-map > .table > .tr,
+[data-page="admin-network-diagnostics"] .cbi-map > .table > .tbody > .tr {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+	gap: 12px 24px;
+}
+
+[data-page="admin-network-diagnostics"] .cbi-map > .table .td {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	padding: 0;
+	border: 0;
+}
+
+[data-page="admin-network-diagnostics"] .cbi-map > .table .td > input[type="text"] {
+	flex: 1 1 auto;
+	width: auto;
+	min-width: 0;
+	margin: 0 !important; /* over the view's inline margin */
+}
+
+[data-page="admin-network-diagnostics"] .diag-action {
+	flex: 0 0 auto;
+	display: flex;
+}
+
+[data-page="admin-network-diagnostics"] .diag-action > .cbi-button,
+[data-page="admin-network-diagnostics"] .diag-action > .cbi-dropdown {
+	height: var(--uf-control-h);
+}
+
+[data-page="admin-network-diagnostics"] #command-output > textarea {
+	display: block;
+	width: 100%;
+	min-height: 360px;
+	padding: 12px 14px;
+	background: var(--uf-field);
+	border: 1px solid transparent;
+	border-radius: var(--uf-radius-sm);
+	color: var(--uf-text-1);
+	font-family: var(--uf-mono) !important; /* over the view's inline monospace */
+	font-size: 12px;
+	line-height: 18px;
+	resize: vertical;
+}
+
+[data-page="admin-network-diagnostics"] #command-output > textarea:focus {
+	border-color: var(--uf-blue-line);
+	outline: none;
+}
+
+/* Narrow screens
+ * -------------- */
+
+@media screen and (max-width: 640px) {
+	/* The tile keeps its width; the status takes the rest, one pair a line. */
+	[data-page="admin-network-network"] #cbi-network-interface .td[data-name="_ifacebox"] {
+		flex: 0 0 124px;
+	}
+
+	[data-page="admin-network-network"] #cbi-network-interface .td[data-name="_ifacestat"] {
+		flex: 1 1 0;
+		min-width: 0;
+	}
+
+	[data-page="admin-network-network"] #cbi-network-interface .ifacebox {
+		width: 100%;
+	}
+
+	[data-page="admin-network-network"] #cbi-network-interface .td[data-name="_ifacestat"] > div {
+		grid-template-columns: minmax(0, 1fr);
+		font-size: 13px;
+	}
+
+	:is([data-page="admin-network-network"] #cbi-network-interface .td[data-name="_ifacestat"] > div, [data-page="admin-network-network"] [id$="-ifc-status"] > span) > .nowrap {
+		padding-left: 76px;
+		text-indent: -76px;
+	}
+
+	:is([data-page="admin-network-network"] #cbi-network-interface .td[data-name="_ifacestat"] > div, [data-page="admin-network-network"] [id$="-ifc-status"] > span) > .nowrap > strong {
+		width: 76px;
+		font-size: 12px;
+	}
+
+	/* The badge (radio name, signal) keeps to its width; the status wraps
+	 * less with the rest of the line. */
+	[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_badge"] {
+		flex: 0 0 116px;
+	}
+
+	[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_stat"] {
+		flex: 1 1 0;
+		min-width: 0;
+	}
+
+	/* Cells bring their own padding here; the cards need less. */
+	[data-page="admin-network-wireless"] #wifi_assoclist_table,
+	[data-page="admin-network-diagnostics"] .cbi-map > .table {
+		padding: 8px;
+	}
+
+	[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(5) {
+		min-width: 0;
+	}
+
+	/* A reading is never cut short to fit the meter beside it. */
+	[data-page="admin-network-wireless"] .td:has(.ifacebadge[data-signal]) {
+		min-width: max-content;
+	}
+
+	/* Stacked under its label, the reading starts where the label does
+	 * (a column, since LuCI's .center insists on centred text). */
+	[data-page="admin-network-wireless"] .modal .td:has(.ifacebadge[data-signal]) {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+	}
+
+	[data-page="admin-network-diagnostics"] .cbi-map > .table > .tr,
+	[data-page="admin-network-diagnostics"] .cbi-map > .table > .tbody > .tr {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 4px;
+		padding: 0;
+		border: 0;
+	}
+
+	[data-page="admin-network-diagnostics"] #command-output > textarea {
+		min-height: 280px;
+	}
+}
+
+/* ==== end page: network ==== */
+
+/* ==== page: firewall ==== */
+/* luci-app-firewall (Network > Firewall: zones, port forwards, traffic
+ * rules, NAT rules, IP sets) and Status > Firewall (the nftables ruleset,
+ * and the legacy iptables listing behind it). Zones keep the colour LuCI
+ * gives them, as a tinted pill with a dot in the zone's own colour; verdicts
+ * take UniFi's status colours; a ruleset is a card per chain, its matches
+ * and actions as chips. */
+
+:root {
+	/* A zone pill is its colour washed over the card, edged a little
+	 * stronger; the dot is the colour shaded towards the text, so pastel
+	 * zone colours still show on white. */
+	--uf-firewall-zone-tint: .3;
+	--uf-firewall-zone-edge: .6;
+	--uf-firewall-zone-shade: 35%;
+	--uf-firewall-i-arrow: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'><path d='M4.5 12h15M14 6.5l5.5 5.5-5.5 5.5'/></svg>");
+	--uf-firewall-i-clock: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round'><circle cx='12' cy='12' r='8.5'/><path d='M12 7.5V12l3 2'/></svg>");
+}
+
+/* On a dark card the zone colours are light already: a fainter wash, and
+ * the dot in the colour itself. */
+:root[data-darkmode="true"] {
+	--uf-firewall-zone-tint: .16;
+	--uf-firewall-zone-edge: .4;
+	--uf-firewall-zone-shade: 0%;
+}
+
+/* Zones
+ * ----- */
+
+/* Inline-block, not flex, so the name sits on the text baseline around it
+ * ("From wan, IP ..."). */
+body[data-page^="admin-network-firewall"] .zonebadge {
+	display: inline-block;
+	max-width: 100%;
+	height: 22px;
+	padding: 0 9px 0 8px;
+	border-radius: 11px;
+	color: var(--uf-text-1);
+	font-size: 12px;
+	line-height: 22px;
+	white-space: nowrap;
+	vertical-align: baseline;
+}
+
+/* The zone colour arrives inline, as --zone-color-rgb and a solid
+ * background; wash it out instead. */
+body[data-page^="admin-network-firewall"] .zonebadge[style] {
+	background: rgba(var(--zone-color-rgb, 204, 204, 204), var(--uf-firewall-zone-tint)) !important;
+	box-shadow: inset 0 0 0 1px rgba(var(--zone-color-rgb, 204, 204, 204), var(--uf-firewall-zone-edge));
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge[style]::before {
+	content: "";
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	margin-right: 6px;
+	vertical-align: 1px;
+	border-radius: 50%;
+	background: color-mix(in srgb, rgb(var(--zone-color-rgb, 204, 204, 204)), var(--uf-text-1) var(--uf-firewall-zone-shade));
+}
+
+/* Port forwards name the colour as hex alone; lan and wan are fixed. */
+body[data-page^="admin-network-firewall"] .zonebadge[style*="#90f090"] {
+	--zone-color-rgb: 144, 240, 144;
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge[style*="#f09090"] {
+	--zone-color-rgb: 240, 144, 144;
+}
+
+/* "This device" and "any zone" are LuCI's grey: a plain neutral chip. */
+body[data-page^="admin-network-firewall"] .zonebadge[style*="238, 238, 238"],
+body[data-page^="admin-network-firewall"] .zonebadge[style*="#eeeeee"] {
+	background: var(--uf-field) !important;
+	box-shadow: inset 0 0 0 1px var(--uf-border);
+	color: var(--uf-text-2);
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge[style*="238, 238, 238"]::before,
+body[data-page^="admin-network-firewall"] .zonebadge[style*="#eeeeee"]::before {
+	display: none;
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge > strong,
+body[data-page^="admin-network-firewall"] .zonebadge > em {
+	margin: 0;
+	font-style: normal;
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge > strong {
+	font-weight: 600;
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge > strong + em,
+body[data-page^="admin-network-firewall"] .zonebadge > .ifacebadge {
+	margin-left: 4px;
+	color: var(--uf-text-2);
+}
+
+/* The networks a zone covers, beside its name in a zone picker. */
+body[data-page^="admin-network-firewall"] .zonebadge > .ifacebadge {
+	display: inline;
+	padding: 0;
+	background: none;
+	border: 0;
+	font-weight: 400;
+}
+
+/* "REJECT all others": the default, not a zone. */
+body[data-page^="admin-network-firewall"] .zonebadge-empty {
+	line-height: 20px;
+	background: transparent;
+	border: 1px dashed var(--uf-border-strong);
+	color: var(--uf-text-3);
+	font-size: 11px;
+	font-style: normal;
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge-empty > strong {
+	font-weight: 500;
+}
+
+/* Hovering a zone lists its networks in a small menu under it, not over
+ * the name. */
+body[data-page^="admin-network-firewall"] .zonebadge.cbi-tooltip-container {
+	position: relative;
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge .cbi-tooltip {
+	top: calc(100% + 4px);
+	margin: 0;
+	padding: 6px;
+	background: var(--uf-raised);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+	white-space: nowrap;
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge .cbi-tooltip > .ifacebadge {
+	margin: 0;
+	color: var(--uf-text-1);
+	font-weight: 400;
+}
+
+/* Zone => Forwards: compact pills and a quiet arrow, not full-width bars. */
+body[data-page^="admin-network-firewall"] .zone-forwards {
+	align-items: center;
+	gap: 8px;
+}
+
+body[data-page^="admin-network-firewall"] .zone-forwards > * {
+	flex: 0 0 auto;
+	padding: 0;
+}
+
+body[data-page^="admin-network-firewall"] .zone-forwards > span {
+	width: 16px;
+	height: 16px;
+	flex-basis: 16px;
+	background: var(--uf-text-4);
+	font-size: 0;
+	-webkit-mask: var(--uf-firewall-i-arrow) center / contain no-repeat;
+	mask: var(--uf-firewall-i-arrow) center / contain no-repeat;
+}
+
+body[data-page^="admin-network-firewall"] .zone-forwards .zone-src,
+body[data-page^="admin-network-firewall"] .zone-forwards .zone-dest {
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px;
+}
+
+body[data-page^="admin-network-firewall"] .zone-forwards .zone-dest {
+	flex: 0 1 auto;
+	min-width: 0;
+}
+
+/* A policy shows its verdict the way UniFi shows one: accept in green,
+ * reject and drop in red. The open list stays neutral. */
+body[data-page^="admin-network-firewall"] select:has(> option[value="ACCEPT"]:checked) {
+	color: var(--uf-green-text);
+}
+
+body[data-page^="admin-network-firewall"] select:has(> option[value="REJECT"]:checked),
+body[data-page^="admin-network-firewall"] select:has(> option[value="DROP"]:checked) {
+	color: var(--uf-red-text);
+}
+
+/* Rule tables: port forwards, traffic rules, NAT rules, IP sets
+ * ------------------------------------------------------------- */
+
+/* A rule's name labels its row, in UniFi's regular weight, and keeps a
+ * readable width; the action stays on one line. The match is the column
+ * that wraps. */
+body[data-page^="admin-network-firewall"] .cbi-section-table-row > .td.cbi-section-table-titles {
+	min-width: 140px;
+	color: var(--uf-text-1);
+	font-weight: 500;
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name="_target"],
+body[data-page^="admin-network-firewall"] .td[data-name="_dest"] {
+	white-space: nowrap;
+}
+
+/* The match is a sentence: the protocol on one line, "From zone" and "To
+ * zone" side by side under it, and anything further on lines of its own. */
+body[data-page^="admin-network-firewall"] .td[data-name="_match"] > small,
+body[data-page^="admin-network-firewall"] .td[data-name="_dest"] > small {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 2px 14px;
+	color: var(--uf-text-3);
+	font-size: 12px;
+	line-height: 22px;
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name="_match"] > small > br,
+body[data-page^="admin-network-firewall"] .td[data-name="_dest"] > small > br {
+	display: none;
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name="_match"] > small > span {
+	flex: 1 0 100%;
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name="_match"] > small > span:has(> .zonebadge) {
+	flex: 0 1 auto;
+}
+
+/* Values in primary text, as in UniFi's detail rows; blue is for links. */
+body[data-page^="admin-network-firewall"] .td[data-name^="_"] var {
+	color: var(--uf-text-1);
+	font-weight: 500;
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name^="_"] var[data-tooltip],
+body[data-page^="admin-network-firewall"] .td[data-name^="_"] var.cbi-tooltip-container {
+	border-bottom-color: var(--uf-text-4);
+}
+
+/* A value's tooltip ("ICMP with types echo-request") is the dark tip: its
+ * text, values included, in the tip's colour, not the card's. */
+body[data-page^="admin-network-firewall"] .td[data-name^="_"] var.cbi-tooltip-container .cbi-tooltip,
+body[data-page^="admin-network-firewall"] .td[data-name^="_"] .cbi-tooltip var {
+	color: var(--uf-tip-fg);
+}
+
+/* The verdict opens the action as a status pill: accept green, reject and
+ * drop red, rewrites and the rest blue. */
+body[data-page^="admin-network-firewall"] .td[data-name="_target"] var[data-tooltip],
+body[data-page^="admin-network-firewall"] .td[data-name="_dest"] var[data-tooltip] {
+	display: inline-flex;
+	align-items: center;
+	height: 20px;
+	margin-right: 2px;
+	padding: 0 8px;
+	border: 0;
+	border-radius: 10px;
+	background: var(--uf-blue-soft);
+	color: var(--uf-blue);
+	font-size: 12px;
+	font-weight: 500;
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name^="_"] var[data-tooltip="ACCEPT"] {
+	background: rgba(var(--uf-green-rgb), .14);
+	color: var(--uf-green-text);
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name^="_"] var[data-tooltip="REJECT"],
+body[data-page^="admin-network-firewall"] .td[data-name^="_"] var[data-tooltip="DROP"] {
+	background: rgba(var(--uf-red-rgb), .12);
+	color: var(--uf-red-text);
+}
+
+/* A disabled entry greys out, like an offline client in UniFi's lists. */
+body[data-page^="admin-network-firewall"] .cbi-section-table-row:has(> .td[data-name="enabled"] input:not(:checked)) > .td:not(.cbi-section-actions):not([data-name="enabled"]) {
+	color: var(--uf-text-3);
+}
+
+body[data-page^="admin-network-firewall"] .cbi-section-table-row:has(> .td[data-name="enabled"] input:not(:checked)) > .td:not(.cbi-section-actions):not([data-name="enabled"]) > * {
+	opacity: .55;
+}
+
+/* LuCI flags a rule with a schedule by a warning emoji; a clock says it. */
+body[data-page^="admin-network-firewall"] .td[data-name="enabled"] .cbi-checkbox > label.cbi-tooltip-container {
+	position: relative;
+	display: inline-flex;
+	width: 16px;
+	height: 16px;
+	font-size: 0;
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name="enabled"] .cbi-checkbox > label.cbi-tooltip-container::before {
+	content: "";
+	width: 16px;
+	height: 16px;
+	background: var(--uf-orange);
+	-webkit-mask: var(--uf-firewall-i-clock) center / contain no-repeat;
+	mask: var(--uf-firewall-i-clock) center / contain no-repeat;
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name="enabled"] .cbi-checkbox > label.cbi-tooltip-container > .cbi-tooltip {
+	top: calc(100% + 4px);
+}
+
+/* IP sets: the set's name leads, addresses and fields are code. */
+body[data-page="admin-network-firewall-ipsets"] .td[data-name="name"] {
+	color: var(--uf-text-1);
+	font-weight: 500;
+}
+
+body[data-page="admin-network-firewall-ipsets"] .td[data-name="match"],
+body[data-page="admin-network-firewall-ipsets"] .td[data-name="entry"] {
+	font-family: var(--uf-mono);
+	font-size: 12px;
+	word-spacing: .4em;
+}
+
+body[data-page="admin-network-firewall-ipsets"] .td[data-name="loadfile"] > em {
+	color: var(--uf-text-4);
+	font-style: normal;
+}
+
+/* "Your device runs firewall4." is a note, not a card of its own. */
+body[data-page^="admin-network-firewall"] #cbi-firewall-fwver {
+	position: relative;
+	padding: 10px 16px 10px 42px;
+	background: var(--uf-blue-soft);
+	border-color: rgba(var(--uf-blue-rgb), .3);
+}
+
+body[data-page^="admin-network-firewall"] #cbi-firewall-fwver::before {
+	content: "";
+	position: absolute;
+	top: 11px;
+	left: 16px;
+	width: 18px;
+	height: 18px;
+	background: var(--uf-blue);
+	-webkit-mask: var(--uf-i-info) center / contain no-repeat;
+	mask: var(--uf-i-info) center / contain no-repeat;
+}
+
+body[data-page^="admin-network-firewall"] #cbi-firewall-fwver > .cbi-section-descr {
+	margin: 0;
+	color: var(--uf-text-1);
+}
+
+/* An empty multiple choice ("unspecified") starts where a field's text
+ * does, like every other placeholder. */
+body[data-page^="admin-network-firewall"] .cbi-dropdown[empty] > .more {
+	justify-content: flex-start;
+	padding: 0 10px;
+}
+
+body[data-page^="admin-network-firewall"] .cbi-dropdown[empty] > .more > em,
+body[data-page^="admin-network-firewall"] .cbi-dropdown > ul > li[placeholder] > em {
+	color: var(--uf-text-4);
+	font-style: normal;
+}
+
+/* The row hover tint is the fields' own grey in the light scheme, so a
+ * hovered zone's policy fields would dissolve; outline them. */
+body[data-page^="admin-network-firewall"] .cbi-section-table-row:hover select {
+	border-color: var(--uf-border-strong);
+}
+
+/* Status > Firewall: the nftables ruleset
+ * --------------------------------------- */
+
+/* The ruleset has no heading of its own; the table's name is the title. */
+body[data-page^="admin-status-nftables"] .nft-table > h3 {
+	margin: 0 0 16px;
+	font-size: 20px;
+	line-height: 28px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-table ~ .nft-table {
+	margin-top: 32px;
+}
+
+/* One card per chain. */
+body[data-page^="admin-status-nftables"] .nft-chains {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-chain {
+	min-width: 0;
+	padding: 16px 20px 10px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+body[data-page^="admin-status-nftables"] .nft-chain > h4 {
+	margin: 0 0 10px;
+	font-size: 14px;
+	line-height: 20px;
+}
+
+/* A base chain's hook and policy: a line of label/value pairs. */
+body[data-page^="admin-status-nftables"] .nft-chain > h4:has(+ .nft-chain-hook) {
+	margin-bottom: 2px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-chain-hook > ul {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 2px 20px;
+	margin: 0 0 10px;
+	list-style: none;
+	color: var(--uf-text-3);
+	font-size: 12px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-chain-hook li {
+	line-height: 18px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-chain-hook strong {
+	color: var(--uf-text-1);
+	font-weight: 600;
+}
+
+/* The column titles repeat on every card; keep them quiet. */
+body[data-page^="admin-status-nftables"] .nft-rules .th {
+	padding-top: 4px;
+	padding-bottom: 6px;
+	color: var(--uf-text-3);
+	font-size: 12px;
+	font-weight: 500;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .td {
+	padding: 5px 8px !important; /* over the view's own */
+	line-height: 24px;
+	vertical-align: middle;
+}
+
+/* An empty chain says so in one quiet line, without column titles. */
+body[data-page^="admin-status-nftables"] .nft-rules:has(.td[colspan]) .table-titles {
+	display: none;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .td[colspan] {
+	padding: 0 0 6px !important; /* over the view's own */
+	border-top: 0;
+	text-align: left !important; /* over .center */
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .td[colspan] > em {
+	color: var(--uf-text-3);
+	font-style: normal;
+}
+
+/* Matches are filled chips, actions outlined ones: the two columns read
+ * apart at a glance. */
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge {
+	display: inline-block;
+	margin: 2px 4px 2px 0;
+	padding: 1px 8px;
+	border: 0;
+	border-radius: var(--uf-radius-sm);
+	background: var(--uf-field);
+	color: var(--uf-text-2);
+	font-size: 12px;
+	line-height: 18px;
+	vertical-align: middle;
+}
+
+/* A long match (a set of ICMP types) breaks across lines like a text
+ * highlight, open at the break, instead of dropping whole below the tags
+ * before it. */
+body[data-page^="admin-status-nftables"] .nft-rules .td:first-child > .ifacebadge {
+	display: inline;
+	padding: 3px 8px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .td:last-child .ifacebadge {
+	background: transparent;
+	box-shadow: inset 0 0 0 1px var(--uf-border-strong);
+	color: var(--uf-text-1);
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge var,
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge em {
+	color: var(--uf-text-3);
+	font-style: normal;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge strong {
+	color: var(--uf-text-1);
+	font-weight: 600;
+}
+
+/* Byte counters and rule comments lead a row as small quiet tags. */
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge.nft-counter,
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge.nft-comment {
+	background: transparent;
+	box-shadow: inset 0 0 0 1px var(--uf-border);
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .nft-counter > var {
+	font-variant-numeric: tabular-nums;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .nft-comment {
+	padding: 1px 6px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .nft-comment:hover > var {
+	color: var(--uf-blue);
+}
+
+/* A set spells out all its members, not the first 200px and an ellipsis;
+ * the braces and the tooltip repeating the list go. */
+body[data-page^="admin-status-nftables"] .nft-rules .nft-set,
+body[data-page^="admin-status-nftables"] .nft-rules .nft-list {
+	display: inline;
+	font-size: 0;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .nft-set-items,
+body[data-page^="admin-status-nftables"] .nft-rules .nft-list-items {
+	display: inline;
+	max-width: none;
+	overflow: visible;
+	font-size: 12px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .nft-set > .cbi-tooltip,
+body[data-page^="admin-status-nftables"] .nft-rules .nft-list > .cbi-tooltip {
+	display: none;
+}
+
+/* A verdict map's branches, one per line: "established: Accept packet". */
+body[data-page^="admin-status-nftables"] .nft-rules .td > div:not([class]) {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--uf-text-3);
+	font-size: 12px;
+}
+
+/* The legacy iptables listing (Status > Firewall > iptables), card per
+ * chain as well. */
+body[data-page="admin-status-nftables-iptables"] [data-table] > h3 {
+	margin: 20px 0 12px;
+}
+
+body[data-page="admin-status-nftables-iptables"] [data-chain] {
+	margin-bottom: 16px;
+	padding: 16px 20px 10px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+body[data-page="admin-status-nftables-iptables"] [data-chain] > h4 {
+	margin-bottom: 8px;
+	font-size: 14px;
+}
+
+body[data-page="admin-status-nftables-iptables"] [data-chain] > h4 em {
+	font-style: normal;
+}
+
+body[data-page="admin-status-nftables-iptables"] [data-chain] > h4 > span {
+	color: var(--uf-text-3);
+	font-size: 12px;
+	font-weight: 400;
+}
+
+body[data-page="admin-status-nftables-iptables"] [data-chain] > h4 > span em {
+	color: var(--uf-text-1);
+	font-weight: 500;
+}
+
+/* The view underlines jumps and tooltips in pure blue; use the accent. */
+body[data-page="admin-status-nftables-iptables"] span.jump,
+body[data-page="admin-status-nftables-iptables"] .cbi-tooltip-container {
+	border-bottom-color: var(--uf-blue-line);
+}
+
+body[data-page="admin-status-nftables-iptables"] [data-chain] .td {
+	padding-top: 6px;
+	padding-bottom: 6px;
+}
+
+body[data-page="admin-status-nftables-iptables"] .td .target {
+	color: var(--uf-text-1);
+	font-weight: 500;
+}
+
+body[data-page="admin-status-nftables-iptables"] .td .target.jump,
+body[data-page="admin-status-nftables-iptables"] span.jump {
+	color: var(--uf-blue);
+}
+
+body[data-page="admin-status-nftables-iptables"] .td[data-title="Pkts."],
+body[data-page="admin-status-nftables-iptables"] .td[data-title="Traffic"] {
+	font-variant-numeric: tabular-nums;
+}
+
+body[data-page="admin-status-nftables-iptables"] .td[data-title="Options"] {
+	font-family: var(--uf-mono);
+	font-size: 12px;
+}
+
+body[data-page="admin-status-nftables-iptables"] .td .ifacebadge {
+	padding: 1px 8px;
+	font-size: 12px;
+}
+
+/* An empty chain: its title and one quiet line. */
+body[data-page="admin-status-nftables-iptables"] [data-empty="true"] .table-titles {
+	display: none;
+}
+
+body[data-page="admin-status-nftables-iptables"] [data-empty="true"] .tr.placeholder {
+	height: auto;
+}
+
+body[data-page="admin-status-nftables-iptables"] [data-empty="true"] .tr.placeholder > .td {
+	position: static;
+	padding: 0 0 6px;
+	text-align: left;
+}
+
+/* Without NET_ADMIN, or before fw4 runs, there is nothing to list. */
+body[data-page^="admin-status-nftables"] #view > em {
+	display: block;
+	padding: 48px 20px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+	color: var(--uf-text-3);
+	font-style: normal;
+	text-align: center;
+}
+
+/* Phones
+ * ------ */
+
+@media screen and (max-width: 640px) {
+	/* Each rule is a card of its own here, and its name the card's title. */
+	body[data-page^="admin-network-firewall"] .cbi-section-table-row > .td.cbi-section-table-titles {
+		font-size: 14px;
+		font-weight: 600;
+	}
+
+	/* The match needs the width; action and switch share a line under it,
+	 * the action wrapping rather than cut short. */
+	body[data-page^="admin-network-firewall"] .td[data-name="_match"] {
+		flex-basis: 100%;
+	}
+
+	body[data-page^="admin-network-firewall"] .td[data-name="_target"],
+	body[data-page^="admin-network-firewall"] .td[data-name="_dest"] {
+		flex: 1 1 60%;
+		white-space: normal;
+	}
+
+	body[data-page^="admin-network-firewall"] .td[data-name="_target"] ~ .td[data-name="enabled"],
+	body[data-page^="admin-network-firewall"] .td[data-name="_dest"] ~ .td[data-name="enabled"] {
+		flex: 1 1 30%;
+	}
+
+	/* The three policies of a zone side by side. */
+	body[data-page="admin-network-firewall-zones"] .td:is([data-name="input"], [data-name="output"], [data-name="forward"]) {
+		flex: 1 1 30%;
+		min-width: 0;
+	}
+
+	body[data-page="admin-network-firewall-zones"] .td[data-name="_info"],
+	body[data-page="admin-network-firewall-zones"] .td[data-name="masq"] {
+		flex-basis: 100%;
+	}
+
+	body[data-page^="admin-status-nftables"] .nft-chain,
+	body[data-page="admin-status-nftables-iptables"] [data-chain] {
+		padding: 14px 14px 8px;
+	}
+
+	/* The toolbar wraps here, so it no longer shares a line with the
+	 * table's title. */
+	body[data-page="admin-status-nftables-iptables"] #view > .right {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		margin-bottom: 8px !important; /* over the view's inline -1.5em */
+	}
+
+	body[data-page="admin-status-nftables-iptables"] #view > .right > .cbi-button {
+		flex: 1 1 40%;
+	}
+
+	body[data-page="admin-status-nftables-iptables"] .td[data-title="Options"]::before {
+		font-family: var(--uf-font);
+	}
+
+	/* A rule's matches over its actions, rather than two thin columns. */
+	body[data-page^="admin-status-nftables"] .nft-rules .td {
+		flex: 1 1 100%;
+		padding: 2px 0 !important; /* over the view's own */
+	}
+
+	body[data-page^="admin-status-nftables"] .nft-rules .td:last-child:not([colspan]) {
+		padding-left: 16px !important; /* over the view's own */
+	}
+}
+/* ==== end page: firewall ==== */
+
+/* ==== page: system ==== */
+
+/* System pages
+ * ------------
+ * System, Administration, Software, Startup, Scheduled Tasks, Mount
+ * Points, LED Configuration, Attended Sysupgrade, Backup / Flash Firmware
+ * and Reboot. Rules are scoped to those pages' data-page, or to markup
+ * only their views render. */
+
+:root {
+	/* A password field's reveal button, shown and hidden, and the badge
+	 * on an SSH key. */
+	--uf-system-i-eye: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'><path d='M2.75 12S6.25 5.75 12 5.75 21.25 12 21.25 12 17.75 18.25 12 18.25 2.75 12 2.75 12Z'/><circle cx='12' cy='12' r='3'/></svg>");
+	--uf-system-i-eye-off: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><path d='M2.75 12S6.25 5.75 12 5.75 21.25 12 21.25 12 17.75 18.25 12 18.25 2.75 12 2.75 12Z'/><circle cx='12' cy='12' r='3'/><path d='m4 4 16 16'/></svg>");
+	--uf-system-i-key: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><circle cx='8' cy='15.5' r='4.25'/><path d='m11 12.5 8.5-8.5M16.5 7l2.5 2.5M14.5 9l2 2'/></svg>");
+}
+
+/* Views that are not forms put their content straight on the canvas;
+ * give it the card a form section gets. */
+body[data-page="admin-system-startup"] #view [data-tab-active="true"],
+body[data-page="admin-system-admin-sshkeys"] #view .cbi-section-node {
+	margin: 0 0 16px;
+	padding: 18px 20px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+/* A page action bar inside a card is the card's last row, not a second
+ * floating card. */
+body[data-page="admin-system-startup"] #view [data-tab] .cbi-page-actions,
+body[data-page="admin-system-flash"] .cbi-section .cbi-page-actions {
+	position: static;
+	margin: 0;
+	padding: 16px 0 0;
+	background: none;
+	border: 0;
+	border-radius: 0;
+	box-shadow: none;
+}
+
+/* Code-like text (crontab, rc.local, the backup list) is edited in the
+ * mono face with room for a screenful of lines. */
+body[data-page="admin-system-crontab"] #view textarea,
+body[data-page="admin-system-startup"] #view textarea,
+body[data-page="admin-system-flash"] textarea.cbi-input-textarea {
+	display: block;
+	width: 100%;
+	padding: 12px 14px;
+	font-size: 12px;
+	line-height: 20px;
+	tab-size: 4;
+	resize: vertical;
+}
+
+/* System
+ * ------
+ * Local Time is a read-only field: show the clock as the row's value,
+ * with the sync buttons beside it rather than under it. */
+body[data-page="admin-system-system"] .cbi-value[data-name="_systime"] .cbi-value-field {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 16px;
+}
+
+body[data-page="admin-system-system"] .cbi-value[data-name="_systime"] br {
+	display: none;
+}
+
+body[data-page="admin-system-system"] #localtime {
+	field-sizing: content;
+	width: auto;
+	min-width: 12ch;
+	padding: 0;
+	background: none;
+	border-color: transparent;
+	color: var(--uf-text-1);
+	font-weight: 500;
+	font-variant-numeric: tabular-nums;
+	cursor: default;
+}
+
+body[data-page="admin-system-system"] .cbi-value[data-name="_systime"] .cbi-button {
+	height: 28px;
+	padding: 0 12px;
+}
+
+/* Language and Style: a thumbnail of the chosen UniFi design beside the
+ * picker, as UniFi previews its appearance setting. The automatic design
+ * is both, split on the diagonal. A thumbnail pictures a design, not the
+ * current scheme, so its colours are its own and do not flip in dark. */
+:root {
+	--uf-system-thumb-light-bar: #f4f5f6;
+	--uf-system-thumb-light-canvas: #eceef0;
+	--uf-system-thumb-light-card: #ffffff;
+	--uf-system-thumb-light-line: #dee0e3;
+	--uf-system-thumb-light-accent: #006fff;
+	--uf-system-thumb-dark-bar: #0e0f11;
+	--uf-system-thumb-dark-canvas: #131416;
+	--uf-system-thumb-dark-card: #232528;
+	--uf-system-thumb-dark-line: #3a3d43;
+	--uf-system-thumb-dark-accent: #4797ff;
+}
+
+body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value^="/luci-static/unifi"]:checked) {
+	display: grid;
+	grid-template-columns: auto auto;
+	justify-content: start;
+	align-items: center;
+	gap: 12px 20px;
+}
+
+body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field > div {
+	grid-area: 1 / 1;
+}
+
+body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value^="/luci-static/unifi"]:checked)::before,
+body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value="/luci-static/unifi"]:checked)::after {
+	--bar: var(--uf-system-thumb-light-bar);
+	--canvas: var(--uf-system-thumb-light-canvas);
+	--card: var(--uf-system-thumb-light-card);
+	--line: var(--uf-system-thumb-light-line);
+	--accent: var(--uf-system-thumb-light-accent);
+	content: "";
+	grid-area: 1 / 2;
+	width: 120px;
+	height: 76px;
+	border: 1px solid var(--uf-border-strong);
+	border-radius: var(--uf-radius-sm);
+	/* app bar and its tab, icon rail, and two cards with a line of text,
+	 * the first with a switch */
+	background:
+		linear-gradient(var(--accent), var(--accent)) 8px 4px / 16px 3px no-repeat,
+		linear-gradient(var(--accent), var(--accent)) 28px 33px / 12px 5px no-repeat,
+		linear-gradient(var(--line), var(--line)) 28px 25px / 44px 3px no-repeat,
+		linear-gradient(var(--line), var(--line)) 28px 56px / 60px 3px no-repeat,
+		linear-gradient(var(--line), var(--line)) 28px 62px / 36px 3px no-repeat,
+		linear-gradient(var(--card), var(--card)) 22px 19px / 88px 25px no-repeat,
+		linear-gradient(var(--card), var(--card)) 22px 50px / 88px 19px no-repeat,
+		linear-gradient(var(--card), var(--card)) 0 11px / 13px 100% no-repeat,
+		linear-gradient(var(--bar), var(--bar)) 0 0 / 100% 11px no-repeat,
+		var(--canvas);
+}
+
+body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value="/luci-static/unifi-dark"]:checked)::before,
+body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value="/luci-static/unifi"]:checked)::after {
+	--bar: var(--uf-system-thumb-dark-bar);
+	--canvas: var(--uf-system-thumb-dark-canvas);
+	--card: var(--uf-system-thumb-dark-card);
+	--line: var(--uf-system-thumb-dark-line);
+	--accent: var(--uf-system-thumb-dark-accent);
+}
+
+body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value="/luci-static/unifi"]:checked)::after {
+	clip-path: polygon(100% 0, 100% 100%, 0 100%);
+}
+
+/* Administration
+ * --------------
+ * The password reveal toggle is an eye, crossed out while it shows. */
+body[data-page^="admin-system-"] .control-group > .cbi-input-password + .cbi-button {
+	--uf-btn-fg: var(--uf-text-3);
+	flex: 0 0 auto;
+	width: var(--uf-control-h);
+	padding: 0;
+	font-size: 0;
+}
+
+body[data-page^="admin-system-"] .control-group > .cbi-input-password + .cbi-button:hover {
+	--uf-btn-fg: var(--uf-text-1);
+}
+
+body[data-page^="admin-system-"] .control-group > .cbi-input-password + .cbi-button::before {
+	content: "";
+	width: 18px;
+	height: 18px;
+	background: currentColor;
+	-webkit-mask: var(--uf-system-i-eye) center / contain no-repeat;
+	mask: var(--uf-system-i-eye) center / contain no-repeat;
+}
+
+body[data-page^="admin-system-"] .control-group > .cbi-input-password[type="text"] + .cbi-button::before {
+	-webkit-mask-image: var(--uf-system-i-eye-off);
+	mask-image: var(--uf-system-i-eye-off);
+}
+
+/* SSH-Keys: one row per key, as in a UniFi list. A key badge, the key's
+ * comment in the primary colour, its type and fingerprint in grey under
+ * it, and the remove cross at the end of the row. */
+body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist {
+	display: flex;
+	gap: 0;
+	width: 100%;
+}
+
+body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .item {
+	display: block;
+	padding: 10px 44px 10px 54px;
+	/* The badge's disc; its glyph is the ::before below. */
+	background: radial-gradient(circle 15px at 26px 28px, var(--uf-blue-soft) 14.5px, transparent 15px) no-repeat;
+	border: 0;
+	border-bottom: 1px solid var(--uf-divider);
+	border-radius: 0;
+	line-height: 18px;
+	word-break: normal;
+	cursor: pointer;
+	transition: background-color .15s;
+}
+
+body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .item:hover {
+	background-color: var(--uf-hover);
+}
+
+body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .item::before {
+	content: "";
+	position: absolute;
+	top: 19px;
+	left: 17px;
+	width: 18px;
+	height: 18px;
+	background: var(--uf-blue);
+	-webkit-mask: var(--uf-system-i-key) center / contain no-repeat;
+	mask: var(--uf-system-i-key) center / contain no-repeat;
+}
+
+body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .item > strong {
+	color: var(--uf-text-1);
+}
+
+body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .item > br {
+	display: none;
+}
+
+body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .item > small {
+	display: block;
+	color: var(--uf-text-3);
+	font-size: 12px;
+}
+
+body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .item > small > code {
+	display: block;
+	padding: 0;
+	overflow: hidden;
+	background: none;
+	color: var(--uf-text-3);
+	font-size: 11px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > p {
+	margin: 0;
+	padding: 20px 0;
+	border-bottom: 1px solid var(--uf-divider);
+	color: var(--uf-text-3);
+	text-align: center;
+}
+
+body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .add-item {
+	padding-top: 14px;
+}
+
+body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .add-item > input {
+	flex: 1 1 auto;
+	width: auto;
+	min-width: 0;
+}
+
+body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .add-item > .cbi-button {
+	--uf-btn-fg: var(--uf-blue);
+	--uf-btn-line: var(--uf-blue-line);
+}
+
+body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .add-item > .cbi-button:hover {
+	--uf-btn-bg: var(--uf-blue-soft);
+	--uf-btn-line: var(--uf-blue);
+}
+
+/* Repository keys: the key is read-only text, drawn as a code block. The
+ * "add" form's output wraps it, so let it take the row's width. */
+body[data-page="admin-system-admin-repokeys"] .table textarea[readonly] {
+	width: 100%;
+	padding: 8px 12px;
+	background: var(--uf-field);
+	border-color: transparent;
+	color: var(--uf-text-2);
+	font-size: 11px;
+	line-height: 17px;
+	resize: none;
+}
+
+/* The key table has no header over its Delete column, so the header's
+ * rule would stop short of it; draw the rule on the first row instead. */
+body[data-page="admin-system-admin-repokeys"] .cbi-section-table .th {
+	border-bottom: 0;
+}
+
+body[data-page="admin-system-admin-repokeys"] .cbi-section-table .tbody > .tr:first-child > .td {
+	border-top: 1px solid var(--uf-border);
+}
+
+body[data-page="admin-system-admin-repokeys"] .cbi-value[data-name="_newkey"] > output {
+	display: block;
+	width: 100%;
+}
+
+body[data-page="admin-system-admin-repokeys"] .cbi-value[data-name="_newkey"] .right {
+	display: flex;
+	justify-content: flex-end;
+	margin-top: 12px;
+}
+
+body[data-page="admin-system-admin-repokeys"] .cbi-value[data-name="_newkey"] .right > .cbi-button {
+	--uf-btn-fg: var(--uf-blue);
+	--uf-btn-line: var(--uf-blue-line);
+}
+
+/* Startup
+ * -------
+ * The init scripts as a UniFi table: compact rows, the start order in
+ * grey, and a switch for "enabled at boot" in place of a button that
+ * reads "Enabled". Start/Restart/Reload/Stop are one segmented control,
+ * so the column is one quiet group rather than four blue outlines. */
+body[data-page="admin-system-startup"] .table .td {
+	padding-top: 5px;
+	padding-bottom: 5px;
+}
+
+body[data-page="admin-system-startup"] .table .tr:not(.table-titles):hover > .td {
+	background-color: var(--uf-hover);
+}
+
+body[data-page="admin-system-startup"] .table .th:first-child,
+body[data-page="admin-system-startup"] .table .td:first-child {
+	width: 1%;
+	padding-left: 8px;
+	padding-right: 32px;
+	white-space: nowrap;
+}
+
+body[data-page="admin-system-startup"] .table .td:first-child {
+	color: var(--uf-text-3);
+	font-variant-numeric: tabular-nums;
+}
+
+body[data-page="admin-system-startup"] .table .td:nth-child(2) {
+	color: var(--uf-text-1);
+	font-weight: 500;
+}
+
+body[data-page="admin-system-startup"] .table .td.cbi-section-actions {
+	padding-right: 8px;
+}
+
+body[data-page="admin-system-startup"] .table .td.cbi-section-actions > div {
+	flex-wrap: nowrap;
+	align-items: center;
+	gap: 6px 0;
+}
+
+body[data-page="admin-system-startup"] .td .btn {
+	flex: 0 0 auto;
+	height: 26px;
+	font-size: 12px;
+}
+
+/* The switch: a track and a knob drawn before the state's name. */
+body[data-page="admin-system-startup"] .td .cbi-button-positive,
+body[data-page="admin-system-startup"] .td .cbi-button-negative {
+	--uf-btn-fg: var(--uf-text-2);
+	--uf-btn-bg: transparent;
+	--uf-btn-line: transparent;
+	position: relative;
+	justify-content: flex-start;
+	min-width: 112px;
+	margin-right: 12px;
+	padding: 0 10px 0 46px;
+	font-weight: 400;
+}
+
+body[data-page="admin-system-startup"] .td .cbi-button-positive {
+	--uf-btn-fg: var(--uf-text-1);
+}
+
+body[data-page="admin-system-startup"] .td .cbi-button-positive:hover,
+body[data-page="admin-system-startup"] .td .cbi-button-negative:hover {
+	--uf-btn-fg: var(--uf-text-1);
+	--uf-btn-bg: var(--uf-hover);
+	--uf-btn-line: transparent;
+}
+
+body[data-page="admin-system-startup"] .td .cbi-button-positive:not(.spinning)::before,
+body[data-page="admin-system-startup"] .td .cbi-button-negative:not(.spinning)::before {
+	content: "";
+	position: absolute;
+	top: 3px;
+	left: 6px;
+	width: 32px;
+	height: 18px;
+	border-radius: 9px;
+	background: var(--uf-border-strong);
+	transition: background-color .15s;
+}
+
+body[data-page="admin-system-startup"] .td .cbi-button-positive:not(.spinning)::after,
+body[data-page="admin-system-startup"] .td .cbi-button-negative:not(.spinning)::after {
+	content: "";
+	position: absolute;
+	top: 5px;
+	left: 8px;
+	width: 14px;
+	height: 14px;
+	border-radius: 50%;
+	background: var(--uf-knob);
+	box-shadow: var(--uf-shadow-sm);
+	transition: transform .15s;
+}
+
+body[data-page="admin-system-startup"] .td .cbi-button-positive:not(.spinning)::before {
+	background: var(--uf-blue);
+}
+
+body[data-page="admin-system-startup"] .td .cbi-button-positive:not(.spinning):hover::before {
+	background: var(--uf-blue-strong);
+}
+
+body[data-page="admin-system-startup"] .td .cbi-button-negative:not(.spinning):hover::before {
+	background: var(--uf-text-4);
+}
+
+body[data-page="admin-system-startup"] .td .cbi-button-positive:not(.spinning)::after {
+	transform: translateX(14px);
+}
+
+/* The segmented actions. */
+body[data-page="admin-system-startup"] .td .cbi-button-action {
+	--uf-btn-fg: var(--uf-text-1);
+	--uf-btn-line: var(--uf-border-strong);
+	position: relative;
+	margin-left: -1px;
+	padding: 0 11px;
+	border-radius: 0;
+}
+
+body[data-page="admin-system-startup"] .td .cbi-button-action:hover {
+	--uf-btn-fg: var(--uf-blue);
+	--uf-btn-bg: var(--uf-blue-soft);
+	--uf-btn-line: var(--uf-blue-line);
+	z-index: 1;
+}
+
+body[data-page="admin-system-startup"] .td .cbi-button-action:nth-child(2) {
+	margin-left: 0;
+	border-radius: var(--uf-radius-sm) 0 0 var(--uf-radius-sm);
+}
+
+body[data-page="admin-system-startup"] .td .cbi-button-action:last-child {
+	border-radius: 0 var(--uf-radius-sm) var(--uf-radius-sm) 0;
+}
+
+/* Local Startup: rc.local, a script in a card. */
+body[data-page="admin-system-startup"] #view [data-tab="rc"] > p:has(> textarea) {
+	margin: 0;
+}
+
+body[data-page="admin-system-startup"] #view textarea {
+	min-height: 360px;
+}
+
+/* Scheduled Tasks
+ * ---------------
+ * The crontab is the whole page: an editor card, then the Save bar. */
+body[data-page="admin-system-crontab"] #view > p:has(> textarea) {
+	margin: 0 0 16px;
+}
+
+body[data-page="admin-system-crontab"] #view textarea {
+	min-height: max(360px, 55vh);
+	padding: 14px 16px;
+	background-color: var(--uf-surface);
+	border-color: var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+body[data-page="admin-system-crontab"] #view textarea:hover {
+	border-color: var(--uf-border-strong);
+}
+
+body[data-page="admin-system-crontab"] #view textarea:focus {
+	border-color: var(--uf-blue);
+}
+
+/* Reboot and Attended Sysupgrade
+ * ------------------------------
+ * Both are a title, a few lines and one button, straight in the view.
+ * A grid puts the title above a card drawn by a pseudo-element that sits
+ * behind the rest, so the page reads like the others: title, then card. */
+body[data-page="admin-system-reboot"] #view,
+body[data-page="admin-system-attendedsysupgrade-overview"] #view > p {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	justify-items: start;
+	margin: 0;
+}
+
+body[data-page="admin-system-reboot"] #view::before,
+body[data-page="admin-system-attendedsysupgrade-overview"] #view > p::before {
+	content: "";
+	grid-column: 1;
+	grid-row: 2 / 6;
+	justify-self: stretch;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+body[data-page="admin-system-reboot"] #view > *,
+body[data-page="admin-system-attendedsysupgrade-overview"] #view > p > * {
+	grid-column: 1;
+	margin-left: 20px;
+	margin-right: 20px;
+}
+
+body[data-page="admin-system-reboot"] #view > h2,
+body[data-page="admin-system-attendedsysupgrade-overview"] #view > p > h2 {
+	grid-row: 1;
+	margin: 0 0 20px;
+	font-size: 20px;
+	line-height: 28px;
+}
+
+body[data-page="admin-system-reboot"] #view > p {
+	grid-row: 2;
+	margin-top: 18px;
+	margin-bottom: 0;
+}
+
+body[data-page="admin-system-reboot"] #view > hr {
+	grid-row: 3;
+	justify-self: stretch;
+	margin-top: 14px;
+	margin-bottom: 16px;
+	border-color: var(--uf-divider);
+}
+
+body[data-page="admin-system-reboot"] #view > .cbi-button {
+	grid-row: 4;
+	margin-bottom: 20px;
+}
+
+body[data-page="admin-system-attendedsysupgrade-overview"] #view > p > p {
+	margin-top: 0;
+	margin-bottom: 4px;
+}
+
+body[data-page="admin-system-attendedsysupgrade-overview"] #view > p > p:nth-child(2) {
+	grid-row: 2;
+	margin-top: 18px;
+}
+
+body[data-page="admin-system-attendedsysupgrade-overview"] #view > p > p:nth-child(3) {
+	grid-row: 3;
+}
+
+/* "Currently running: …" is the one fact on the page. */
+body[data-page="admin-system-attendedsysupgrade-overview"] #view > p > p:nth-child(4) {
+	grid-row: 4;
+	justify-self: stretch;
+	margin-top: 12px;
+	margin-bottom: 0;
+	padding-top: 12px;
+	border-top: 1px solid var(--uf-divider);
+	color: var(--uf-text-1);
+	font-weight: 500;
+}
+
+body[data-page="admin-system-attendedsysupgrade-overview"] #view > p > .btn {
+	grid-row: 5;
+	margin-top: 16px;
+	margin-bottom: 20px;
+}
+
+/* Mount Points
+ * ------------
+ * The live mounts sit under Global Settings in the same card: set them
+ * off with a rule and a sub-heading, and keep the rows compact, the mount
+ * point in the primary colour and Unmount a small quiet button. */
+body[data-page="admin-system-mounts"] #cbi-fstab-global .cbi-section-node > h3 {
+	margin: 10px 0 6px;
+	padding-top: 20px;
+	border-top: 1px solid var(--uf-border);
+	font-size: 14px;
+	line-height: 20px;
+}
+
+body[data-page="admin-system-mounts"] #cbi-fstab-global .table .td {
+	padding-top: 5px;
+	padding-bottom: 5px;
+	font-variant-numeric: tabular-nums;
+}
+
+body[data-page="admin-system-mounts"] #cbi-fstab-global .table .tr:not(.table-titles):hover > .td {
+	background-color: var(--uf-hover);
+}
+
+body[data-page="admin-system-mounts"] #cbi-fstab-global .table .td:nth-child(2) {
+	color: var(--uf-text-1);
+}
+
+body[data-page="admin-system-mounts"] #cbi-fstab-global .table .td:last-child {
+	color: var(--uf-text-4);
+}
+
+body[data-page="admin-system-mounts"] #cbi-fstab-global .table .btn {
+	height: 24px;
+	padding: 0 10px;
+	font-size: 12px;
+}
+
+body[data-page="admin-system-mounts"] #cbi-fstab-global .table .btn:not(:hover) {
+	--uf-btn-line: var(--uf-border-strong);
+}
+
+/* The upgrade dialogs: long server output scrolls, the image's facts are
+ * label/value rows with the checksum free to wrap, and "Copy error data"
+ * is a secondary action, not a second primary; LuCI squeezes its padding
+ * inline. */
+body[data-page="admin-system-attendedsysupgrade-overview"] .modal pre {
+	max-height: 40vh;
+}
+
+body[data-page="admin-system-attendedsysupgrade-overview"] .modal .table .td {
+	overflow-wrap: anywhere;
+}
+
+body[data-page="admin-system-attendedsysupgrade-overview"] .modal > .btn.important[style] {
+	--uf-btn-fg: var(--uf-blue);
+	--uf-btn-bg: var(--uf-surface);
+	--uf-btn-line: var(--uf-blue-line);
+	padding: 0 14px !important;
+}
+
+body[data-page="admin-system-attendedsysupgrade-overview"] .modal > .btn.important[style]:hover {
+	--uf-btn-bg: var(--uf-blue-soft);
+	--uf-btn-line: var(--uf-blue);
+}
+
+body[data-page="admin-system-attendedsysupgrade-overview"] .modal > b {
+	margin-bottom: 6px;
+	color: var(--uf-text-2);
+	font-size: 12px;
+	font-weight: 600;
+}
+
+/* Backup / Flash Firmware
+ * -----------------------
+ * Backup, Restore and Flash are three tiles side by side, like UniFi's
+ * settings tiles, each a title, a line of text and its button. None of
+ * them is the page's one primary action, so their buttons are outlined. */
+body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] {
+	padding: 0;
+	background: none;
+	border: 0;
+}
+
+body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] > .cbi-section-node {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+	gap: 16px;
+}
+
+body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] > .cbi-section-node > .cbi-value {
+	display: flex;
+	padding: 18px 20px 20px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] > .cbi-section-node > .cbi-value > .cbi-section {
+	display: flex;
+	flex-direction: column;
+}
+
+body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] h3 {
+	margin-bottom: 6px;
+	font-size: 14px;
+	line-height: 20px;
+}
+
+body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] .cbi-section-descr {
+	margin: 0 0 16px;
+}
+
+/* In a tile the row's label is a caption over its button. */
+body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] .cbi-section-node .cbi-section-node > .cbi-value {
+	display: block;
+	padding: 0;
+	border: 0;
+}
+
+body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] .cbi-section-node .cbi-section-node > .cbi-value + .cbi-value {
+	margin-top: 14px;
+}
+
+body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] .cbi-section-node .cbi-section-node > .cbi-value > .cbi-value-title {
+	display: block;
+	padding: 0 0 6px;
+	color: var(--uf-text-3);
+	font-size: 12px;
+	font-weight: 500;
+}
+
+body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] .cbi-button-action.important {
+	--uf-btn-fg: var(--uf-blue);
+	--uf-btn-bg: var(--uf-surface);
+	--uf-btn-line: var(--uf-blue-line);
+}
+
+body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] .cbi-button-action.important:hover {
+	--uf-btn-fg: var(--uf-blue);
+	--uf-btn-bg: var(--uf-blue-soft);
+	--uf-btn-line: var(--uf-blue);
+}
+
+/* The dialogs. File facts (size, checksums) and the backup file list are
+ * mono text on a quiet field; the long list scrolls. */
+body[data-page="admin-system-flash"] .modal > ul {
+	max-height: 50vh;
+	margin: 0 0 16px;
+	padding: 10px 14px;
+	overflow: auto;
+	background: var(--uf-field);
+	border-radius: var(--uf-radius);
+	color: var(--uf-text-1);
+	font-family: var(--uf-mono);
+	font-size: 12px;
+	list-style: none;
+	overflow-wrap: anywhere;
+}
+
+body[data-page="admin-system-flash"] .modal > ul > li {
+	line-height: 20px;
+}
+
+/* Options in the flash and upgrade dialogs are checkboxes that LuCI
+ * wraps in a button-styled label; draw them as a checkbox row, and the
+ * "Force upgrade" one as a red notice with its checkbox in the icon's
+ * place. Their text has line breaks in it, so they stay blocks. */
+body[data-page="admin-system-flash"] .modal p > label.btn,
+body[data-page="admin-system-attendedsysupgrade-overview"] .modal label.btn:has(> input[type="checkbox"]) {
+	--uf-btn-bg: transparent;
+	--uf-btn-line: transparent;
+	position: relative;
+	display: block;
+	height: auto;
+	padding: 0 0 0 26px;
+	color: var(--uf-text-1);
+	font-weight: 400;
+	line-height: 20px;
+	text-align: left;
+	white-space: normal;
+}
+
+body[data-page="admin-system-flash"] .modal p > label.btn > input,
+body[data-page="admin-system-attendedsysupgrade-overview"] .modal label.btn > input[type="checkbox"] {
+	position: absolute;
+	top: 2px;
+	left: 0;
+	margin: 0;
+}
+
+body[data-page="admin-system-flash"] .modal p > label.btn.alert-message {
+	--uf-btn-bg: rgba(var(--uf-red-rgb), .08);
+	--uf-btn-line: rgba(var(--uf-red-rgb), .35);
+	padding: 12px 16px 12px 44px;
+}
+
+body[data-page="admin-system-flash"] .modal p > label.btn.alert-message::before {
+	content: none;
+}
+
+body[data-page="admin-system-flash"] .modal p > label.btn.alert-message > input {
+	top: 14px;
+	left: 16px;
+}
+
+/* The image check's log lines are newline-separated; keep them apart. The
+ * log ends in a newline already, so one of the two breaks after it is
+ * enough. */
+body[data-page="admin-system-flash"] .modal > p.alert-message {
+	white-space: pre-line;
+}
+
+body[data-page="admin-system-flash"] .modal > p.alert-message > br:first-of-type {
+	display: none;
+}
+
+/* Configuration: the list of files a backup keeps. */
+body[data-page="admin-system-flash"] .cbi-value[data-name="editlist"] {
+	display: block;
+}
+
+body[data-page="admin-system-flash"] textarea.cbi-input-textarea {
+	min-height: 360px;
+}
+
+/* Software
+ * --------
+ * The toolbar (disk space, filter, manual install, actions, translations)
+ * is one card and the package list another; the pagers are quiet
+ * "1-100 of 146  ‹ ›" rows, the way UniFi pages a table. The view's own
+ * stylesheet lays these out as a wrapping flexbox; this replaces it. */
+body[data-page="admin-system-package-manager"] .controls:not(:has(> .pager)) {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, auto);
+	gap: 18px 24px;
+	margin: 0 0 20px;
+	padding: 18px 20px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+body[data-page="admin-system-package-manager"] .controls:not(:has(> .pager)) > * {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 6px;
+	min-width: 0;
+	padding: 0;
+	white-space: normal;
+}
+
+body[data-page="admin-system-package-manager"] .controls:not(:has(> .pager)) > * > * {
+	flex: 0 0 auto;
+	align-self: auto;
+	min-width: 0;
+}
+
+/* Disk space and the translation filter span the card. */
+body[data-page="admin-system-package-manager"] .controls:not(:has(> .pager)) > :first-child,
+body[data-page="admin-system-package-manager"] .controls:not(:has(> .pager)) > :last-child {
+	grid-column: 1 / -1;
+}
+
+body[data-page="admin-system-package-manager"] .controls > * > label {
+	color: var(--uf-text-3);
+	font-size: 12px;
+	font-weight: 500;
+	line-height: 16px;
+}
+
+body[data-page="admin-system-package-manager"] .controls .control-group {
+	flex-wrap: nowrap;
+	width: 100%;
+}
+
+body[data-page="admin-system-package-manager"] .controls .control-group > input {
+	flex: 1 1 auto;
+	width: auto;
+	min-width: 0;
+}
+
+body[data-page="admin-system-package-manager"] .controls .control-group > .btn {
+	flex: 0 0 auto;
+}
+
+body[data-page="admin-system-package-manager"] .controls > :nth-child(4) .control-group {
+	flex-wrap: wrap;
+}
+
+/* Disk space: its label on the left and the usage on the right of one
+ * line, the bar under both, as UniFi draws "TX Retries  Low (13%)". */
+body[data-page="admin-system-package-manager"] .controls > :first-child {
+	position: relative;
+	gap: 0;
+}
+
+body[data-page="admin-system-package-manager"] .controls .cbi-progressbar {
+	min-width: 0;
+	margin: 8px 0 0;
+}
+
+body[data-page="admin-system-package-manager"] .controls .cbi-progressbar::before {
+	top: -26px;
+	left: auto;
+	right: 0;
+	max-width: 75%;
+	color: var(--uf-text-1);
+	text-align: right;
+}
+
+/* The translation filter: three radios in a row. */
+body[data-page="admin-system-package-manager"] .controls > :last-child > div {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 20px;
+	font-size: 0; /* the non-breaking spaces between the radios */
+}
+
+body[data-page="admin-system-package-manager"] .controls > :last-child > div > label {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 24px;
+	color: var(--uf-text-1);
+	font-size: 13px;
+}
+
+body[data-page="admin-system-package-manager"] .controls > :last-child > div > label > input {
+	margin: 0;
+}
+
+/* Pagers: right-aligned, the count first, then the two arrows. */
+body[data-page="admin-system-package-manager"] .controls:has(> .pager) {
+	display: flex;
+	justify-content: flex-end;
+	margin: 0 0 8px;
+}
+
+body[data-page="admin-system-package-manager"] #packages + .controls:has(> .pager) {
+	margin: 8px 0 0;
+}
+
+body[data-page="admin-system-package-manager"] .controls > .pager {
+	flex: 0 1 auto;
+	display: flex;
+	flex-wrap: nowrap;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+	padding: 0;
+}
+
+body[data-page="admin-system-package-manager"] .controls > .pager > .text {
+	flex: 0 1 auto;
+	order: -1;
+	margin-right: 8px;
+	color: var(--uf-text-3);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+
+body[data-page="admin-system-package-manager"] .controls > .pager > .btn {
+	flex: 0 0 auto;
+	width: 28px;
+	height: 28px;
+	padding: 0 0 2px;
+	font-size: 16px;
+}
+
+/* The package list: a table card with single-line rows. Descriptions
+ * run to one line and end in an ellipsis rather than stretch a row to
+ * five; the details dialog has them in full. */
+body[data-page="admin-system-package-manager"] #packages {
+	border-collapse: separate;
+	border-spacing: 0;
+	padding: 4px 12px 8px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+body[data-page="admin-system-package-manager"] #packages .th,
+body[data-page="admin-system-package-manager"] #packages .td {
+	padding: 6px 10px;
+}
+
+body[data-page="admin-system-package-manager"] #packages .th {
+	padding-top: 10px;
+	padding-bottom: 9px;
+}
+
+body[data-page="admin-system-package-manager"] #packages .tr:not(.cbi-section-table-titles):not(.placeholder):hover > .td {
+	background-color: var(--uf-hover);
+}
+
+body[data-page="admin-system-package-manager"] #packages .td:first-child {
+	color: var(--uf-text-1);
+	font-weight: 500;
+	white-space: nowrap;
+}
+
+body[data-page="admin-system-package-manager"] #packages .td.version {
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+body[data-page="admin-system-package-manager"] #packages .td.size {
+	color: var(--uf-text-3);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+body[data-page="admin-system-package-manager"] #packages .th:nth-child(4),
+body[data-page="admin-system-package-manager"] #packages .td:nth-child(4) {
+	width: 100%;
+	max-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+body[data-page="admin-system-package-manager"] #packages .td:nth-child(4) {
+	color: var(--uf-text-3);
+}
+
+/* What the filter matched, marked as a search highlight. */
+body[data-page="admin-system-package-manager"] #packages ins {
+	padding: 0 1px;
+	border-radius: 2px;
+	background: rgba(var(--uf-blue-rgb), .16);
+	color: var(--uf-text-1);
+	text-decoration: none;
+}
+
+/* Row actions: the verb in its colour on a neutral outline, so a page of
+ * "Remove…" is not a column of red. */
+body[data-page="admin-system-package-manager"] #packages .td .btn {
+	min-width: 92px;
+	height: 24px;
+	padding: 0 12px;
+	font-size: 12px;
+}
+
+body[data-page="admin-system-package-manager"] #packages .td .btn:not(:hover) {
+	--uf-btn-line: var(--uf-border-strong);
+}
+
+/* "Installed" is a state, not a button: grey text behind a green dot, as
+ * UniFi marks a device that is online. */
+body[data-page="admin-system-package-manager"] #packages .td .btn[disabled] {
+	--uf-btn-fg: var(--uf-text-3);
+	--uf-btn-bg: transparent;
+	--uf-btn-line: transparent;
+	justify-content: flex-start;
+	gap: 8px;
+	padding: 0 12px;
+	font-weight: 400;
+	opacity: 1;
+	cursor: default;
+}
+
+body[data-page="admin-system-package-manager"] #packages .td .btn[disabled]::before {
+	content: "";
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--uf-green);
+}
+
+/* Loading, empty and "no match" states sit in the card's middle; the
+ * view marks that cell .left, which is an !important utility. */
+body[data-page="admin-system-package-manager"] #packages .tr.placeholder > .td {
+	padding: 22px 0;
+	color: var(--uf-text-3);
+	font-weight: 400;
+	text-align: center !important;
+}
+
+body[data-page="admin-system-package-manager"] #packages .tr.placeholder .spinning {
+	display: inline-block;
+}
+
+/* The package dialogs: facts as label/value rows, the dependency tree
+ * under its label, and problems in red. */
+body[data-page="admin-system-package-manager"] .modal > ul:not(.deps):not(.errors) {
+	margin: 0 0 16px;
+	list-style: none;
+}
+
+body[data-page="admin-system-package-manager"] .modal > ul:not(.deps):not(.errors) > li {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 2px 16px;
+	padding: 7px 0;
+	border-top: 1px solid var(--uf-divider);
+	color: var(--uf-text-1);
+	overflow-wrap: anywhere;
+}
+
+body[data-page="admin-system-package-manager"] .modal > ul:not(.deps):not(.errors) > li:first-child {
+	border-top: 0;
+}
+
+body[data-page="admin-system-package-manager"] .modal > ul:not(.deps):not(.errors) > li > strong:first-child {
+	flex: 0 0 140px;
+	color: var(--uf-text-3);
+	font-weight: 400;
+}
+
+body[data-page="admin-system-package-manager"] .modal ul.deps {
+	flex: 1 1 280px;
+	margin: 0 0 0 1em;
+	color: var(--uf-text-2);
+	font-size: 12px;
+}
+
+body[data-page="admin-system-package-manager"] .modal ul.deps ul {
+	margin: 0 0 0 1.25em;
+}
+
+body[data-page="admin-system-package-manager"] .modal ul.deps li {
+	line-height: 22px;
+}
+
+body[data-page="admin-system-package-manager"] .modal ul.deps li::before {
+	color: var(--uf-text-4);
+}
+
+body[data-page="admin-system-package-manager"] .modal ul.deps .label {
+	height: 18px;
+	padding: 0 7px;
+	font-size: 10px;
+}
+
+body[data-page="admin-system-package-manager"] .modal > div > h5 {
+	margin: 0 0 4px;
+	color: var(--uf-text-3);
+	font-size: 12px;
+	font-weight: 500;
+}
+
+body[data-page="admin-system-package-manager"] .modal > div > h5 + p {
+	color: var(--uf-text-1);
+}
+
+body[data-page="admin-system-package-manager"] .modal ul.errors {
+	margin: 0 0 12px;
+	padding: 10px 12px 10px 36px;
+	background: rgba(var(--uf-red-rgb), .08);
+	border: 1px solid rgba(var(--uf-red-rgb), .3);
+	border-radius: var(--uf-radius);
+}
+
+body[data-page="admin-system-package-manager"] .modal ul.errors li {
+	padding-left: 0;
+	color: var(--uf-red-text);
+	font-size: 12px;
+	font-weight: 500;
+}
+
+body[data-page="admin-system-package-manager"] .modal ul.errors li::before {
+	width: 24px;
+	margin-left: -24px;
+}
+
+body[data-page="admin-system-package-manager"] .modal p > label.cbi-checkbox {
+	color: var(--uf-text-1);
+}
+
+/* The package manager's output: the command, what it printed, and its
+ * errors tinted red and kept to a scrollable height. */
+body[data-page="admin-system-package-manager"] .modal > pre {
+	max-height: 40vh;
+	margin-bottom: 12px;
+}
+
+body[data-page="admin-system-package-manager"] .modal > pre.errors {
+	background: rgba(var(--uf-red-rgb), .06);
+	border-color: rgba(var(--uf-red-rgb), .3);
+}
+
+body[data-page="admin-system-package-manager"] .modal > h5 {
+	margin: 16px 0 6px;
+	color: var(--uf-text-2);
+	font-size: 12px;
+}
+
+body[data-page="admin-system-package-manager"] .modal > h5:has(+ pre.errors) {
+	color: var(--uf-red-text);
+}
+
+/* Configure apk: each file's path over its editor. */
+body[data-page="admin-system-package-manager"] .modal > h5:has(+ textarea) {
+	font-family: var(--uf-mono);
+	font-weight: 500;
+}
+
+body[data-page="admin-system-package-manager"] .modal > h5 + textarea {
+	margin-bottom: 4px;
+}
+
+/* Phones
+ * ------ */
+@media screen and (max-width: 640px) {
+	body[data-page="admin-system-startup"] #view [data-tab-active="true"],
+	body[data-page="admin-system-admin-sshkeys"] #view .cbi-section-node {
+		padding: 14px;
+	}
+
+	/* A list's "add" field keeps its + button beside it (NTP servers,
+	 * rebuilders) rather than dropping it to a line of its own. */
+	body[data-page^="admin-system-"] .cbi-dynlist > .add-item {
+		flex-wrap: nowrap;
+	}
+
+	body[data-page^="admin-system-"] .cbi-dynlist > .add-item > input {
+		min-width: 0;
+	}
+
+	/* The theme thumbnail goes under the full-width picker. */
+	body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value^="/luci-static/unifi"]:checked) {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value^="/luci-static/unifi"]:checked)::before,
+	body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value="/luci-static/unifi"]:checked)::after {
+		grid-area: 2 / 1;
+	}
+
+	/* Startup: the switch on a line of its own, then the actions sharing
+	 * the next one. No hover tint: a touch leaves it stuck on a row. */
+	body[data-page="admin-system-startup"] .table .td.cbi-section-actions > div {
+		flex-wrap: wrap;
+	}
+
+	body[data-page="admin-system-startup"] .td .cbi-button-positive,
+	body[data-page="admin-system-startup"] .td .cbi-button-negative {
+		flex: 1 0 100%;
+		margin-right: 0;
+	}
+
+	body[data-page="admin-system-startup"] .td .cbi-button-action {
+		flex: 1 1 0;
+	}
+
+	body[data-page="admin-system-startup"] .table .tr:not(.table-titles):hover > .td,
+	body[data-page="admin-system-mounts"] #cbi-fstab-global .table .tr:not(.table-titles):hover > .td,
+	body[data-page="admin-system-package-manager"] #packages .tr:not(.cbi-section-table-titles):not(.placeholder):hover > .td {
+		background-color: transparent;
+	}
+
+	body[data-page="admin-system-startup"] .table .td:first-child {
+		width: auto;
+	}
+
+	/* Software: the toolbar stacks; descriptions get three lines. */
+	body[data-page="admin-system-package-manager"] .controls:not(:has(> .pager)) {
+		grid-template-columns: minmax(0, 1fr);
+		padding: 14px;
+	}
+
+	body[data-page="admin-system-package-manager"] #packages {
+		padding: 4px 10px;
+	}
+
+	/* Disk usage goes under the bar, where it has the full width. */
+	body[data-page="admin-system-package-manager"] .controls .cbi-progressbar {
+		margin-bottom: 22px;
+	}
+
+	body[data-page="admin-system-package-manager"] .controls .cbi-progressbar::before {
+		top: 12px;
+		left: 0;
+		max-width: none;
+		color: var(--uf-text-2);
+		text-align: left;
+	}
+
+	/* Name, version and size share the first line in equal parts; the
+	 * base's column classes size them with !important. */
+	body[data-page="admin-system-package-manager"] #packages .td:nth-child(-n+3) {
+		flex: 1 1 30% !important;
+	}
+
+	body[data-page="admin-system-package-manager"] #packages .td:first-child {
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+
+	body[data-page="admin-system-package-manager"] #packages .td.cbi-section-actions > .btn {
+		display: inline-flex;
+	}
+
+	body[data-page="admin-system-package-manager"] #packages .td:nth-child(4) {
+		display: -webkit-box;
+		width: auto;
+		max-width: none;
+		white-space: normal;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 3;
+	}
+}
+
+/* ==== end page: system ==== */

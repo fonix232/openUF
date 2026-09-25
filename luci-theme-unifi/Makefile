@@ -26,6 +26,11 @@ LUCI_DEPENDS:=+luci-base
 LUCI_URL:=https://github.com/fonix232/openUF
 LUCI_MAINTAINER:=openUF contributors
 
+# LuCI's csstidy (CSS 2/3 era) rewrites selectors and properties it does not
+# know; on this stylesheet it collapsed the Status overview's card grid. The
+# theme ships its CSS as written. JavaScript is still minified.
+LUCI_MINIFY_CSS:=0
+
 PKG_VERSION:=1.0.0
 PKG_RELEASE:=1
 PKG_LICENSE:=Apache-2.0
