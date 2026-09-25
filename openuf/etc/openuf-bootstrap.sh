@@ -79,6 +79,13 @@ src=$(dirname "$(find . -maxdepth 3 -name install.sh | head -1)")
 # install.sh adds missing packages from the feed, which needs the network.
 have_deps || wait_net dns
 
+# conf.lua is on the keep-list, but an adopted AP must never come back on the
+# shipped default (a different model map can mean a different identity MAC):
+# install.sh keeps the last one in /etc/openuf too.
+if [ ! -f /opt/openuf/conf.lua ] && [ -f /etc/openuf/conf.lua.last ]; then
+	mkdir -p /opt/openuf && cp /etc/openuf/conf.lua.last /opt/openuf/conf.lua
+	log "restored conf.lua from /etc/openuf/conf.lua.last"
+fi
 fresh=1
 [ -f /opt/openuf/conf.lua ] && fresh=0   # a kept conf.lua: this is a reinstall
 flags=""

@@ -4372,9 +4372,25 @@ function M._netmodel_check(st, cfg, ok)
 	return res
 end
 
+-- The copy of conf.lua the upgrade bootstrap restores when a new image comes
+-- up without one (openuf-bootstrap.sh): refreshed whenever it differs, so a
+-- hand edit made since the last install is what comes back.
+M.CONF_KEEP_FILE = "/etc/openuf/conf.lua.last"
+function M._keep_conf_copy()
+	local cur = M._read_file("conf.lua")
+	if not cur or cur == "" then return false end
+	if M._read_file(M.CONF_KEEP_FILE) == cur then return false end
+	local f = io.open(M.CONF_KEEP_FILE, "w")
+	if not f then return false end
+	f:write(cur)
+	f:close()
+	return true
+end
+
 function M.run(cfg, ufhw)
 	local st = state.load()
 	M._warn_debug_overrides(cfg)
+	pcall(M._keep_conf_copy)
 	-- A network plan applied right before a restart gets a fresh rollback
 	-- window measured from now.
 	if M._netmodel then pcall(M._netmodel.on_start, st) end

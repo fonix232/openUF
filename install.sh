@@ -226,6 +226,7 @@ case "$ACTION" in
 			echo "Warning: could not keep a copy of this build in $STATE_DIR/dist;"
 			echo "  a firmware upgrade will reinstall openUF from GitHub instead."
 		fi
+		cp "$INSTALL_DIR/conf.lua" "$STATE_DIR/conf.lua.last" 2>/dev/null
 		cp openuf/etc/openuf-bootstrap.sh "$STATE_DIR/bootstrap.sh"
 		chmod 0755 "$STATE_DIR/bootstrap.sh"
 		cp openuf/etc/init.d/openuf-bootstrap "$BOOTSTRAP_INIT"
@@ -457,7 +458,8 @@ case "$ACTION" in
 			"$BOOTSTRAP_INIT" disable 2>/dev/null
 			rm -f "$BOOTSTRAP_INIT"
 		fi
-		rm -rf "$STATE_DIR/dist" "$STATE_DIR/bootstrap.sh" "$STATE_DIR/bootstrap.conf"
+		rm -rf "$STATE_DIR/dist" "$STATE_DIR/bootstrap.sh" "$STATE_DIR/bootstrap.conf" \
+			"$STATE_DIR/conf.lua.last"
 
 		# Remove the SSH bootstrap account/group if present (hygiene --
 		# symmetric with what install --bootstrap-adopt added, regardless of
