@@ -2008,6 +2008,29 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: 2.4 GHz Auto uses UniFi's 1/6/11 plan; a fixed channel lifts it",
+		fn = function()
+			with_ucihelper(function(db)
+				ucihelper._popen = function() return AX3000T_IW_PHY end
+				seed_radios({"radio0", "radio1"})
+				local c = ucihelper._uci.cursor()
+				c:set("wireless", "radio0", "band", "2g")
+				c:set("wireless", "radio1", "band", "5g")
+				ucihelper.rf_config("radio0", nil, "auto")
+				assert_eq(table.concat(db.wireless.radio0.channels, ","), "1,6,11", "ACS candidates")
+				ucihelper.rf_config("radio1", nil, "auto")
+				assert_nil(db.wireless.radio1.channels, "5 GHz Auto is left to ACS")
+				ucihelper.rf_config("radio0", nil, 6)
+				assert_nil(db.wireless.radio0.channels, "a fixed channel lifts the list")
+				assert_nil(db.wireless.radio0.openuf_channels, "and its marker")
+				c:set("wireless", "radio0", "channels", {"1", "13"})
+				ucihelper.rf_config("radio0", nil, 11)
+				assert_eq(table.concat(db.wireless.radio0.channels, ","), "1,13",
+					"a list openUF did not write is left alone")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: raise_htmode/cap_htmode move kind and width independently",
 		fn = function()
 			assert_eq(ucihelper.raise_htmode("HT40", "HE80"), "HE80", "n/40 raised to ax/80")

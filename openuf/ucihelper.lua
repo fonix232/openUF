@@ -1095,13 +1095,24 @@ function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, r
 	elseif policy then
 		cursor:delete("wireless", radio, "acs_exclude_dfs")
 	end
-	if (eff_chan == "auto" or eff_chan == "0") and policy
-			and type(policy.channels) == "table" and #policy.channels > 0 then
-		local list = {}
+	-- 2.4 GHz Auto: UniFi's own auto-channel plan is 1/6/11 (the site's radio
+	-- settings list exactly those), and plenty of clients cannot use 12/13 at
+	-- all. Left to itself hostapd's ACS picked channel 13 on a UK E8450 and
+	-- the radio's clients never came back. A board policy's list still wins.
+	local auto = (eff_chan == "auto" or eff_chan == "0")
+	local list = nil
+	if auto and policy and type(policy.channels) == "table" and #policy.channels > 0 then
+		list = {}
 		for _, c in ipairs(policy.channels) do list[#list + 1] = tostring(c) end
+	elseif auto and band == "ng" then
+		list = {"1", "6", "11"}
+	end
+	if list then
 		cursor:set("wireless", radio, "channels", list)
-	elseif policy then
+		cursor:set("wireless", radio, "openuf_channels", "1")
+	elseif policy or cursor:get("wireless", radio, "openuf_channels") then
 		cursor:delete("wireless", radio, "channels")
+		cursor:delete("wireless", radio, "openuf_channels")
 	end
 	if htmode then
 		local want = htmode
