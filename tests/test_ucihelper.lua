@@ -440,6 +440,23 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: keep_dhcp_address pins norelease and the current address before a reload",
+		fn = function()
+			with_ucihelper(function(db)
+				local c = ucihelper._uci.cursor()
+				c:set("network", "lan", "interface")
+				c:set("network", "lan", "proto", "dhcp")
+				assert_true(ucihelper.keep_dhcp_address("lan", "10.0.0.4"), "changed")
+				assert_eq(db.network.lan.norelease, "1", "no release on stop")
+				assert_eq(db.network.lan.ipaddr, "10.0.0.4", "asks for its address")
+				assert_false(ucihelper.keep_dhcp_address("lan", "10.0.0.4"), "idempotent")
+				c:set("network", "lan", "proto", "static")
+				assert_false(ucihelper.keep_dhcp_address("lan", "10.0.0.9"), "static left alone")
+				assert_false(ucihelper.keep_dhcp_address("lan", "0.0.0.0"), "no address, no hint")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: the uplink socket carries the identity MAC and is LLDP's chassis interface",
 		fn = function()
 			with_ucihelper(function(db)

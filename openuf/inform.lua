@@ -4436,6 +4436,8 @@ function M.run(cfg, ufhw)
 			-- startup consumes _network_dirty (apply_config's reload only runs
 			-- on a setparam, which may be many minutes away or never).
 			M._ucihelper._network_dirty = false
+			pcall(M._ucihelper.keep_dhcp_address,
+				(cfg and cfg.net and cfg.net.lan_name) or "lan", st.ip)
 			M._sysinfo._run_cmd("/etc/init.d/network reload 2>/dev/null")
 			M._populate_net_info(st, cfg)  -- the address may have moved with it
 		end
@@ -4446,7 +4448,10 @@ function M.run(cfg, ufhw)
 		if ok_l then
 			if net_c then
 				M._ucihelper._network_dirty = false
+				pcall(M._ucihelper.keep_dhcp_address,
+					(cfg and cfg.net and cfg.net.lan_name) or "lan", st.ip)
 				M._sysinfo._run_cmd("/etc/init.d/network reload 2>/dev/null")
+				M._populate_net_info(st, cfg)
 			end
 			if net_c or lldp_c then
 				M._sysinfo._run_cmd("/etc/init.d/lldpd restart 2>/dev/null")

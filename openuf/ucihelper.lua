@@ -875,6 +875,31 @@ end
 -- on a DHCP-addressed board the new L2 identity means a new lease and possibly
 -- a new address; openUF reports the change on the next inform and the adoption
 -- is unaffected, but that is why this is loud rather than silent.
+-- Before openUF reloads the network itself: a DHCP management interface must
+-- come back on the address it has. OpenWrt's DHCP client releases its lease
+-- when it stops (unless norelease), so a reload renumbered the AP -- bifrost
+-- 10.0.0.4 -> 10.0.1.46 on an LLDP fix. norelease covers every later restart;
+-- the running client was started without it and releases once more, so it
+-- also asks for the address back (`ipaddr` is a request hint on proto dhcp).
+-- Returns true when UCI changed.
+function M.keep_dhcp_address(iface, ip)
+	if type(iface) ~= "string" or type(ip) ~= "string"
+		or not ip:match("^%d+%.%d+%.%d+%.%d+$") or ip == "0.0.0.0" then return false end
+	local cursor = get_uci().cursor()
+	if cursor:get("network", iface, "proto") ~= "dhcp" then return false end
+	local changed = false
+	if cursor:get("network", iface, "norelease") ~= "1" then
+		cursor:set("network", iface, "norelease", "1")
+		changed = true
+	end
+	if cursor:get("network", iface, "ipaddr") ~= ip then
+		cursor:set("network", iface, "ipaddr", ip)
+		changed = true
+	end
+	if changed then cursor:commit("network") end
+	return changed
+end
+
 -- LLDP must announce the MAC openUF is adopted under, or the controller cannot
 -- place the AP in its topology (it matches the neighbour's chassis ID against
 -- its devices). OpenWrt's lldpd init resolves a bridge in cid_interface down
