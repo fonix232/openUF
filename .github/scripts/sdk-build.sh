@@ -19,6 +19,9 @@ git config --global --add safe.directory '*'
 export OPENUF_FEED_BUILD=1
 
 cd /builder
+# The moving tags (x86-64-openwrt-25.12) ship only setup.sh, which downloads
+# and verifies that branch's current SDK; the versioned tags include it.
+[ -f rules.mk ] || ./setup.sh >/dev/null
 grep -E '^src-git[^ ]*( --root=[^ ]+)? base ' feeds.conf.default > feeds.conf
 echo "src-link openuf $REPO" >> feeds.conf
 ./scripts/feeds update -a >/dev/null

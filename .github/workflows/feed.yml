@@ -98,10 +98,12 @@ jobs:
           printf '%s\n' "$USIGN_KEY" > keys/usign.key
           chmod -R a+rX keys site && chmod -R a+w site
           docker run --rm -v "$PWD/site:/site" -v "$PWD/keys:/keys:ro" openwrt/sdk:x86-64-openwrt-25.12 sh -c '
+            cd /builder && { [ -f rules.mk ] || ./setup.sh >/dev/null; } &&
             cd /site/apk && rm -f packages.adb &&
             /builder/staging_dir/host/bin/apk mkndx --allow-untrusted \
               --sign /keys/apk-private.pem --output packages.adb *.apk'
           docker run --rm -v "$PWD/site:/site" -v "$PWD/keys:/keys:ro" openwrt/sdk:x86-64-openwrt-24.10 sh -c '
+            cd /builder && { [ -f rules.mk ] || ./setup.sh >/dev/null; } &&
             export PATH=/builder/staging_dir/host/bin:$PATH MKHASH=mkhash &&
             cd /site/ipk && rm -f Packages Packages.gz Packages.sig &&
             /builder/scripts/ipkg-make-index.sh . > Packages &&
