@@ -7,6 +7,8 @@
 	  tl-wdr3500-v1.lua       — TP-Link TL-WDR3500 v1 (dual-band, board-specific)
 	  xiaomi-ax3000t.lua      — Xiaomi Mi Router AX3000T (802.11ax, DSA)
 	  generic-dualband-ap.lua — any other dual-band board
+	  generic-singleband-ap.lua — any other single-band (2.4 GHz) board
+	  auto.lua                — derived from /etc/board.json at startup
 	  tl-wr1043ndv2.lua       — TP-Link WR1043ND v2 (single-band)
 
 	Prefer a board-specific map where one exists: the generic profile cannot
@@ -90,6 +92,28 @@ config = {
 	-- against a real UniFi controller -- see PROTOCOL-VALIDATION.md.
 	debug_dump_file = nil,
 
+	-- With debug_dump_file set: also record what openUF SENDS (a "TX" line per
+	-- inform) and transport failures ("ERR" lines, e.g. "HTTP 400"). Response
+	-- lines keep their untagged shape; filter with grep ' TX '.
+	debug_dump_requests = false,
+
+	-- RESEARCH ONLY. Override the capability bitmasks the payload claims:
+	--   debug_caps = {fw_caps = 0x110, wifi_caps = 0x0, wifi_caps2 = 0x40},
+	-- and/or merge extra top-level fields into every payload verbatim:
+	--   debug_payload_extra = {uplink = {type = "wireless"}},
+	-- A claimed bit makes the controller push config and show UI for a feature
+	-- this device does not implement; the daemon says so at every start.
+	debug_caps          = nil,
+	debug_payload_extra = nil,
+
+	-- Regulatory domain override: an ISO 3166-1 alpha-2 code programmed into
+	-- the driver INSTEAD of the one the controller pushes (nil = off). For a
+	-- driver that cannot run DFS, where the site's regdomain leaves no usable
+	-- wide channel. The controller is still told its OWN value. This programs
+	-- a regulatory domain the device may not physically be in -- channel use
+	-- and TX power are legal constraints, so it is off unless set on purpose.
+	country_override = nil,
+
 	-- Ceiling for that dump, in bytes (default 4 MiB). The inform loop appends
 	-- to it every few seconds, and its usual home is /tmp -- a RAM disk on
 	-- these boards -- so an unbounded dump eventually starves state.json
@@ -157,4 +181,20 @@ config = {
 	advertise_updates  = false,
 	advertise_interval = 6 * 3600,
 	version_scheme     = nil,
+
+	-- The controller's system settings (sysconf.lua): its timezone, its NTP
+	-- servers (the ubnt pool) and its nightly `syswrapper.sh 11k-scan` cron
+	-- job. true applies all three, false none, or pick, e.g.
+	-- {timezone = true, ntp = false, cron = true} for a site with its own NTP.
+	controller_system = true,
+
+	-- The controller's ebtables hardening (l2guard.lua): no STP BPDUs and no
+	-- VLAN-tagged frames from Wi-Fi clients, as an nftables bridge table on
+	-- the VAPs. Needs kmod-nft-bridge. false leaves it off.
+	l2guard = true,
+
+	-- Every response type, command and config key openUF did not act on is
+	-- kept (redacted, bounded) in this file -- how a new controller verb gets
+	-- noticed. false keeps the ledger in memory only.
+	unhandled_file = "/etc/openuf/unhandled.json",
 }

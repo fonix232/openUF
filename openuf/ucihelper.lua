@@ -328,6 +328,46 @@ function M.clamp_htmode(band, htmode)
 	return out, htmode
 end
 
+-- Raise an OpenWrt htmode to at least `floor`, per-kind and per-width
+-- independently ("VHT80" with a floor of "HE20" becomes "HE80"). Overrides the
+-- controller, so it only runs when a modelmap asked for it
+-- (dev.conf.radio.<band>.htmode_floor); the hardware clamp still runs after.
+-- Returns the htmode and, when it changed, the original.
+function M.raise_htmode(htmode, floor)
+	if type(htmode) ~= "string" or type(floor) ~= "string" then return htmode, nil end
+	local h_kind, h_width = htmode:match("^(%u+)(%d+)$")
+	local f_kind, f_width = floor:match("^(%u+)(%d+)$")
+	if not (h_kind and f_kind and PHY_RANK[h_kind] and PHY_RANK[f_kind]) then
+		return htmode, nil
+	end
+	local kind  = RANK_PHY[math.max(PHY_RANK[h_kind], PHY_RANK[f_kind])]
+	local width = math.max(tonumber(h_width), tonumber(f_width))
+	if kind == "HT" then width = math.min(width, 40) end
+	local out = kind .. tostring(width)
+	if out == htmode then return htmode, nil end
+	return out, htmode
+end
+
+-- Lower an htmode to at most `ceiling` -- the mirror of raise_htmode, for a
+-- width the driver ADVERTISES and the radio cannot actually run (e.g. HE160
+-- on a board whose driver cannot start DFS CAC, when every 160 MHz block
+-- overlaps DFS). `iw phy` cannot say "advertised but unusable"; a modelmap
+-- can, via dev.conf.radio.<band>.htmode_max.
+function M.cap_htmode(htmode, ceiling)
+	if type(htmode) ~= "string" or type(ceiling) ~= "string" then return htmode, nil end
+	local h_kind, h_width = htmode:match("^(%u+)(%d+)$")
+	local c_kind, c_width = ceiling:match("^(%u+)(%d+)$")
+	if not (h_kind and c_kind and PHY_RANK[h_kind] and PHY_RANK[c_kind]) then
+		return htmode, nil
+	end
+	local kind  = RANK_PHY[math.min(PHY_RANK[h_kind], PHY_RANK[c_kind])]
+	local width = math.min(tonumber(h_width), tonumber(c_width))
+	if kind == "HT" then width = math.min(width, 40) end
+	local out = kind .. tostring(width)
+	if out == htmode then return htmode, nil end
+	return out, htmode
+end
+
 -- The UCI prefix applied to all openuf-managed wireless sections
 local OPENUF_PREFIX = "openuf_"
 
@@ -351,6 +391,26 @@ local SECURITY_MAP = {
 	["wpa3"]       = "sae",
 	["wpa2/wpa3"]  = "sae-mixed",
 }
+
+-- The controller's aaa.<n>.wpa.1.pairwise, as an OpenWrt encryption suffix.
+-- The cipher is always written: left out, OpenWrt picks it from the board and
+-- the htmode (GCMP-256 where the phy lists it, on some releases), and a
+-- cipher the clients or the driver cannot run leaves the SSID dead.
+local CIPHER_MAP = {
+	["CCMP"]      = "ccmp",
+	["TKIP CCMP"] = "tkip+ccmp",
+	["GCMP"]      = "gcmp",
+	["CCMP-256"]  = "ccmp256",
+	["GCMP-256"]  = "gcmp256",
+}
+
+-- The UCI `encryption` value for a security type and pushed cipher.
+function M.encryption_for(security, pairwise)
+	local enc = SECURITY_MAP[security] or "psk2"
+	if enc == "none" then return enc end
+	local cipher = CIPHER_MAP[tostring(pairwise or ""):upper()] or "ccmp"
+	return enc .. "+" .. cipher
+end
 
 -- Deterministic 16-bit id from a string, formatted as 4 hex chars (802.11r
 -- mobility domain is a 2-octet field). Used as a stopgap mobility_domain
@@ -503,7 +563,8 @@ end
 -- Create a new wifi-iface section named openuf_<ssid> on the given radio.
 -- radio:    UCI radio name, e.g. "radio0" or "radio1"
 -- ssid:     SSID string
--- security: "open" | "wpa2" | "wpa3" | "wpa2/wpa3"
+-- security: "open" | "wpa2" | "wpa3" | "wpa2/wpa3", or a table
+--           {security=, pairwise=} carrying the pushed cipher as well
 -- password: WPA pre-shared key (ignored when security == "open")
 -- extra:    optional table of additional UCI key/value pairs (802.11r/k/v etc.)
 -- network:  UCI network/interface name to bridge this SSID onto (defaults to
@@ -553,7 +614,12 @@ function M.wlan_add(radio, ssid, security, password, extra, network, wlanconf_id
 	end
 	local section_name = OPENUF_PREFIX .. tostring(radio):gsub("[^%w_]", "_")
 		.. "_" .. safe_ssid
-	local enc = SECURITY_MAP[security] or "psk2"
+	local enc
+	if type(security) == "table" then
+		enc = M.encryption_for(security.security, security.pairwise)
+	else
+		enc = M.encryption_for(security)
+	end
 	cursor:set("wireless", section_name, "wifi-iface")
 	cursor:set("wireless", section_name, "device", radio)
 	cursor:set("wireless", section_name, "mode", "ap")
@@ -896,8 +962,20 @@ end
 -- country: ISO 3166-1 alpha-2 regulatory domain from the controller's site
 -- setting (system_cfg's radio.<n>.countrycode, numeric on the wire and mapped
 -- to alpha-2 by inform.lua). nil leaves UCI alone.
+-- radio_policy: the modelmap's dev.conf.radio table, keyed by band ("ng" =
+-- 2.4 GHz, "na" = 5/6 GHz) -- board-level answers the controller cannot know:
+--   acs_exclude_dfs  with channel Auto, keep ACS off DFS channels (for a
+--                    driver that cannot start CAC, where ACS picking a DFS
+--                    channel leaves the radio down)
+--   channels         explicit ACS candidate list (UCI `channels`)
+--   htmode_floor     raise a pushed htmode to at least this (raise_htmode)
+--   htmode_max       lower a pushed htmode to at most this (cap_htmode)
+-- All absent by default. opts.force_wifi4 suppresses the floor (a WLAN on the
+-- radio asked for an 802.11n beacon). opts.country_override programs that
+-- regdomain INSTEAD of the controller's, which is stamped as openuf_country
+-- and still reported -- see conf.lua.
 function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, rates,
-		disabled, country)
+		disabled, country, radio_policy, opts)
 	local uci = get_uci()
 	local cursor = uci.cursor()
 	-- Every write below is cursor:set on a named section, which in UCI CREATES
@@ -920,27 +998,98 @@ function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, r
 	if disabled ~= nil then
 		cursor:set("wireless", radio, "disabled", disabled and "1" or "0")
 	end
-	if country and country ~= cursor:get("wireless", radio, "country") then
-		-- The regdomain decides which channels are legal and how much power
-		-- each may use, so it has to be written BEFORE the channel and txpower
-		-- below -- and it invalidates the cached driver capabilities, whose
-		-- per-channel dBm limits are regdomain-derived.
-		cursor:set("wireless", radio, "country", country)
-		regdomain_changed()
+	-- The regdomain decides which channels are legal and how much power each
+	-- may use, so it has to be written BEFORE the channel and txpower below --
+	-- and it invalidates the cached driver capabilities, whose per-channel dBm
+	-- limits are regdomain-derived.
+	local cc_override = nil
+	if type(opts) == "table" and type(opts.country_override) == "string"
+			and opts.country_override:match("^%a%a$") then
+		cc_override = opts.country_override:upper()
+	end
+	if cc_override then
+		-- Stamp what the controller asked for, so get_radio_table keeps
+		-- REPORTING the controller's own value.
+		if country and country ~= cc_override then
+			cursor:set("wireless", radio, "openuf_country", country)
+		end
+		if cc_override ~= cursor:get("wireless", radio, "country") then
+			io.stderr:write(string.format(
+				"openuf: %s: regdomain override -- programming %s into the driver, " ..
+				"reporting %s to the controller\n", radio, cc_override,
+				tostring(country or cursor:get("wireless", radio, "openuf_country")
+					or cc_override)))
+			cursor:set("wireless", radio, "country", cc_override)
+			regdomain_changed()
+		end
+	else
+		-- No override (or it was removed): the controller's value goes back.
+		if cursor:get("wireless", radio, "openuf_country") then
+			country = country or cursor:get("wireless", radio, "openuf_country")
+			cursor:delete("wireless", radio, "openuf_country")
+			regdomain_changed()
+		end
+		if country and country ~= cursor:get("wireless", radio, "country") then
+			cursor:set("wireless", radio, "country", country)
+			regdomain_changed()
+		end
 	end
 	if chan then
 		cursor:set("wireless", radio, "channel", tostring(chan))
 	end
+	-- The radio's band comes from its own UCI declaration, not from the
+	-- channel being pushed alongside: a radio's band is fixed by hardware,
+	-- and `chan` can be the literal "auto".
+	local band = band_for_device({
+		band    = cursor:get("wireless", radio, "band"),
+		hwmode  = cursor:get("wireless", radio, "hwmode"),
+		channel = cursor:get("wireless", radio, "channel") or chan,
+	})
+	local policy = (type(radio_policy) == "table" and band and radio_policy[band]) or nil
+	-- What "Auto" means on this board, read back from UCI so a push without a
+	-- channel still gets the policy applied to the auto already configured.
+	-- A concrete channel drops both options: they are ACS inputs only, and
+	-- left behind they would come back with the next Auto.
+	local eff_chan = tostring(cursor:get("wireless", radio, "channel"))
+	-- A band with no policy entry keeps both options as the board had them;
+	-- a band with one owns them.
+	if (eff_chan == "auto" or eff_chan == "0") and policy and policy.acs_exclude_dfs then
+		cursor:set("wireless", radio, "acs_exclude_dfs", "1")
+	elseif policy then
+		cursor:delete("wireless", radio, "acs_exclude_dfs")
+	end
+	if (eff_chan == "auto" or eff_chan == "0") and policy
+			and type(policy.channels) == "table" and #policy.channels > 0 then
+		local list = {}
+		for _, c in ipairs(policy.channels) do list[#list + 1] = tostring(c) end
+		cursor:set("wireless", radio, "channels", list)
+	elseif policy then
+		cursor:delete("wireless", radio, "channels")
+	end
 	if htmode then
-		-- The radio's band comes from its own UCI declaration, not from the
-		-- channel being pushed alongside: a radio's band is fixed by hardware,
-		-- and `chan` can be the literal "auto".
-		local band = band_for_device({
-			band    = cursor:get("wireless", radio, "band"),
-			hwmode  = cursor:get("wireless", radio, "hwmode"),
-			channel = cursor:get("wireless", radio, "channel") or chan,
-		})
-		local clamped, requested = M.clamp_htmode(band, htmode)
+		local want = htmode
+		local force_wifi4 = (type(opts) == "table" and opts.force_wifi4) or false
+		if policy and policy.htmode_floor and not force_wifi4 then
+			local raised, from = M.raise_htmode(want, policy.htmode_floor)
+			if from then
+				io.stderr:write(string.format(
+					"openuf: %s: controller asked for htmode %s, board floor is %s -- raised to %s\n",
+					radio, from, policy.htmode_floor, raised))
+			end
+			want = raised
+		end
+		if policy and policy.htmode_max then
+			local capped, from = M.cap_htmode(want, policy.htmode_max)
+			if from then
+				io.stderr:write(string.format(
+					"openuf: %s: htmode %s exceeds the board ceiling %s -- lowered to %s\n",
+					radio, from, policy.htmode_max, capped))
+			end
+			want = capped
+		end
+		-- The hardware clamp runs last, so neither a floor nor a push can ask
+		-- for more than the radio really has.
+		local clamped, requested = M.clamp_htmode(band, want)
 		if requested then
 			io.stderr:write(string.format(
 				"openuf: %s: controller asked for htmode %s, hardware supports %s -- clamped\n",
@@ -1112,6 +1261,14 @@ function M.apply_config(resp, cfg, opts)
 	-- and lock out clients the controller fully intended to admit -- a
 	-- silent, on-air-only failure. VAPs with no floor (the key is absent
 	-- whenever that band's control is off) contribute nothing.
+	-- "Force WiFi 4 Mode" is per WLAN but htmode is per radio: a radio carrying
+	-- any such WLAN is never raised by a board htmode_floor (rf_config).
+	local iot_by_radio = {}
+	for _, vap in ipairs(vap_table) do
+		local rn = vap.radio or vap.radio_name
+		if vap.iot and rn then iot_by_radio[rn] = true end
+	end
+
 	local rates_by_radio = {}
 	for _, vap in ipairs(vap_table) do
 		if vap.radio and vap.minrate_data then
@@ -1150,7 +1307,9 @@ function M.apply_config(resp, cfg, opts)
 			end
 			M.rf_config(radio.name, radio.htmode, radio.channel, radio.tx_power,
 				radio.min_rssi_enabled, radio.min_rssi, rates, radio.disabled,
-				radio.country)
+				radio.country, cfg and cfg.radio,
+				{force_wifi4 = iot_by_radio[radio.name] or false,
+				 country_override = cfg and cfg.config and cfg.config.country_override or nil})
 		end
 	end
 
@@ -1389,15 +1548,24 @@ function M.apply_config(resp, cfg, opts)
 				extra.wps_device_name = (opts and opts.device_name) or "openUF"
 				extra.ap_setup_locked = "1"
 			end
-			-- NOT written: SAE anti-clogging / sync time. Both are real
-			-- hostapd config keys, but OpenWrt exposes neither as a
-			-- wifi-iface UCI option -- verified 2026-09-10 on an Archer C5
-			-- (ath79) and an AX3000T (filogic), both OpenWrt 25.12.5, against
-			-- all three places an option can be declared: the wifi-iface
-			-- schema, /usr/share/ucode/wifi/ and hostapd.sh's config_add_*
-			-- lists. Neither name appears in any of them, on either board, so
-			-- a write here was stored in UCI and dropped in silence.
-			-- The wire keys are still parsed and reported; see inform.lua.
+			-- SAE Anti-clogging / SAE Sync Time. Neither is a wifi-iface
+			-- option (writing them as options was stored and dropped in
+			-- silence), but both are hostapd BSS keys, and every OpenWrt wifi
+			-- stack passes `list hostapd_bss_options` through verbatim: the
+			-- ucode scripts (ap.uc "raw options") and the older hostapd.sh
+			-- alike. The controller only sends them for a WLAN that really
+			-- runs SAE, and the list is openUF's alone on its own sections.
+			local raw = {}
+			if vap.security == "wpa3" or vap.security == "wpa2/wpa3" then
+				local ac, sync = tonumber(vap.sae_anti_clogging), tonumber(vap.sae_sync)
+				if ac and ac > 0 then
+					raw[#raw + 1] = "sae_anti_clogging_threshold=" .. math.floor(ac)
+				end
+				if sync and sync > 0 then
+					raw[#raw + 1] = "sae_sync=" .. math.floor(sync)
+				end
+			end
+			extra.hostapd_bss_options = (#raw > 0) and raw or M.DELETE
 			-- VLAN comes off the vap itself: the controller derives it from
 			-- aaa.<n>.br.devname ("br0.20"), not from a linked network object.
 			local vlan_enabled = vap.vlan_enabled
@@ -1417,8 +1585,9 @@ function M.apply_config(resp, cfg, opts)
 				wanted_vlans[tonumber(vlan_id) or vlan_id] = true
 			end
 
-			M.wlan_add(vap.radio, vap.ssid, vap.security, vap.x_passphrase, extra,
-				network, vap.wlanconf_id)
+			M.wlan_add(vap.radio, vap.ssid,
+				{security = vap.security, pairwise = vap.pairwise},
+				vap.x_passphrase, extra, network, vap.wlanconf_id)
 		end
 	end
 
@@ -1574,7 +1743,9 @@ local function radio_rows()
 			tx_power         = s.txpower,
 			-- UCI regdomain (e.g. "CZ"); build_json maps it to the numeric
 			-- ISO 3166 country_code. Internal -- stripped before serializing.
-			country          = s.country,
+			-- openuf_country wins where it exists: the regdomain the
+			-- CONTROLLER set, stamped by rf_config under a country_override.
+			country          = s.openuf_country or s.country,
 			disabled         = (s.disabled == "1"),
 			builtin_antenna  = M.RADIO_DEFAULTS.builtin_antenna,
 			builtin_ant_gain = M.RADIO_DEFAULTS.builtin_ant_gain,

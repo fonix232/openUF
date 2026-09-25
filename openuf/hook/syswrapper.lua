@@ -62,6 +62,7 @@ local function usage()
 		"       syswrapper.sh reset-inform\n" ..
 		"       syswrapper.sh netmodel-retry     (re-apply a rolled-back network plan)\n" ..
 		"       syswrapper.sh netmodel-restore   (put the pre-openUF network config back)\n" ..
+		"       syswrapper.sh 11k-scan           (the controller's nightly neighbour scan)\n" ..
 		"\n" ..
 		"key32hex: exactly 32 hexadecimal characters (16 bytes, AES-128)\n"
 	)
@@ -159,6 +160,25 @@ end
 
 -- ─── Entry point ─────────────────────────────────────────────────────────────
 
+-- 11k-scan
+-- What the controller's pushed cron job runs every night (see sysconf.lua).
+-- The scan belongs to the inform daemon -- it owns the radios and the 802.11k
+-- beacon-request machinery, and its next heartbeat carries the result out --
+-- so this only leaves a dated request that the daemon picks up within one
+-- interval and discards when it is more than ten minutes old.
+local scan_request_file = "/tmp/openuf-scan-request"
+local function cmd_11k_scan()
+	local f = io.open(scan_request_file, "w")
+	if not f then
+		io.stderr:write("syswrapper: cannot write " .. scan_request_file .. "\n")
+		return false
+	end
+	f:write(tostring(os.time()), "\n")
+	f:close()
+	io.stdout:write("syswrapper: neighbour scan requested\n")
+	return true
+end
+
 local function main(args)
 	local cmd = args[1]
 	if cmd == "set-adopt" then
@@ -175,6 +195,8 @@ local function main(args)
 		cmd_netmodel_retry()
 	elseif cmd == "netmodel-restore" then
 		if not cmd_netmodel_restore() then os.exit(1) end
+	elseif cmd == "11k-scan" then
+		if not cmd_11k_scan() then os.exit(1) end
 	else
 		io.stderr:write("syswrapper: unknown command: " .. tostring(cmd) .. "\n")
 		usage()
@@ -195,6 +217,8 @@ return {
 	cmd_set_inform = cmd_set_inform,
 	cmd_reset_inform = cmd_reset_inform,
 	cmd_netmodel_retry = cmd_netmodel_retry,
+	cmd_11k_scan = cmd_11k_scan,
+	_scan_request_file = function(p) scan_request_file = p end,
 	is_hex32 = is_hex32,
 	is_url   = is_url,
 	_set_state = function(s) state = s end,

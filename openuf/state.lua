@@ -121,6 +121,13 @@ M.FIELDS = {
 	-- The catalogue firmware version learned from the controller's own
 	-- `upgrade` commands, reported instead of the ufmodel's (upgrade.lua).
 	fw_version                = "string",
+	-- The controller's ebtables.* hardening intent ({bpdu, tagdrop, ifnames}),
+	-- so the nft rules l2guard builds from it come back after a reboot.
+	l2guard                   = "table",
+	-- cfgversion_effective: the last config this device applied without an
+	-- error, and the one-push retry bookkeeping (see inform.lua).
+	cfgversion_effective      = "string",
+	cfg_retry                 = "table",
 }
 
 -- Load state from disk. Missing file returns defaults. Applies security

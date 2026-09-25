@@ -133,6 +133,7 @@ local ufhw = {
 local function build(opts)
 	inject_sysinfo(opts and opts.with_clients, opts and opts.with_wired, opts and opts.with_scan,
 		opts and opts.with_radio_caps)
+	local cfg = opts and opts.cfg or nil
 	if opts and opts.with_uci then inject_ucihelper() end
 	local st = {
 		authkey    = state.DEFAULT_KEY,
@@ -144,7 +145,7 @@ local function build(opts)
 		hostname   = "testap",
 		locating   = opts and opts.locating,
 	}
-	local json_str = inform.build_json(st, nil, ufhw)
+	local json_str = inform.build_json(st, cfg, ufhw)
 	return cjson.decode(json_str), st
 end
 
@@ -387,6 +388,27 @@ return {
 			local d = build()
 			assert_eq(d.mem_total, 131072 * 1024, "mem_total bytes")
 			assert_eq(d.mem_used, (131072 - 72000) * 1024, "mem_used = (total - available) bytes")
+		end
+	},
+	{
+		name = "inform json: debug_caps and debug_payload_extra override the payload, and warn",
+		fn = function()
+			local d = build({cfg = {config = {debug_caps = {wifi_caps = 0x10, fw_caps = 0x111},
+				debug_payload_extra = {uplink = {type = "wireless"}}}}})
+			assert_eq(d.wifi_caps, 0x10, "wifi_caps claimed only on request")
+			assert_eq(d.fw_caps, 0x111, "fw_caps overridden")
+			assert_eq(d.wifi_caps2, 0x40, "unset masks keep their shipped value")
+			assert_eq(d.uplink.type, "wireless", "extra field merged")
+			local plain = build()
+			assert_nil(plain.wifi_caps, "never sent without the override")
+			local said = ""
+			local real = io.stderr
+			io.stderr = {write = function(_, m) said = said .. m end}
+			local warned = inform._warn_debug_overrides({config = {debug_caps = {wifi_caps = 0x10}}})
+			io.stderr = real
+			assert_true(warned, "warned")
+			assert_true(said:find("wifi_caps=0x10", 1, true) ~= nil, "naming the override")
+			assert_false(inform._warn_debug_overrides({config = {}}), "silent without")
 		end
 	},
 	{

@@ -2001,10 +2001,14 @@ return {
 				.. "aaa.1.wpa.key.1.mgmt=SAE\naaa.1.wpa.psk=hunter22\n"
 				.. "aaa.1.wpa3.support=enabled\naaa.1.wpa3.transition=enabled\n"
 				.. "aaa.1.sae.anti_clogging=5\naaa.1.sae.sync=5\n"
+				.. "aaa.1.wpa.1.pairwise=GCMP-256\n"
 				.. "wireless.1.ssid=openuf-test\nwireless.1.parent=radio0\n"
 			local _, vap_table = inform._parse_wifi_system_cfg(sys_cfg)
 			assert_eq(vap_table[1].security, "wpa2/wpa3",
 				"transition -> mixed, so WPA2 clients keep working")
+			assert_eq(vap_table[1].sae_anti_clogging, 5, "SAE anti-clogging parsed")
+			assert_eq(vap_table[1].sae_sync, 5, "SAE sync parsed")
+			assert_eq(vap_table[1].pairwise, "GCMP-256", "pairwise cipher parsed")
 		end
 	},
 	{
@@ -3530,6 +3534,101 @@ return {
 			inform.handle_response('{"_type":"cmd","cmd":"kick-sta","mac":"; reboot"}', st, {})
 			assert_eq(#kicked, 1, "a malformed MAC never reaches a command line")
 			inform._ucihelper = orig_uci
+		end
+	},
+	{
+		name = "inform: an unknown cmd, response type and field land in the ledger, redacted",
+		fn = function()
+			local orig = inform._unhandled
+			local u = dofile("openuf/unhandled.lua")
+			u._reset(false)
+			inform._unhandled = u
+			local st = sample_state({adopted = true})
+			inform.handle_response('{"_type":"cmd","cmd":"mesh-halt","radio":"na"}', st, {})
+			inform.handle_response('{"_type":"frobnicate","x_passphrase":"hunter22"}', st, {})
+			inform.handle_response('{"_type":"noop","interval":10,"brand_new":1}', st, {})
+			inform.handle_response('{"_type":"cmd","cmd":"kick-sta","mac":"aa:bb:cc:00:11:22"}', st, {})
+			local e = u.entry("cmd", "mesh-halt")
+			assert_true(e ~= nil, "unknown cmd recorded")
+			assert_eq(e.payload.radio, "na", "with its body")
+			assert_nil(u.entry("cmd", "kick-sta"), "a handled cmd is not")
+			local r = u.entry("response", "frobnicate")
+			assert_eq(r.payload.x_passphrase, "<redacted>", "secrets redacted by name")
+			assert_true(u.entry("field", "noop.brand_new") ~= nil, "unknown noop field recorded")
+			assert_nil(u.entry("field", "noop.interval"), "a read field is not")
+			inform._unhandled = orig
+		end
+	},
+	{
+		name = "inform: config keys no pass reads are ledgered, values redacted",
+		fn = function()
+			local orig = inform._unhandled
+			local u = dofile("openuf/unhandled.lua")
+			u._reset(false)
+			inform._unhandled = u
+			inform._report_dropped_keys("system_cfg",
+				"qos.if.1.name=eth0\nqos.if.2.name=eth1\nfoo.psk=s3cret\nbridge.1.devname=br0\n",
+				{"^bridge%."})
+			local e = u.entry("system_cfg", "qos.if.<n>.name")
+			assert_eq(e.payload.occurrences, 2, "one row per key shape")
+			assert_eq(e.payload.sample, "qos.if.1.name", "first key kept")
+			assert_eq(u.entry("system_cfg", "foo.psk").payload.value, "<redacted>", "secret value redacted")
+			assert_nil(u.entry("system_cfg", "bridge.<n>.devname"), "recognised keys are not ledgered")
+			inform._unhandled = orig
+		end
+	},
+	{
+		name = "inform: controller_system=false leaves timezone/NTP/cron alone",
+		fn = function()
+			local orig = inform._sysconf
+			local applied = {}
+			inform._sysconf = {parse = function() return {timezone = "CET-1"} end,
+				apply = function(sc, gate) applied[#applied + 1] = gate end}
+			local st = sample_state({adopted = true})
+			local sys = '{"_type":"setparam","system_cfg":"system.timezone=CET-1\\n"}'
+			inform.handle_response(sys, st, {config = {controller_system = false}})
+			assert_eq(#applied, 0, "off: not applied")
+			inform.handle_response(sys, st, {config = {controller_system = {ntp = false}}})
+			assert_eq(#applied, 1, "a table: applied")
+			assert_eq(applied[1].ntp, false, "with the gate passed through")
+			inform._sysconf = orig
+		end
+	},
+	{
+		name = "inform: an 11k-scan request makes the next beacon request due, a stale one does not",
+		fn = function()
+			local file = "/tmp/openuf_test_scan_request"
+			local orig_file, orig_time, orig_stderr = inform.SCAN_REQUEST_FILE, inform._time, io.stderr
+			io.stderr = {write = function() end}
+			inform.SCAN_REQUEST_FILE = file
+			inform._time = function() return 1000 end
+			local f = io.open(file, "w"); f:write("990\n"); f:close()
+			assert_true(inform._scan_requested(), "fresh request honoured")
+			assert_nil(io.open(file, "r"), "and consumed")
+			f = io.open(file, "w"); f:write("10\n"); f:close()
+			assert_false(inform._scan_requested(), "stale request ignored")
+			assert_false(inform._scan_requested(), "nothing waiting")
+			inform.SCAN_REQUEST_FILE, inform._time, io.stderr = orig_file, orig_time, orig_stderr
+		end
+	},
+	{
+		name = "inform: the status file records the last success and failure",
+		fn = function()
+			local file = "/tmp/openuf_test_status"
+			local orig = inform.STATUS_FILE
+			inform.STATUS_FILE = file
+			inform._status = {}
+			local st = sample_state({adopted = true, cfgversion = "abc"})
+			inform._write_status(st, {last_fail = 5, last_fail_msg = "HTTP 400\nbad"})
+			inform._write_status(st, {last_ok = 9, last_type = "noop"})
+			local fh = io.open(file, "r"); local txt = fh:read("*a"); fh:close()
+			assert_true(txt:find("last_ok=9\n", 1, true) ~= nil, "success")
+			assert_true(txt:find("last_fail=5\n", 1, true) ~= nil, "failure carried forward")
+			assert_true(txt:find("last_fail_msg=HTTP 400 bad\n", 1, true) ~= nil, "one line")
+			assert_true(txt:find("adopted=true\n", 1, true) ~= nil, "adoption")
+			assert_true(txt:find("cfgversion=abc\n", 1, true) ~= nil, "cfgversion")
+			os.remove(file)
+			inform.STATUS_FILE = orig
 		end
 	},
 	{

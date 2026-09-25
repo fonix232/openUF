@@ -1797,7 +1797,7 @@ return {
 		end
 	},
 	{
-		name = "ucihelper: apply_config maps security=wpa2/wpa3 to encryption sae-mixed",
+		name = "ucihelper: apply_config maps security=wpa2/wpa3 to encryption sae-mixed+ccmp",
 		fn = function()
 			with_ucihelper(function(db)
 				local resp = {
@@ -1809,13 +1809,13 @@ return {
 				}
 				ucihelper.apply_config(resp, nil)
 				local s = db.wireless.openuf_radio0_corp
-				assert_eq(s.encryption, "sae-mixed", "mixed -> sae-mixed")
+				assert_eq(s.encryption, "sae-mixed+ccmp", "mixed -> sae-mixed, cipher explicit")
 				assert_eq(s.key, "hunter22", "passphrase still written for sae-mixed")
 			end)
 		end
 	},
 	{
-		name = "ucihelper: apply_config maps security=wpa3 to encryption sae",
+		name = "ucihelper: apply_config maps security=wpa3 to encryption sae+ccmp",
 		fn = function()
 			with_ucihelper(function(db)
 				local resp = {
@@ -1827,7 +1827,7 @@ return {
 				}
 				ucihelper.apply_config(resp, nil)
 				local s = db.wireless.openuf_radio0_corp
-				assert_eq(s.encryption, "sae", "wpa3 -> sae")
+				assert_eq(s.encryption, "sae+ccmp", "wpa3 -> sae, cipher explicit")
 			end)
 		end
 	},
@@ -1941,15 +1941,10 @@ return {
 		end
 	},
 	{
-		-- Verified 2026-09-10 on an Archer C5 (ath79) and an AX3000T
-		-- (filogic), both OpenWrt 25.12.5: neither name appears in the
-		-- wifi-iface schema, in /usr/share/ucode/wifi/, or in hostapd.sh's
-		-- config_add_* lists -- the three places a wifi-iface option can be
-		-- declared. openUF wrote both anyway; UCI stored them and the
-		-- generator dropped them without a word. A negative test, so the
-		-- write cannot quietly come back on the strength of the names being
-		-- real hostapd keys -- which they are, just not UCI ones.
-		name = "ucihelper: apply_config does not write UCI options OpenWrt has no schema for",
+		-- Neither key is a wifi-iface option (writing them as options was
+		-- stored and dropped in silence on 25.12.5), so they go through
+		-- hostapd_bss_options, which ap.uc and hostapd.sh both pass through.
+		name = "ucihelper: SAE anti-clogging/sync reach hostapd as raw BSS options",
 		fn = function()
 			with_ucihelper(function(db)
 				local resp = {
@@ -1961,14 +1956,128 @@ return {
 				}
 				ucihelper.apply_config(resp, nil)
 				local s = db.wireless.openuf_radio0_corp
-				assert_eq(s.sae_anti_clogging_threshold, nil,
-					"sae_anti_clogging_threshold is not a UCI option and is not written")
-				assert_eq(s.sae_sync, nil,
-					"sae_sync is not a UCI option and is not written")
-				-- The WLAN itself must still provision normally.
-				assert_eq(s.ssid, "corp", "the vap is still written")
-				assert_eq(s.encryption, "sae", "and still gets its WPA3 encryption")
+				assert_eq(s.sae_anti_clogging_threshold, nil, "not a UCI option")
+				assert_eq(s.sae_sync, nil, "not a UCI option")
+				assert_eq(type(s.hostapd_bss_options), "table", "raw options are a list")
+				assert_eq(s.hostapd_bss_options[1], "sae_anti_clogging_threshold=12", "anti-clogging")
+				assert_eq(s.hostapd_bss_options[2], "sae_sync=20", "sync")
+				assert_eq(s.encryption, "sae+ccmp", "and still gets its WPA3 encryption")
 			end)
+		end
+	},
+	{
+		name = "ucihelper: SAE tuning is not written for a WPA2 WLAN",
+		fn = function()
+			with_ucihelper(function(db)
+				local resp = {
+					radio_table = {},
+					vap_table = {
+						{ssid = "corp", radio = "radio0", security = "wpa2",
+						 x_passphrase = "hunter22", sae_anti_clogging = 12, sae_sync = 20},
+					},
+				}
+				ucihelper.apply_config(resp, nil)
+				local s = db.wireless.openuf_radio0_corp
+				assert_eq(s.hostapd_bss_options, nil, "no SAE keys on a PSK-only BSS")
+				assert_eq(s.encryption, "psk2+ccmp", "WPA2 with explicit CCMP")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: raise_htmode/cap_htmode move kind and width independently",
+		fn = function()
+			assert_eq(ucihelper.raise_htmode("HT40", "HE80"), "HE80", "n/40 raised to ax/80")
+			assert_eq(ucihelper.raise_htmode("HT40", "HE20"), "HE40", "width kept, PHY lifted")
+			local same, from = ucihelper.raise_htmode("HE160", "HE80")
+			assert_eq(same, "HE160", "above the floor untouched")
+			assert_nil(from, "and no change reported")
+			assert_eq(ucihelper.raise_htmode("HT20", "HT80"), "HT40", "there is no HT80")
+			assert_eq(ucihelper.raise_htmode("NOHT", "HE80"), "NOHT", "NOHT passes")
+			assert_eq(ucihelper.cap_htmode("HE160", "HE80"), "HE80", "ceiling")
+			assert_eq(ucihelper.cap_htmode("EHT320", "HE80"), "HE80", "kind and width both")
+			assert_eq(ucihelper.cap_htmode("HE40", "HE80"), "HE40", "below the ceiling untouched")
+			assert_eq(ucihelper.cap_htmode("HE80", nil), "HE80", "no ceiling")
+		end
+	},
+	{
+		name = "ucihelper: a board radio policy floors, caps and restricts ACS; Force WiFi 4 wins",
+		fn = function()
+			with_ucihelper(function(db)
+				ucihelper._popen = function() return AX3000T_IW_PHY end
+				seed_radios({"radio0", "radio1"})
+				local c = ucihelper._uci.cursor()
+				c:set("wireless", "radio0", "band", "2g")
+				c:set("wireless", "radio1", "band", "5g")
+				local pol = {ng = {htmode_floor = "HE20"},
+					na = {htmode_max = "HE80", acs_exclude_dfs = true, channels = {36, 149}}}
+				local quiet = io.stderr
+				io.stderr = {write = function() end}
+				ucihelper.rf_config("radio1", "HE160", "auto", nil, nil, nil, nil, nil, nil, pol)
+				assert_eq(db.wireless.radio1.htmode, "HE80", "the ceiling stops HE160")
+				assert_eq(db.wireless.radio1.acs_exclude_dfs, "1", "Auto keeps ACS off DFS")
+				assert_eq(table.concat(db.wireless.radio1.channels, ","), "36,149", "ACS list")
+				ucihelper.rf_config("radio1", nil, 149, nil, nil, nil, nil, nil, nil, pol)
+				assert_nil(db.wireless.radio1.acs_exclude_dfs, "a fixed channel drops the ACS options")
+				assert_nil(db.wireless.radio1.channels, "both of them")
+				ucihelper.rf_config("radio0", "HT40", 6, nil, nil, nil, nil, nil, nil, pol)
+				assert_eq(db.wireless.radio0.htmode, "HE40", "the floor lifts the PHY")
+				ucihelper.rf_config("radio0", "HT40", 6, nil, nil, nil, nil, nil, nil, pol,
+					{force_wifi4 = true})
+				assert_eq(db.wireless.radio0.htmode, "HT40", "Force WiFi 4 suppresses it")
+				io.stderr = quiet
+			end)
+		end
+	},
+	{
+		name = "ucihelper: without a policy the board's own ACS options are left alone",
+		fn = function()
+			with_ucihelper(function(db)
+				ucihelper._popen = function() return AX3000T_IW_PHY end
+				seed_radios({"radio1"})
+				local c = ucihelper._uci.cursor()
+				c:set("wireless", "radio1", "band", "5g")
+				c:set("wireless", "radio1", "acs_exclude_dfs", "1")
+				ucihelper.rf_config("radio1", "HE80", 36, nil, nil, nil, nil, nil, nil, nil)
+				assert_eq(db.wireless.radio1.acs_exclude_dfs, "1", "hand-set option kept")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: country_override programs its regdomain but reports the controller's",
+		fn = function()
+			with_ucihelper(function(db)
+				ucihelper._popen = function() return AX3000T_IW_PHY end
+				seed_radios({"radio1"})
+				local quiet = io.stderr
+				io.stderr = {write = function() end}
+				ucihelper.rf_config("radio1", nil, nil, nil, nil, nil, nil, nil,
+					"GB", nil, {country_override = "us"})
+				assert_eq(db.wireless.radio1.country, "US", "override programmed, upper-cased")
+				assert_eq(db.wireless.radio1.openuf_country, "GB", "controller's value stamped")
+				local rt = ucihelper.get_radio_table()
+				local got
+				for _, r in ipairs(rt) do if r.name == "radio1" then got = r.country end end
+				assert_eq(got, "GB", "and reported")
+				ucihelper.rf_config("radio1", nil, nil, nil, nil, nil, nil, nil, "GB", nil, {})
+				assert_eq(db.wireless.radio1.country, "GB", "removing the override restores it")
+				assert_nil(db.wireless.radio1.openuf_country, "and the stamp goes")
+				ucihelper.rf_config("radio1", nil, nil, nil, nil, nil, nil, nil,
+					"GB", nil, {country_override = "U5"})
+				assert_eq(db.wireless.radio1.country, "GB", "a malformed override is ignored")
+				io.stderr = quiet
+			end)
+		end
+	},
+	{
+		name = "ucihelper: the pushed pairwise cipher is carried into encryption",
+		fn = function()
+			assert_eq(ucihelper.encryption_for("wpa2"), "psk2+ccmp", "default CCMP")
+			assert_eq(ucihelper.encryption_for("wpa2", "TKIP CCMP"), "psk2+tkip+ccmp", "Auto on WPA1")
+			assert_eq(ucihelper.encryption_for("wpa3", "GCMP-256"), "sae+gcmp256", "GCMP-256")
+			assert_eq(ucihelper.encryption_for("wpa2/wpa3", "CCMP-256"), "sae-mixed+ccmp256", "CCMP-256")
+			assert_eq(ucihelper.encryption_for("wpa3", "GCMP"), "sae+gcmp", "GCMP")
+			assert_eq(ucihelper.encryption_for("wpa2", "bogus"), "psk2+ccmp", "unknown -> CCMP")
+			assert_eq(ucihelper.encryption_for("open", "CCMP"), "none", "open has no cipher")
 		end
 	},
 	{

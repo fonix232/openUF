@@ -174,4 +174,19 @@ return {
 				"no conf.lua at all is not an error either")
 		end
 	},
+	{
+		name = "syswrapper: 11k-scan leaves a dated request for the daemon",
+		fn = function()
+			local file = "/tmp/openuf_test_11k_request"
+			sw._scan_request_file(file)
+			local real = io.stdout
+			io.stdout = {write = function() end}
+			local ok = sw.cmd_11k_scan()
+			io.stdout = real
+			assert_true(ok, "written")
+			local f = io.open(file, "r"); local raw = f:read("*a"); f:close()
+			os.remove(file)
+			assert_true(math.abs(tonumber(raw:match("%d+")) - os.time()) <= 2, "dated now")
+		end
+	},
 }

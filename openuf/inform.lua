@@ -64,6 +64,9 @@ local rrmscan   = _require_sibling("rrmscan")
 local netmodel  = _require_sibling("netmodel")
 local stun      = _require_sibling("stun")
 local upgrade   = _require_sibling("upgrade")
+local unhandled = _require_sibling("unhandled")
+local sysconf   = _require_sibling("sysconf")
+local l2guard   = _require_sibling("l2guard")
 
 local M = {}
 
@@ -86,6 +89,9 @@ M._rrmscan    = rrmscan
 M._netmodel   = netmodel
 M._stun       = stun
 M._upgrade    = upgrade
+M._unhandled  = unhandled
+M._sysconf    = sysconf
+M._l2guard    = l2guard
 
 -- In-memory only: 802.11k beacon-report neighbours, keyed by BSSID, plus the
 -- flat list build_json merges from. Clients report asynchronously and only
@@ -1772,6 +1778,22 @@ function M.build_json(st, cfg, ufhw)
 		lldp_table       = arr(lldp_table),
 	}
 
+	-- conf.lua debug_caps / debug_payload_extra: RESEARCH ONLY. The rule
+	-- everywhere else in this file is "never claim a bit openUF cannot honour";
+	-- these are the deliberate, loudly logged exception (_warn_debug_overrides)
+	-- so a go/no-go protocol experiment is a conf.lua edit and a restart. An
+	-- extra key that already exists is overwritten on purpose.
+	local conf = cfg and cfg.config
+	if conf and type(conf.debug_caps) == "table" then
+		for _, k in ipairs({"fw_caps", "wifi_caps", "wifi_caps2"}) do
+			local v = tonumber(conf.debug_caps[k])
+			if v then payload[k] = v end
+		end
+	end
+	if conf and type(conf.debug_payload_extra) == "table" then
+		for k, v in pairs(conf.debug_payload_extra) do payload[k] = v end
+	end
+
 	if ufuci and ufuci.end_pass then ufuci.end_pass() end
 	if M._sysinfo.end_pass then M._sysinfo.end_pass() end
 	return M._fix_empty_arrays(cjson.encode(payload))
@@ -2374,6 +2396,17 @@ function M._parse_wifi_system_cfg(sys_raw)
 				-- entirely, even across an inform.lua restart. High
 				-- confidence from the decompiled method body alone
 				-- (a simple getInt(key, -1) > 0 check, no ambiguity).
+				-- Written through hostapd_bss_options (ucihelper), the one
+				-- door both OpenWrt wifi stacks leave for raw hostapd keys.
+				sae_anti_clogging     = tonumber(a["sae.anti_clogging"]),
+				sae_sync              = tonumber(a["sae.sync"]),
+				-- aaa.<n>.wpa.1.pairwise: the data cipher, on every WPA push.
+				-- The controller's enum renders as "CCMP", "TKIP CCMP"
+				-- (Auto on a WPA1-capable WLAN), "GCMP", "CCMP-256" or
+				-- "GCMP-256". Written explicitly into `encryption` because
+				-- OpenWrt's own default follows the board and htmode, not
+				-- the controller.
+				pairwise              = a["wpa.1.pairwise"],
 					-- aaa.<n>.proxy_arp: "Proxy ARP". CONFIRMED live
 					-- 2026-07-18 by REST-toggling wlanconf.proxy_arp and
 					-- diffing system_cfg -- exactly aaa.<n>.proxy_arp flipped
@@ -2602,6 +2635,24 @@ local RECOGNIZED_SYSTEM_CFG = {
 	"^switch%.vlan%.status$",
 	"^switch%.vlan%.%d+%.",
 	"^switch%.port%.%d+%.",
+	-- The L2 model the vlan_filtering backend renders (netmodel.lua).
+	"^bridge%.",
+	"^vlan%.%d+%.",
+	"^netconf%.%d+%.",
+	"^dhcpc%.%d+%.",
+	-- Controller-managed system settings (sysconf.lua). cron.<n>.user is
+	-- deliberately NOT here: the pushed account does not exist and the jobs
+	-- run as root, so the key stays in the ledger as ignored.
+	"^system%.timezone$",
+	"^locale%.timezone$",
+	"^ntpclient%.status$",
+	"^ntpclient%.%d+%.",
+	"^cron%.status$",
+	"^cron%.%d+%.status$",
+	"^cron%.%d+%.job%.%d+%.",
+	-- The ebtables hardening block (l2guard.lua).
+	"^ebtables%.status$",
+	"^ebtables%.%d+%.cmd$",
 }
 
 local RECOGNIZED_MGMT_CFG = {
@@ -2625,6 +2676,65 @@ M._debug_dropped_keys = false
 -- Override per device with config.debug_dump_max_bytes; 0 disables the cap.
 M.DEBUG_DUMP_MAX_BYTES = 4 * 1024 * 1024
 
+-- Appends one line -- UTC timestamp, an optional direction tag, the text -- to
+-- cfg.config.debug_dump_file. Responses are written with NO tag, the shape
+-- every capture recipe expects; with debug_dump_requests set, what openUF
+-- SENDS ("TX") and transport failures ("ERR") are written too, tagged so they
+-- can be filtered. Append mode already positions at the end, so seek reports
+-- the size -- no stat binding needed. Returns true when a line was written.
+function M._debug_append(cfg, tag, text)
+	local path = cfg and cfg.config and cfg.config.debug_dump_file
+	if not path then return false end
+	local cap = cfg.config.debug_dump_max_bytes
+	if cap == nil then cap = M.DEBUG_DUMP_MAX_BYTES end
+	local f = io.open(path, "a")
+	if not f then return false end
+	local size = f:seek("end") or 0
+	if cap and cap > 0 and size >= cap then
+		f:close()
+		f = io.open(path, "w")
+		if not f then return false end
+		f:write(("%s # openuf: dump passed %d bytes, restarted\n")
+			:format(os.date("!%Y-%m-%dT%H:%M:%SZ"), cap))
+	end
+	f:write(os.date("!%Y-%m-%dT%H:%M:%SZ") .. (tag and (" " .. tag) or "")
+		.. " " .. tostring(text) .. "\n")
+	f:close()
+	return true
+end
+
+-- The debug_caps / debug_payload_extra options make the device claim things
+-- it does not implement, so the log says so at every start. Returns true when
+-- it warned.
+function M._warn_debug_overrides(cfg)
+	local c = cfg and cfg.config
+	if not c then return false end
+	local caps  = type(c.debug_caps) == "table" and next(c.debug_caps) ~= nil
+	local extra = type(c.debug_payload_extra) == "table" and next(c.debug_payload_extra) ~= nil
+	if not (caps or extra) then return false end
+	local parts = {}
+	if caps then
+		for _, k in ipairs({"fw_caps", "wifi_caps", "wifi_caps2"}) do
+			if c.debug_caps[k] ~= nil then
+				parts[#parts + 1] = string.format("%s=0x%x", k,
+					math.floor(tonumber(c.debug_caps[k]) or 0))
+			end
+		end
+	end
+	if extra then
+		local keys = {}
+		for k in pairs(c.debug_payload_extra) do keys[#keys + 1] = tostring(k) end
+		table.sort(keys)
+		parts[#parts + 1] = "extra payload fields: " .. table.concat(keys, ", ")
+	end
+	io.stderr:write(
+		"openuf: DEBUG OVERRIDES ACTIVE (conf.lua debug_caps / debug_payload_extra):\n" ..
+		"openuf:   " .. table.concat(parts, "; ") .. "\n" ..
+		"openuf: the controller is being told about capabilities this device does\n" ..
+		"openuf: not implement. For protocol experiments only -- unset when done.\n")
+	return true
+end
+
 -- Summarize the keys in a config blob that no pass recognized.
 --
 -- Emits key PREFIXES and counts only, never values: these blobs carry
@@ -2632,8 +2742,8 @@ M.DEBUG_DUMP_MAX_BYTES = 4 * 1024 * 1024
 -- Numeric indices are collapsed to <n> so a four-VAP blob reports one line
 -- per key shape rather than one per instance.
 function M._report_dropped_keys(label, raw, recognized)
-	if not M._debug_dropped_keys or type(raw) ~= "string" then return end
-	local counts, order, total = {}, {}, 0
+	if type(raw) ~= "string" then return end
+	local counts, order, total, sample = {}, {}, 0, {}
 	for line in (raw .. "\n"):gmatch("([^\n]*)\n") do
 		-- Skip blanks and the literal comment a radio-less blob carries
 		-- ("# no wlan provisioned as no radio found").
@@ -2649,6 +2759,7 @@ function M._report_dropped_keys(label, raw, recognized)
 					if not counts[prefix] then
 						counts[prefix] = 0
 						order[#order + 1] = prefix
+						sample[prefix] = {k, line:match("^[^=]+=(.*)$")}
 					end
 					counts[prefix] = counts[prefix] + 1
 					total = total + 1
@@ -2658,10 +2769,63 @@ function M._report_dropped_keys(label, raw, recognized)
 	end
 	if total == 0 then return end
 	table.sort(order)
+	-- The ledger (unhandled.lua) always gets one row per key shape, with the
+	-- first key and its value redacted by name; the log line stays behind the
+	-- debug gate and never carries values.
+	for _, p in ipairs(order) do
+		M._ledger(label, p, {
+			sample      = sample[p][1],
+			value       = M._unhandled and M._unhandled.redact(sample[p][2], sample[p][1]),
+			occurrences = counts[p],
+		})
+	end
+	if not M._debug_dropped_keys then return end
 	local parts = {}
 	for _, p in ipairs(order) do parts[#parts + 1] = p .. " x" .. counts[p] end
 	io.stderr:write(("inform: %s: %d dropped key(s): %s\n")
 		:format(label, total, table.concat(parts, ", ")))
+end
+
+-- ─── Unhandled-surface ledger ────────────────────────────────────────────────
+
+-- Every response _type the controller sends and the top-level fields openUF
+-- reads on the ones that carry any. Anything else goes to unhandled.lua's
+-- ledger (/etc/openuf/unhandled.json) with its body, always -- that file is
+-- how a new controller verb gets noticed.
+local KNOWN_TYPES = {
+	noop = true, setparam = true, cmd = true, upgrade = true, reboot = true,
+	setdefault = true,
+}
+local KNOWN_TOP_FIELDS = {
+	noop     = {_type = true, interval = true, immediate = true, server_time_in_utc = true,
+	            live_update = true, include_blocks = true, exclude_blocks = true,
+	            fingerprint = true},
+	setparam = {_type = true, mgmt_cfg = true, system_cfg = true, cfgversion = true,
+	            server_time_in_utc = true, blocked_sta = true, include_blocks = true},
+}
+-- Commands with a handler below; everything else is ledgered with its body.
+local KNOWN_CMDS = {
+	["set-locate"] = true, ["unset-locate"] = true, ["block-sta"] = true,
+	["unblock-sta"] = true, ["kick-sta"] = true, ["spectrum-scan"] = true,
+}
+
+-- pcall'd: the ledger is a diagnostic and must never cost a heartbeat.
+function M._ledger(category, key, payload)
+	if not M._unhandled then return end
+	local ok, err = pcall(M._unhandled.record, category, key, payload)
+	if not ok then
+		io.stderr:write("inform: unhandled ledger: " .. tostring(err) .. "\n")
+	end
+end
+
+function M._note_unknown_fields(resp)
+	local known = type(resp) == "table" and KNOWN_TOP_FIELDS[resp._type]
+	if not known then return end
+	for k, v in pairs(resp) do
+		if not known[k] then
+			M._ledger("field", tostring(resp._type) .. "." .. tostring(k), {[tostring(k)] = v})
+		end
+	end
 end
 
 -- ─── Response dispatcher ─────────────────────────────────────────────────────
@@ -2676,30 +2840,8 @@ function M.handle_response(json_str, st, cfg)
 	-- debug_dump_file stops getting dropped-key reports too.
 	M._debug_dropped_keys = not not (cfg and cfg.config and cfg.config.debug_dump_file)
 
-	if cfg and cfg.config and cfg.config.debug_dump_file then
-		local path = cfg.config.debug_dump_file
-		local cap = cfg.config.debug_dump_max_bytes
-		if cap == nil then cap = M.DEBUG_DUMP_MAX_BYTES end
-		local f = io.open(path, "a")
-		if f then
-			-- Append mode already positions at the end, so seek reports the
-			-- current size -- no stat binding needed, and busybox's stat
-			-- applet is missing on some builds anyway.
-			local size = f:seek("end") or 0
-			if cap and cap > 0 and size >= cap then
-				f:close()
-				f = io.open(path, "w")
-				if f then
-					f:write(("%s # openuf: dump passed %d bytes, restarted\n")
-						:format(os.date("!%Y-%m-%dT%H:%M:%SZ"), cap))
-				end
-			end
-			if f then
-				f:write(os.date("!%Y-%m-%dT%H:%M:%SZ") .. " " .. json_str .. "\n")
-				f:close()
-			end
-		end
-	end
+	-- Untagged: the line shape every documented grep recipe expects.
+	M._debug_append(cfg, nil, json_str)
 
 	local ok, resp = pcall(cjson.decode, json_str)
 	if not ok or type(resp) ~= "table" then
@@ -2707,6 +2849,10 @@ function M.handle_response(json_str, st, cfg)
 	end
 
 	local _type = resp._type
+	if not KNOWN_TYPES[_type] then
+		M._ledger("response", tostring(_type), resp)
+	end
+	M._note_unknown_fields(resp)
 
 	if _type == "noop" then
 		-- The controller's next-inform interval for this device and its "come
@@ -3137,6 +3283,41 @@ function M.handle_response(json_str, st, cfg)
 					M._sysinfo.forget_uplink_cache()
 				end)
 			end
+
+			-- Controller-managed system settings: timezone, NTP servers and
+			-- the nightly `syswrapper.sh 11k-scan` cron job (sysconf.lua),
+			-- gated by conf.lua's controller_system.
+			local gate = cfg and cfg.config and cfg.config.controller_system
+			if M._sysconf and gate ~= false then
+				pcall(function()
+					local sc = M._sysconf.parse(sys_raw)
+					if sc then M._sysconf.apply(sc, gate) end
+				end)
+			end
+
+			-- The ebtables.* hardening block (l2guard.lua): BPDU and VLAN-tag
+			-- drop on every AP VAP. Kernel state, so the intent and the VAP
+			-- names go to state.json for the startup rebuild. After the WiFi
+			-- pass on purpose: a VAP the push just added has its netdev by now.
+			if M._l2guard and not (cfg and cfg.config and cfg.config.l2guard == false) then
+				pcall(function()
+					local eb = M._l2guard.parse(sys_raw)
+					if not eb then return end
+					for _, u in ipairs(eb.unknown or {}) do
+						io.stderr:write("l2guard: unrecognised ebtables rule shape, not applied: "
+							.. ("%q"):format(u) .. "\n")
+					end
+					local spec = M._l2guard.spec_from(eb)
+					local names = (M._ucihelper and M._ucihelper.all_vap_ifnames)
+						and M._ucihelper.all_vap_ifnames() or {}
+					if #names == 0 and st.l2guard and type(st.l2guard.ifnames) == "table" then
+						names = st.l2guard.ifnames   -- wireless not answering yet: last known
+					end
+					spec.ifnames = names
+					st.l2guard = spec
+					M._l2guard.reconcile(spec, names)
+				end)
+			end
 		end
 
 		M._state.save(st)
@@ -3201,6 +3382,7 @@ function M.handle_response(json_str, st, cfg)
 	if _type == "cmd" then
 		local cmd = resp.cmd or ""
 		io.stderr:write("inform: cmd: " .. tostring(cmd) .. "\n")
+		if not KNOWN_CMDS[cmd] then M._ledger("cmd", tostring(cmd), resp) end
 
 		if cmd == "set-locate" or cmd == "unset-locate" then
 			local led_path = cfg and cfg.led
@@ -3784,6 +3966,73 @@ end
 -- crash loop every five seconds that reports no statistics and logs nothing
 -- beyond a traceback. A bad cycle now costs one heartbeat and one log line,
 -- and the next cycle gets another go.
+-- Where `syswrapper.sh 11k-scan` -- the controller's nightly cron job, see
+-- sysconf.lua -- leaves its dated request. Consumed by the next heartbeat;
+-- ignored when older than SCAN_REQUEST_MAX_AGE, so a request a stopped daemon
+-- never saw does not fire at the next boot.
+M.SCAN_REQUEST_FILE    = "/tmp/openuf-scan-request"
+M.SCAN_REQUEST_MAX_AGE = 600
+
+function M._scan_requested()
+	local f = io.open(M.SCAN_REQUEST_FILE, "r")
+	if not f then return false end
+	local raw = f:read("*a") or ""
+	f:close()
+	os.remove(M.SCAN_REQUEST_FILE)
+	local at = tonumber(raw:match("%d+"))
+	if not at or M._time() - at > M.SCAN_REQUEST_MAX_AGE then
+		io.stderr:write("inform: ignoring a stale 11k-scan request\n")
+		return false
+	end
+	return true
+end
+
+-- The loop's heartbeat for the outside world: a flat key=value file rewritten
+-- atomically after every cycle. update.sh waits on it to decide whether a
+-- freshly installed daemon is alive and talking to the controller before it
+-- commits to the new version. tmpfs, so a reboot starts it clean.
+M.STATUS_FILE = "/tmp/openuf-status"
+
+-- The build stamp tools/dist.sh leaves next to the code, read once.
+M._build = nil
+local function build_stamp()
+	if M._build == nil then
+		local s
+		for _, p in ipairs({"BUILD", "openuf/BUILD", "/opt/openuf/BUILD"}) do
+			local f = io.open(p, "r")
+			if f then s = f:read("*a"); f:close(); break end
+		end
+		M._build = s and s:match("^%s*(.-)%s*$") or "unknown"
+	end
+	return M._build
+end
+
+-- fields: {last_ok = epoch, last_type = "noop"} on success, or
+-- {last_fail = epoch, last_fail_msg = "..."} on a transport failure; the other
+-- side's last value is carried forward.
+M._status = {}
+function M._write_status(st, fields)
+	for k, v in pairs(fields) do M._status[k] = v end
+	local s = M._status
+	local lines = {
+		"last_ok="       .. tostring(s.last_ok or 0),
+		"last_type="     .. tostring(s.last_type or ""),
+		"last_fail="     .. tostring(s.last_fail or 0),
+		"last_fail_msg=" .. (tostring(s.last_fail_msg or ""):gsub("[\r\n]", " ")),
+		"adopted="       .. tostring(st and st.adopted or false),
+		"cfgversion="    .. tostring(st and st.cfgversion or ""),
+		"mac="           .. tostring(st and st.mac or ""),
+		"inform_url="    .. tostring(st and st.inform_url or ""),
+		"build="         .. build_stamp(),
+	}
+	local tmp = M.STATUS_FILE .. ".tmp"
+	local f = io.open(tmp, "w")
+	if not f then return false end
+	f:write(table.concat(lines, "\n"), "\n")
+	f:close()
+	return os.rename(tmp, M.STATUS_FILE) and true or false
+end
+
 function M._tick(st, cfg, ufhw, ctx)
 	ctx.interval = ctx.interval or 10
 	ctx.backoff  = ctx.backoff  or ctx.interval
@@ -3800,6 +4049,12 @@ function M._tick(st, cfg, ufhw, ctx)
 	elseif now >= ctx.next_netinfo then
 		ctx.next_netinfo = now + 300
 		pcall(M._populate_net_info, st, cfg)
+	end
+	-- The controller's nightly `syswrapper.sh 11k-scan` (its cron job, see
+	-- sysconf.lua): make the next 802.11k beacon request due now.
+	if M._scan_requested() then
+		io.stderr:write("inform: 11k-scan requested -- asking a client for a beacon report now\n")
+		M._rrm_next_request = 0
 	end
 	-- Before build_json, so anything a client reported since the last cycle
 	-- rides out on THIS inform rather than waiting for the next.
@@ -3822,8 +4077,11 @@ function M._tick(st, cfg, ufhw, ctx)
 		return ctx.interval
 	end
 
+	local dump_tx = cfg and cfg.config and cfg.config.debug_dump_requests
+	if dump_tx then M._debug_append(cfg, "TX", json_str) end
 	local body, err = M.http_post(st.inform_url, pkt)
 	if not body then
+		if dump_tx then M._debug_append(cfg, "ERR", tostring(err)) end
 		if M._netmodel_check(st, cfg, false) == "rolled_back" then
 			-- The previous network is back: try again shortly rather than
 			-- sitting out the backoff the failed plan built up.
@@ -3844,6 +4102,7 @@ function M._tick(st, cfg, ufhw, ctx)
 			return ctx.interval
 		end
 		io.stderr:write("inform: POST failed: " .. tostring(err) .. "\n")
+		pcall(M._write_status, st, {last_fail = M._time(), last_fail_msg = tostring(err)})
 		M._warn_http_400(err, st, cfg)
 		-- While a network plan's rollback window is open, keep the normal
 		-- cadence: the window is judged on these ticks, and a 60 s backoff
@@ -3869,7 +4128,12 @@ function M._tick(st, cfg, ufhw, ctx)
 	M._netmodel_check(st, cfg, true)
 
 	M._next_interval, M._immediate = nil, false
+	local rtype = tostring(json_body):match('"_type"%s*:%s*"([%w_%-]+)"') or "?"
 	local ok_h, applied = pcall(M.handle_response, json_body, st, cfg)
+	-- Whatever handle_response recorded on the way -- including on the way
+	-- to raising -- is written now if the ledger's own policy says so.
+	if M._unhandled then pcall(M._unhandled.flush) end
+	pcall(M._write_status, st, {last_ok = M._time(), last_type = rtype})
 	if not ok_h then
 		io.stderr:write("inform: handle_response failed: " .. tostring(applied) .. "\n")
 		return ctx.interval
@@ -3910,6 +4174,7 @@ end
 
 function M.run(cfg, ufhw)
 	local st = state.load()
+	M._warn_debug_overrides(cfg)
 	-- A network plan applied right before a restart gets a fresh rollback
 	-- window measured from now.
 	if M._netmodel then pcall(M._netmodel.on_start, st) end
@@ -4008,6 +4273,22 @@ function M.run(cfg, ufhw)
 	-- blocklist. A tap that is not reinstalled fails silently, as an empty
 	-- mac_table, which is the bug it exists to fix.
 	if M._switchvlan then pcall(M._switchvlan.reconcile_mac_taps) end
+	-- The controller's ebtables hardening (l2guard) is nft state as well.
+	if M._l2guard and type(st.l2guard) == "table"
+		and not (cfg and cfg.config and cfg.config.l2guard == false) then
+		pcall(function()
+			local names = M._ucihelper.all_vap_ifnames()
+			if #names == 0 and type(st.l2guard.ifnames) == "table" then names = st.l2guard.ifnames end
+			M._l2guard.reconcile(st.l2guard, names)
+		end)
+	end
+	-- The unhandled ledger carries its counts across restarts.
+	if M._unhandled then
+		local uf = cfg and cfg.config and cfg.config.unhandled_file
+		if uf ~= nil then M._unhandled._file = uf end
+		local ok_u, err_u = pcall(M._unhandled.load)
+		if not ok_u then io.stderr:write("inform: unhandled ledger: " .. tostring(err_u) .. "\n") end
+	end
 
 	local socket = require("socket")
 	local ctx = {
