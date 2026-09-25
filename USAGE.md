@@ -216,20 +216,40 @@ The modelmap sets:
   field means. openUF never touches an unreported radio: a config push naming one is
   refused rather than applied
 
-### Device identity (`openuf/ufmodel/u6iw.lua`)
+### Device identity (`openuf/ufmodel/`)
 
-The U6-InWall identity is configured in `ufmodel/u6iw.lua`.  The firmware version
-(`fw.ver`) must be accepted by your controller.  If the controller rejects the
-device with "firmware too old" or similar, increment `fw.ver` and try again.
+`dev.openuf.uap.ufmodel` names the identity: `"auto"` or a file in `ufmodel/`.
+
+**`auto`** (what `modelmap/auto.lua` sets) picks the UniFi access point closest to the
+board, once, and pins it in `/etc/openuf/ufmodel-auto.json` — an adopted device never
+changes model under the controller. The facts come from `/etc/board.json` (bands, PHY
+generation, antenna count, maximum width, sockets); the candidates are
+`ufmodel/catalog.lua`, the controller's own model registry. Regenerate it after a
+controller upgrade:
+
+```sh
+# uidb.json and bundles.json are in the Network application package:
+#   usr/lib/unifi/dl/uidb/uidb.json, usr/lib/unifi/dl/firmware/bundles.json
+python3 tools/uidb-catalog.py --uidb uidb.json --bundles bundles.json --fw \
+    > openuf/ufmodel/catalog.lua
+```
+
+`--fw` adds each model's current release version from fw-update.ui.com. It matters: the
+controller calls a device "upgradable" whenever its version differs from the catalogue's,
+character for character. openUF also learns the version from the controller's own upgrade
+commands, so a stale one corrects itself after one upgrade round.
+
+**A fixed identity**, e.g. `ufmodel/u6iw.lua` (the one validated end to end):
 
 ```lua
 uap = {
     platform = "U6IW",
     model    = "U6IW",
+    sysid    = 0xa652,              -- registry system id; resolved before `model`
     fw = {
         pre        = "U6IW.",
-        ver        = "6.6.55",    -- tune this if the controller rejects the device
-        buildtime  = "230801.1200",
+        ver        = "6.8.2.15592", -- the catalogue's current release, bare M.m.p.build
+        buildtime  = "260211.2010",
         factoryver = "6.5.28"
     },
     ...
@@ -293,6 +313,37 @@ ever logged.
 `bootstrap_adopt_user` — set by `install.sh install --bootstrap-adopt`, not by
 hand. Names the temporary SSH bootstrap account (see § SSH prerequisite below)
 that `inform.lua` should lock/unlock as the device's adopted state changes.
+
+The dropped-key report also feeds the **unhandled ledger**, always and not only in
+debug mode: `/etc/openuf/unhandled.json` (`unhandled_file`; `false` keeps it in memory)
+holds every response type, command, top-level field and config key shape openUF did not
+act on, with a count, first/last seen and a copy of what arrived — secrets redacted by
+field name, payloads capped at 2 KB, 150 entries at most.
+
+More options (all in `conf.lua`, all optional):
+
+| Option | Default | What it does |
+|---|---|---|
+| `sta_events` | `true` | Client connection events as `STA_ASSOC_TRACKER` notification informs (§ 6) |
+| `controller_system` | `true` | Apply the controller's timezone, NTP servers and cron job; `false`, or a table such as `{ntp = false}` |
+| `l2guard` | `true` | The controller's `ebtables.*` hardening as an nftables bridge table on the VAPs |
+| `cfg_retries` | `2` | How often a push that failed to apply is asked for again (§ 6) |
+| `country_override` | `nil` | Program this ISO country's regulatory domain instead of the controller's (the controller's is still reported). A legal decision — off unless set |
+| `debug_dump_requests` | `false` | With `debug_dump_file`, also log what openUF sends (`TX`) and transport errors (`ERR`) |
+| `debug_caps`, `debug_payload_extra` | `nil` | Research only: override `fw_caps`/`wifi_caps`/`wifi_caps2`, merge extra payload fields. Logged loudly at every start |
+
+A modelmap may also carry a per-band radio policy, for board limits the controller cannot
+know:
+
+```lua
+dev.conf.radio = {
+    na = {htmode_max = "HE80", acs_exclude_dfs = true},  -- a driver that cannot start DFS CAC
+    ng = {htmode_floor = "HE20"},                        -- raise a controller's 802.11n default
+}
+```
+
+`htmode_floor` never overrides a WLAN's Force WiFi 4 Mode, and the hardware clamp still runs
+last. `acs_exclude_dfs` and `channels` only apply while the channel is Auto.
 
 ---
 
@@ -1001,10 +1052,47 @@ upgrade commands and reported, so no stale version keeps the badge up.
 ### Boards without a hand-written map
 
 `dev = dofile("modelmap/auto.lua")` derives the map from `/etc/board.json` on DSA boards:
-sockets, the uplink (from the bridge FDB, so `ip-bridge` must be installed), U6IW port
-numbering (uplink = port 5), the identity MAC (the MAC the network already knows the AP
-by), the Locate LED and the radios. The result is pinned in
-`/etc/openuf/modelmap-auto.json` once the uplink could be detected; delete it to re-derive.
+sockets, the uplink (from the bridge FDB, so `ip-bridge` must be installed), the identity
+(`ufmodel = "auto"`, § 3) and that model's port numbering (a model with a built-in switch
+has its uplink on its last port — port 5, "PoE In + Data", on a U6-IW — a plain AP on
+port 1), the identity MAC (the MAC the network already knows the AP by), the Locate LED
+and the radios. The result is pinned in `/etc/openuf/modelmap-auto.json` once the uplink
+could be detected, and the model in `/etc/openuf/ufmodel-auto.json`; delete both (and
+re-adopt) to re-derive.
+
+### Client connection events
+
+A UniFi AP reports every association, successful connection and departure as a separate
+notification inform (`inform_as_notif: true`, `notif_reason: "event"`, a `notif_payload`
+with `message_type: STA_ASSOC_TRACKER`). The controller builds a client's connection
+timeline from them, and detects a roam by pairing one AP's `sta_leave` with another AP's
+`association` for the same client. openUF diffs the station list between heartbeats and
+sends up to eight events after each successful inform. A client that joins is an
+`association` (with its RSSI, which the roaming detector needs) and a `success`; one that
+leaves is a `sta_leave`, with `last_seen` in device uptime. Events queue while the
+controller is unreachable (200 at most). `sta_events = false` turns them off.
+
+### Config pushes that fail to apply
+
+Every push is judged once all of its steps have run. If one raised an error (the WiFi
+config, the network plan), openUF keeps reporting the **previous** `cfgversion`. The
+controller only re-sends a config while the device reports a different version, and it
+deduplicates identical pushes for ten minutes, so the push arrives again about ten minutes
+later. After `cfg_retries` rounds the new version is echoed anyway, so a config the device
+cannot apply stops cycling. `cfgversion_effective` always names the last push that applied
+cleanly; the controller's "last config applied successfully" compares the two. A network
+plan that is rolled back (§ Controller-owned bridge) sets `cfgversion_effective` back as well.
+
+### Updating openUF in place
+
+`openuf-update` (installed by `install.sh`) downloads the latest release, checks its
+sha256, backs up `/opt/openuf` and `/etc/openuf`, runs `install.sh install` (which keeps
+`conf.lua`), restarts, and waits up to 75 s for the new daemon to complete an inform
+(`/tmp/openuf-status`). If it doesn't, the backup is put back. `--ref v1.2.3` picks a
+release, `--ref <branch>` a source tree, `--from <file|dir>` a local copy, and `--check`
+only shows what is installed. From a development machine, `sh tools/deploy.sh <ap>...`
+builds the release tarball and runs the updater on each AP in turn, stopping at the first
+failure.
 
 ## 7. LLDP topology
 
