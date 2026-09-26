@@ -34,6 +34,7 @@ runtime_depends=$(subst |,$(space),$(subst $(space),$(comma)$(space),$(foreach d
 # metadata only); a buildroot image build keeps DEPENDS, so selecting openuf
 # selects them.
 OPENUF_RUNTIME_DEPENDS:=lua lua-cjson luasocket lua-openssl luabitop libuci-lua \
+	ucode ucode-mod-ubus ucode-mod-uloop ucode-mod-fs \
 	iw lldpd nftables kmod-nft-bridge hostapd-utils ip-bridge
 
 define Package/openuf

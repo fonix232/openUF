@@ -1313,6 +1313,39 @@ What that leaves unproven is only the 802.11 association itself, which is not op
 no second radio in the house can act as a station on the IoT WLAN's band, so no client was
 put on it. Every hop the AP is responsible for carries traffic.
 
+### Connection timing: what the WiFi Connectivity view counts (2026-09-26)
+
+The Connectivity view (Initial WiFi Connections, the Association/Authentication/DHCP/DNS/Success
+percentages and latencies) read **0** with openUF APs while roaming worked. Its data is
+`ace_stat.wifi_connectivity_event`, `_class: WIFI_CONNECTION`, and there were none. Traced in
+10.6.106 (`devmgr.w.a.VsCpQiCuGEvNvUNmH`, `wifi.connectivity.a.ctfbDsCjrxgkv`,
+`wifi.k.fdwW`) and confirmed with hand-sent events:
+
+- For an AP on firmware **6.2.1 or later** (`hyFnQ.supportTrafficStaTrackerEvents`; openUF
+  presents 6.8.2) a `success` counts as successful only with **`traffic_delta > 0` and
+  `dns_responses > 0`**. `dns_resp_seen: "yes"` is what older firmware is judged by and is not
+  read. Anything else goes to a ten-minute in-memory cache and is dropped with its empty
+  counters. A hand-sent success with the two fields was stored at once.
+- The deltas are **microseconds, cumulative** from the start of the connection, accepted when
+  `0 < delta <= 60 000 000` (`Duration.ofMinutes(1).toMillis() * 1000`). The view derives the
+  phases as differences: Association = `assoc_delta`; Authentication = the largest of
+  `wpa_auth_delta`/`radius_auth_delta`/`auth_delta` beyond `assoc_delta`; DHCP = `ip_delta`
+  minus that; DNS = `traffic_delta` minus `ip_delta`; the total is `traffic_delta`. Each phase is
+  only counted when it is later than the one before.
+- A connection with RSSI below -75 dBm and no success keeps no counters (ignored as weak).
+- Failures: `auth_failures`, `wpa_auth_failures`, `radius_auth_status: "failure"`,
+  `ip_failures`, `dns_timeouts`, `traffic_failures`, `dns_resp_seen: "no"` each count against
+  their phase; zero counts are dropped before storing.
+
+On the AP: hostapd's per-BSS ubus notifications carry `auth` (per Authentication frame, so
+several for SAE), `assoc`, `sta-authorized` (with `auth-alg`) and `key-mismatch`. A captured
+SAE join on heimdall: three `auth`, `assoc` 260 ms after the first, `sta-authorized` at 310 ms,
+DHCP ACK about a second later. A wrong SAE passphrase ends in `key-mismatch` about 3 ms after
+`auth`, **with no `assoc`**: SAE checks it in the Authentication exchange. With usteer running
+(`notify_response` on), `auth`/`assoc`/`probe` are requests: hostapd waits up to 100 ms and
+**rejects the client on any non-zero answer**, and a ucode subscriber whose handler returns
+nothing answers `UBUS_STATUS_NO_DATA`. `openwrt/staphase.uc` returns 0 explicitly.
+
 ## Outbound payload field reference
 
 Everything openUF sends. Names were audited against the controller's own Device model

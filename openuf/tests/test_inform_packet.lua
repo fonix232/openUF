@@ -3594,7 +3594,8 @@ return {
 			inform._last_identity = {mac = "00:11:22:33:44:55", model = "U6IW"}
 			ev.observe({}, 0, 0)
 			ev.observe({["aa:bb:cc:00:00:01"] = {vap = "v0", uptime = 1, signal = -40}}, 10, 10,
-				{["aa:bb:cc:00:00:01"] = true})
+				{connections = {["aa:bb:cc:00:00:01"] = {auth = 8970000, assoc = 8974000,
+					authorized = 9000000, dns = 9300000}}})
 			local st = sample_state({adopted = true})
 			fail = true
 			assert_eq(inform._send_sta_events(st, {}), 0, "controller down: nothing sent")

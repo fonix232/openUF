@@ -1,9 +1,11 @@
 #!/bin/sh /etc/rc.common
 # openUF procd service
 #
-# Manages two background processes:
+# Manages three background processes:
 #   announce — sends L2 UDP discovery broadcasts (port 10001)
 #   inform   — sends encrypted TNBU heartbeats to the controller
+#   phases   — times each client connection's steps from hostapd's ubus
+#              notifications, for the controller's connection timing
 #
 # Settings: /etc/config/openuf (see /usr/share/openuf/config.lua).
 
@@ -52,7 +54,7 @@ adopt_account() {
 }
 
 start_service() {
-	local l2
+	local l2 se
 	config_load openuf
 	adopt_account
 
@@ -79,6 +81,17 @@ start_service() {
 	procd_set_param stdout 1
 	procd_set_param stderr 1
 	procd_close_instance
+
+	# Connection events off (option sta_events): nothing reads the timings.
+	config_get_bool se main sta_events 1
+	if [ "$se" = 1 ]; then
+		procd_open_instance phases
+		procd_set_param command /usr/bin/ucode "$OPENUF_DIR/openwrt/staphase.uc"
+		procd_set_param respawn 3600 5 0
+		procd_set_param stdout 1
+		procd_set_param stderr 1
+		procd_close_instance
+	fi
 }
 
 # A change to /etc/config/openuf (LuCI's Save & Apply, `uci commit openuf`)
@@ -96,7 +109,7 @@ reload_service() {
 }
 
 stop_service() {
-	# procd stops the two Lua instances itself. What it cannot see is the RRM
+	# procd stops its instances itself. What it cannot see is the RRM
 	# collector: rrmscan.collector_ensure() spawns `ubus subscribe hostapd.*`
 	# with a trailing &, so it is reparented to init and outlives the daemon
 	# that started it. Left behind it appends beacon-report notifications to
