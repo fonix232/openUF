@@ -1,0 +1,104 @@
+name: Package feed
+
+# Builds the openuf and luci-app-openuf packages (apk; OpenWrt 25.12 and
+# later) with the official OpenWrt SDK image and, on main, publishes them as a
+# signed feed on GitHub Pages:
+#
+#   https://fonix232.github.io/openUF/apk/packages.adb
+#
+# The feed keeps the last few builds of each package, so an earlier one can be
+# reinstalled with `apk add openuf=<version>`.
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: feed-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  KEEP: 5
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # the build stamp names the nearest tag (git describe)
+
+      - name: Build with the OpenWrt SDK
+        run: |
+          mkdir -p out && chmod 777 out
+          docker run --rm -v "$PWD:/feed:ro" -v "$PWD/out:/out" openwrt/sdk:x86-64-openwrt-25.12 \
+            sh /feed/.github/scripts/sdk-build.sh /feed /out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: out/
+
+  publish:
+    name: Publish to GitHub Pages
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the published feed
+        run: |
+          if git ls-remote --exit-code origin gh-pages >/dev/null; then
+            git fetch --depth 1 origin gh-pages
+            git worktree add site origin/gh-pages
+          else
+            git worktree add --detach site
+            git -C site rm -rq .
+          fi
+          mkdir -p site/apk
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: new
+
+      - name: Add the new builds, keep the last ${{ env.KEEP }} of each package
+        run: |
+          cp new/packages/*.apk site/apk/
+          for pkg in openuf luci-app-openuf; do
+            ls site/apk | grep -E "^${pkg}-[0-9]" | sort -V | head -n -"$KEEP" \
+              | while read -r f; do rm -f "site/apk/$f"; done
+          done
+
+      - name: Index and sign
+        env:
+          APK_SIGN_KEY: ${{ secrets.APK_SIGN_KEY }}
+        run: |
+          umask 077
+          mkdir -p keys
+          printf '%s\n' "$APK_SIGN_KEY" > keys/apk-private.pem
+          chmod -R a+rX keys site && chmod -R a+w site
+          docker run --rm -v "$PWD/site:/site" -v "$PWD/keys:/keys:ro" openwrt/sdk:x86-64-openwrt-25.12 sh -c '
+            cd /builder && { [ -f rules.mk ] || ./setup.sh >/dev/null; } &&
+            cd /site/apk && rm -f packages.adb &&
+            /builder/staging_dir/host/bin/apk mkndx --allow-untrusted \
+              --sign /keys/apk-private.pem --output packages.adb *.apk'
+          rm -rf keys
+          cp openuf/files/feed/openuf.pem site/
+          cp .github/pages/index.html site/index.html
+          touch site/.nojekyll
+
+      - name: Push
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "feed: ${GITHUB_SHA::7}" || { echo "nothing new"; exit 0; }
+          git push origin HEAD:gh-pages

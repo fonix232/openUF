@@ -1,0 +1,215 @@
+// openUF status for LuCI (luci-app-openuf).
+//
+// Read-only: everything comes from files openUF already keeps -- the
+// heartbeat (/tmp/openuf-status), state.json, the auto-derived identity and
+// port map -- plus its UCI settings and a process check. The adoption key and
+// anything else secret in state.json is never returned. Settings are written
+// by LuCI's own UCI form (view/openuf/settings.js), not here.
+
+'use strict';
+
+import { readfile, access, lsdir } from 'fs';
+import { connect } from 'ubus';
+import { cursor } from 'uci';
+
+const OPENUF = '/usr/share/openuf';
+const STATE  = '/etc/openuf';
+
+function json_file(path) {
+	const raw = readfile(path);
+	if (!raw)
+		return null;
+	try { return json(raw); } catch (e) { return null; }
+}
+
+// key=value lines (the daemon's heartbeat file).
+function kv_file(path) {
+	const out = {};
+	for (let line in split(readfile(path) ?? '', '\n')) {
+		const m = match(line, /^([a-z_]+)=(.*)$/);
+		if (m)
+			out[m[1]] = m[2];
+	}
+	return out;
+}
+
+// Is a `lua <script>` process running? /proc/<pid>/cmdline separates the
+// arguments with NUL bytes, so compare the argument list, not a pattern.
+function running(script) {
+	for (let pid in lsdir('/proc') ?? []) {
+		if (!match(pid, /^[0-9]+$/))
+			continue;
+		const argv = split(readfile(`/proc/${pid}/cmdline`) ?? '', '\u0000');
+		if (length(argv) >= 2 && match(argv[0], /(^|\/)lua$/) && argv[1] == script)
+			return true;
+	}
+	return false;
+}
+
+// The settings the status page shows, from /etc/config/openuf, with the
+// daemon's defaults (config.lua) where the section leaves them out.
+function conf_options() {
+	const s = cursor().get_all('openuf', 'main') ?? {};
+	const on = (v, def) => (v == null || v == '') ? def : (v in [ '1', 'true', 'yes', 'on', 'enabled' ]);
+	return {
+		modelmap: s.modelmap || 'auto',
+		inform_url: s.inform_url || null,
+		own_config: on(s.own_config, true),
+		bridge_backend: s.bridge_backend || 'auto',
+		l2_announce: on(s.l2_announce, true),
+		ssh_adopt: on(s.ssh_adopt, false),
+		upgrade_mode: s.upgrade_mode || null,
+		country_override: s.country_override || null,
+		debug_dump_file: s.debug_dump_file || null
+	};
+}
+
+// The model maps this build ships, for the settings page's list.
+function modelmaps() {
+	const out = [];
+	for (let f in lsdir(`${OPENUF}/modelmap`) ?? []) {
+		const m = match(f, /^(.+)\.lua$/);
+		if (m)
+			push(out, m[1]);
+	}
+	return sort(out);
+}
+
+// Catalogue entry for a model code: its product name, SKU, system id and
+// current firmware (ufmodel/catalog.lua, one entry spread over three lines).
+function catalogue(model) {
+	if (!model || !match(model, /^[A-Za-z0-9_-]+$/))
+		return null;
+	const src = readfile(`${OPENUF}/ufmodel/catalog.lua`) ?? '';
+	const at = index(src, `{model = "${model}",`);
+	if (at < 0)
+		return null;
+	const entry = substr(src, at, 600);
+	const head = match(entry, /sku = "([^"]*)", name = "([^"]*)", sysid = (0x[0-9a-f]+), platform = "([^"]*)"/);
+	if (!head)
+		return null;
+	const fw = match(entry, /fw = "([^"]*)"/);
+	return { sku: head[1], name: head[2], sysid: head[3], platform: head[4], fw: fw ? fw[1] : null };
+}
+
+// The management interface's live address, from netifd: state.json only holds
+// the copy saved at the daemon's last write.
+function live_address() {
+	const conn = connect();
+	if (!conn)
+		return null;
+	const st = conn.call('network.interface.lan', 'status');
+	conn.disconnect();
+	const a = st?.['ipv4-address']?.[0];
+	return a ? { ip: a.address, mask: a.mask, proto: st.proto } : null;
+}
+
+// The unhandled-message ledger (openuf/unhandled.lua): everything the
+// controller sent that openUF did not act on, newest first. The daemon already
+// redacts secrets by field name and bounds every payload before writing it.
+function unhandled() {
+	const doc = json_file(`${STATE}/unhandled.json`) ?? {};
+	const out = [];
+	for (let id, e in doc.entries ?? {}) {
+		if (type(e) != 'object')
+			continue;
+		push(out, {
+			category: e.category,
+			key: e.key,
+			count: +(e.count ?? 0),
+			first_seen: e.first_seen,
+			last_seen: e.last_seen,
+			last_ts: +(e.last_ts ?? 0),
+			payload: (e.payload != null) ? sprintf('%.2J', e.payload) : null
+		});
+	}
+	sort(out, (a, b) => b.last_ts - a.last_ts);
+	return { updated: doc.updated, entries: out };
+}
+
+const methods = {
+	modelmaps: {
+		call: function() {
+			return { modelmaps: modelmaps() };
+		}
+	},
+
+	unhandled: {
+		call: function() {
+			return unhandled();
+		}
+	},
+
+	status: {
+		call: function() {
+			const st = json_file(`${STATE}/state.json`) ?? {};
+			const hb = kv_file('/tmp/openuf-status');
+			const ufm = json_file(`${STATE}/ufmodel-auto.json`);
+			const map = json_file(`${STATE}/modelmap-auto.json`);
+			const conf = conf_options();
+			const model = ufm?.model;
+			const addr = live_address();
+
+			return {
+				now: time(),
+				service: {
+					installed: !!access(`${OPENUF}/inform.lua`),
+					enabled: !!access('/etc/rc.d/S99openuf'),
+					running: running('inform.lua'),
+					announcing: running('announce.lua'),
+					build: trim(readfile(`${OPENUF}/BUILD`) ?? '') || null
+				},
+				heartbeat: {
+					last_ok: +(hb.last_ok ?? 0),
+					last_type: hb.last_type || null,
+					last_fail: +(hb.last_fail ?? 0),
+					last_fail_msg: hb.last_fail_msg || null
+				},
+				controller: {
+					inform_url: st.inform_url ?? conf.inform_url,
+					adopted: !!st.adopted,
+					cfgversion: st.cfgversion || null,
+					cfgversion_effective: st.cfgversion_effective || null,
+					stun_url: st.stun_url || null,
+					fw_version: st.fw_version || null,
+					upgrade_requested: st.upgrade_requested_version || null
+				},
+				identity: {
+					model: model,
+					catalogue: catalogue(model),
+					mac: st.mac || map?.identity_mac,
+					ip: addr ? `${addr.ip}/${addr.mask}` : (st.ip || null),
+					addressing: addr?.proto,
+					hostname: st.hostname || null
+				},
+				hardware: {
+					modelmap: conf.modelmap,
+					uplink: map?.uplink,
+					ports: map?.ports ?? [],
+					radios: map?.radios ?? [],
+					led: map?.led
+				},
+				network: {
+					applied: st.netmodel_applied || null,
+					pending: st.netmodel_pending || null,
+					failed: st.netmodel_failed || null,
+					removed: st.netmodel_removed ?? [],
+					network_backup: !!access(`${STATE}/network.pre-openuf`),
+					wireless_backup: !!access(`${STATE}/wireless.pre-openuf`)
+				},
+				upgrade: {
+					bootstrap: !!access('/etc/init.d/openuf-bootstrap'),
+					bootstrap_enabled: !!access('/etc/rc.d/S98openuf-bootstrap'),
+					feed: !!access('/etc/apk/repositories.d/openuf.list')
+				},
+				diagnostics: {
+					unhandled: length(keys(json_file(`${STATE}/unhandled.json`)?.entries ?? {})),
+					blocked_clients: length(st.blocked_stas ?? [])
+				},
+				config: conf
+			};
+		}
+	}
+};
+
+return { 'luci.openuf': methods };

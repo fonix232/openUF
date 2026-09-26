@@ -25,7 +25,14 @@ jobs:
           sudo luarocks --lua-version 5.1 install openssl LUA_INCDIR=/usr/include/lua5.1
 
       - name: Run tests
+        working-directory: openuf
         run: OPENUF_REQUIRE_GCM=1 lua5.1 tests/run_tests.lua
+
+      - name: Stripped tree (what the package ships) is equivalent and passes
+        working-directory: openuf
+        run: |
+          sudo ln -sf /usr/bin/lua5.1 /usr/local/bin/lua
+          sh tools/strip-tree.sh --verify
 
   simulate:
     name: End-to-end adoption simulation
@@ -51,6 +58,7 @@ jobs:
       # This exercises what unit tests can't and guards against runtime-only
       # regressions like the ones this OpenWrt 25.12 pass fixed.
       - name: Run adoption simulation
+        working-directory: openuf
         run: |
           sh tools/simulate.sh --adopt
           sh tools/simulate.sh
@@ -61,15 +69,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check syntax
-        run: python3 -m py_compile tools/test_controller.py && echo "OK"
+        run: python3 -m py_compile openuf/tools/test_controller.py && echo "OK"
 
   shell-syntax:
     name: Shell script syntax check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check install.sh and check.sh
+      - name: Check the package's shell scripts
         run: |
-          bash -n install.sh
-          bash -n tools/check.sh
-          bash -n openuf/etc/init.d/openuf || true  # uses /etc/rc.common sourcing, not plain bash
+          for f in openuf/tools/check.sh openuf/tools/strip-tree.sh openuf/tools/deploy.sh \
+                   openuf/files/openuf.uci-defaults openuf/files/openuf.init \
+                   openuf/files/openuf-bootstrap.init openuf/src/hook/*.sh \
+                   .github/scripts/sdk-build.sh; do
+            sh -n "$f" || exit 1
+          done

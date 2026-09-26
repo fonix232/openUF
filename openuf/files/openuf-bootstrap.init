@@ -1,0 +1,45 @@
+#!/bin/sh /etc/rc.common
+# openUF upgrade bootstrap.
+#
+# A firmware upgrade that keeps settings (owut, LuCI's attended sysupgrade,
+# sysupgrade -c) restores /etc -- openUF's state and settings, this script,
+# and the openUF feed's key and repository line (/lib/upgrade/keep.d/openuf)
+# -- but not the package: packages only survive when they are built into the
+# image, and the ASU server only builds official ones. On the first boot of
+# such an image this reinstalls openUF from the openUF feed, with its LuCI
+# page when LuCI is there. A no-op whenever openUF is installed.
+
+START=98
+USE_PROCD=1
+EXTRA_COMMANDS="reinstall"
+EXTRA_HELP="	reinstall	Install openUF from the openUF feed now"
+
+LOCK=/var/run/openuf-bootstrap.lock
+
+# Detached rather than a procd instance: the package's own post-install runs
+# `start` on this script, and procd would answer that by stopping the
+# instance -- killing the very apk transaction that is installing openUF.
+start_service() {
+	[ -x /etc/init.d/openuf ] && return 0
+	[ -e "$LOCK" ] && return 0
+	touch "$LOCK"
+	( /etc/init.d/openuf-bootstrap reinstall; rm -f "$LOCK" ) </dev/null >/dev/null 2>&1 &
+}
+
+log() { logger -t openuf-bootstrap "$*"; echo "openuf-bootstrap: $*"; }
+
+reinstall() {
+	local pkgs=openuf n=0
+	# The feed is on the internet: wait for a default route and DNS.
+	until ip -4 route show default | grep -q . && nslookup github.io >/dev/null 2>&1; do
+		n=$((n + 1)); [ $((n % 30)) -eq 1 ] && log "waiting for the network"
+		sleep 10
+	done
+	apk info -e luci-base >/dev/null 2>&1 && pkgs="$pkgs luci-app-openuf"
+	n=0
+	until apk update >/dev/null 2>&1 && apk add $pkgs; do
+		n=$((n + 1)); [ $n -ge 30 ] && { log "giving up on: apk add $pkgs"; return 1; }
+		log "apk add $pkgs failed, retry $n"; sleep 60
+	done
+	log "installed $pkgs from the openUF feed"
+}

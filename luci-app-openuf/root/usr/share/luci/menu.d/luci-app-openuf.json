@@ -1,0 +1,40 @@
+{
+	"admin/services/openuf": {
+		"title": "openUF",
+		"order": 60,
+		"action": {
+			"type": "alias",
+			"path": "admin/services/openuf/status"
+		},
+		"depends": {
+			"acl": [ "luci-app-openuf" ]
+		}
+	},
+
+	"admin/services/openuf/status": {
+		"title": "Status",
+		"order": 10,
+		"action": {
+			"type": "view",
+			"path": "openuf/status"
+		}
+	},
+
+	"admin/services/openuf/settings": {
+		"title": "Settings",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "openuf/settings"
+		}
+	},
+
+	"admin/services/openuf/unhandled": {
+		"title": "Unhandled messages",
+		"order": 30,
+		"action": {
+			"type": "view",
+			"path": "openuf/unhandled"
+		}
+	}
+}

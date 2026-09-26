@@ -1,5 +1,9 @@
 name: Release
 
+# A version tag attaches the built packages to a GitHub release, for installing
+# by hand (apk add --allow-untrusted). Devices normally update from the feed
+# (see feed.yml).
+
 on:
   push:
     tags: ["v*.*.*"]
@@ -8,32 +12,23 @@ permissions:
   contents: write
 
 jobs:
-  build-and-publish:
-    name: Build release tarball
+  release:
+    name: Build and publish
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Install Lua and dependencies
+      - name: Build with the OpenWrt SDK
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y lua5.1 liblua5.1-dev lua-bitop luarocks openssl
-          sudo ln -sf /usr/bin/lua5.1 /usr/local/bin/lua
-          sudo luarocks --lua-version 5.1 install lua-cjson LUA_INCDIR=/usr/include/lua5.1
-
-      # dist.sh ships a comment-stripped tree (roughly half the bytes; OpenWrt
-      # flash is scarce) and --verify proves it is bytecode-identical to the
-      # source and still passes the suite before anything is published.
-      - name: Build openuf.tar.gz
-        run: sh tools/dist.sh --verify
-
-      - name: Generate checksum
-        run: sha256sum openuf.tar.gz > openuf.tar.gz.sha256
+          mkdir -p out && chmod 777 out
+          docker run --rm -v "$PWD:/feed:ro" -v "$PWD/out:/out" openwrt/sdk:x86-64-openwrt-25.12 \
+            sh /feed/.github/scripts/sdk-build.sh /feed /out
+          (cd out && sha256sum * > SHA256SUMS)
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            openuf.tar.gz
-            openuf.tar.gz.sha256
+          files: out/*
           generate_release_notes: true

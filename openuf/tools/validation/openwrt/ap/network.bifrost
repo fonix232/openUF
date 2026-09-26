@@ -1,0 +1,58 @@
+# This network's real AP layout (bifrost), with `wan` (a veth cable to the bench gateway) as the uplink
+# socket: one vlan-filtering bridge named `switch`, management on switch.1.
+config interface 'loopback'
+	option device 'lo'
+	option proto 'static'
+	option ipaddr '127.0.0.1'
+	option netmask '255.0.0.0'
+
+config device 'switch'
+	option name 'switch'
+	option type 'bridge'
+	list ports 'wan'
+	list ports 'lan1'
+	list ports 'lan2'
+
+config bridge-vlan 'lan_vlan'
+	option device 'switch'
+	option vlan '1'
+	list ports 'wan:u*'
+	list ports 'lan1:u*'
+	list ports 'lan2:u*'
+
+config bridge-vlan 'guest_vlan'
+	option device 'switch'
+	option vlan '2'
+	list ports 'wan:t'
+	list ports 'lan1:t'
+	list ports 'lan2:t'
+
+config bridge-vlan 'iot_vlan'
+	option device 'switch'
+	option vlan '3'
+	list ports 'wan:t'
+	list ports 'lan1:t'
+	list ports 'lan2:t'
+
+config bridge-vlan 'vpn_vlan'
+	option device 'switch'
+	option vlan '12'
+	list ports 'wan:t'
+	list ports 'lan1:t'
+	list ports 'lan2:t'
+
+config interface 'lan'
+	option device 'switch.1'
+	option proto 'dhcp'
+
+config interface 'guest'
+	option device 'switch.2'
+	option proto 'none'
+
+config interface 'iot'
+	option device 'switch.3'
+	option proto 'none'
+
+config interface 'vpn_se'
+	option device 'switch.12'
+	option proto 'none'
