@@ -292,7 +292,7 @@ See [USAGE § 8](USAGE.md#measuring-what-a-heartbeat-costs-on-the-device).
 
 openUF implements the **TNBU binary inform protocol**:
 
-- HTTP POST to `/inform` at the controller's `interval` (10 s by default), plus
+- HTTP POST to `/inform` at the controller's `interval` (10 s by default, clamped to 5–300 s), plus
   notification informs (`inform_as_notif`) for client events
 - Binary header: `TNBU` magic + version + MAC + flags + 16-byte IV + data version + payload length
 - Payload: JSON, AES-128 encrypted with the device's authkey — CBC, or GCM (with a

@@ -40,4 +40,20 @@ function M.is_mac(s)
 	return type(s) == "string" and s:match("^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$") ~= nil
 end
 
+-- A noop's `interval`: the heartbeat cadence in seconds the controller wants
+-- (PROTOCOL-VALIDATION.md, "Response _types"). Clamped, for the reason is_mac
+-- refuses: pre-adoption responses arrive in plain HTTP under the well-known
+-- key, and a forged noop must not be able to make the device hammer the
+-- controller or go quiet for an hour. nil (no field, or not a number) means
+-- "the device's own cadence".
+M.INTERVAL_MIN = 5
+M.INTERVAL_MAX = 300
+function M.interval(v)
+	v = tonumber(v)
+	if not v or v ~= v then return nil end
+	if v < M.INTERVAL_MIN then return M.INTERVAL_MIN end
+	if v > M.INTERVAL_MAX then return M.INTERVAL_MAX end
+	return math.floor(v)
+end
+
 return M

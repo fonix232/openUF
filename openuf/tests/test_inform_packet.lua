@@ -3466,15 +3466,112 @@ return {
 			local ctx = {interval = 10, backoff = 10}
 			local st = sample_state({adopted = true})
 			inform.parse_packet = function() return '{"_type":"noop","interval":17}' end
-			assert_eq(inform._tick(st, {}, nil, ctx), 17, "the controller's interval")
+			local normal = inform._tick(st, {}, nil, ctx)
 			inform.parse_packet = function() return '{"_type":"noop","interval":9999}' end
-			assert_eq(inform._tick(st, {}, nil, ctx), 10, "an absurd interval is ignored")
+			local absurd = inform._tick(st, {}, nil, ctx)
 			inform.parse_packet = function() return '{"_type":"noop","interval":10,"immediate":true}' end
-			assert_eq(inform._tick(st, {}, nil, ctx), 0, "immediate means now")
+			local now = inform._tick(st, {}, nil, ctx)
 			inform.build_json, inform.build_packet, inform.http_post, inform.parse_packet,
 				inform._reload_if_changed, inform._rrm_tick =
 				orig.build_json, orig.build_packet, orig.http_post, orig.parse_packet,
 				orig.reload, orig.rrm
+			inform._next_interval = nil
+			assert_eq(normal, 17, "the controller's interval")
+			assert_eq(absurd, 300, "an absurd interval is clamped, not ignored")
+			assert_eq(now, 0, "immediate means now")
+		end
+	},
+	{
+		name = "wire: interval clamps the controller's noop interval",
+		fn = function()
+			local wire = dofile("src/unifi/wire.lua")
+			assert_eq(wire.interval(10), 10, "a normal value passes through")
+			assert_eq(wire.interval("30"), 30, "a numeric string is accepted")
+			assert_eq(wire.interval(12.7), 12, "fractions are floored")
+			assert_eq(wire.interval(0), wire.INTERVAL_MIN, "too fast is clamped up")
+			assert_eq(wire.interval(-4), wire.INTERVAL_MIN, "negative too")
+			assert_eq(wire.interval(86400), wire.INTERVAL_MAX, "too slow is clamped down")
+			assert_eq(wire.interval(math.huge), wire.INTERVAL_MAX, "infinity too")
+			assert_eq(wire.interval(nil), nil, "absent means default")
+			assert_eq(wire.interval("soon"), nil, "garbage means default")
+			assert_eq(wire.interval(0/0), nil, "NaN means default")
+		end
+	},
+	{
+		name = "inform: handle_response records a noop's interval, and a noop without one resets it",
+		fn = function()
+			local wire = dofile("src/unifi/wire.lua")
+			inform._next_interval = nil
+			inform.handle_response('{"_type":"noop","interval":30}', sample_state(), {config = {}})
+			local adopted = inform._next_interval
+			inform.handle_response('{"_type":"noop","interval":1}', sample_state(), {config = {}})
+			local clamped = inform._next_interval
+			inform.handle_response('{"_type":"noop"}', sample_state(), {config = {}})
+			local none = inform._next_interval
+			inform._next_interval = nil
+			assert_eq(adopted, 30, "interval adopted")
+			assert_eq(clamped, wire.INTERVAL_MIN, "and clamped")
+			assert_eq(none, nil, "a noop without one goes back to the default")
+		end
+	},
+	{
+		name = "inform: _tick waits the controller's interval, and backoff never polls faster",
+		fn = function()
+			local orig = {
+				build_json = inform.build_json, build_packet = inform.build_packet,
+				http_post = inform.http_post, parse_packet = inform.parse_packet,
+				handle_response = inform.handle_response,
+				reload = inform._reload_if_changed, rrm = inform._rrm_tick,
+				stderr = io.stderr,
+			}
+			io.stderr = {write = function() end}
+			inform._reload_if_changed = function(_, _, last) return last end
+			inform._rrm_tick = function() return false end
+			inform.build_json = function() return "{}" end
+			inform.build_packet = function() return "pkt" end
+			inform.parse_packet = function() return '{"_type":"noop"}' end
+			inform.http_post = function() return "body" end
+
+			local ctx = {interval = 10, backoff = 10}
+			local st = {inform_url = "http://unifi:8080/inform"}
+
+			inform.handle_response = function() inform._next_interval = 90; return false end
+			local wait_slow = inform._tick(st, nil, nil, ctx)
+
+			inform.http_post = function() return nil, "connection refused" end
+			local fail1 = inform._tick(st, nil, nil, ctx)
+			local fail2 = inform._tick(st, nil, nil, ctx)
+
+			inform.http_post = function() return "body" end
+			inform.handle_response = function() inform._next_interval = nil; return false end
+			local wait_default = inform._tick(st, nil, nil, ctx)
+
+			inform.http_post = function() return nil, "connection refused" end
+			local fail3 = inform._tick(st, nil, nil, ctx)
+
+			-- A controller answering 404 to an unadopted device is not pacing
+			-- it: whatever an earlier one asked for no longer applies.
+			inform.http_post = function() return "body" end
+			inform.handle_response = function() inform._next_interval = 90; return false end
+			inform._tick(st, nil, nil, ctx)
+			inform.http_post = function() return nil, "HTTP 404" end
+			local pending = inform._tick(st, nil, nil, ctx)
+
+			io.stderr = orig.stderr
+			inform._next_interval = nil
+			inform._logged_pending = false
+			inform.build_json, inform.build_packet, inform.http_post,
+				inform.parse_packet, inform.handle_response,
+				inform._reload_if_changed, inform._rrm_tick =
+				orig.build_json, orig.build_packet, orig.http_post,
+				orig.parse_packet, orig.handle_response, orig.reload, orig.rrm
+
+			assert_eq(wait_slow, 90, "the controller's interval is what the loop waits")
+			assert_eq(fail1, 90, "a failure at a 90 s cadence is capped at 90, not 60")
+			assert_eq(fail2, 90, "and stays there")
+			assert_eq(wait_default, 10, "a noop without an interval goes back to the device's own")
+			assert_eq(fail3, 20, "and backoff doubles from that again")
+			assert_eq(pending, 10, "a pending device's 404 keeps the device's own cadence")
 		end
 	},
 	{

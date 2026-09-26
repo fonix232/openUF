@@ -673,9 +673,9 @@ end
 -- One heartbeat: build, send, dispatch. Returns the number of seconds the
 -- caller should wait before the next one -- 0 means "again, now", the
 -- config-applied case, where a real AP re-informs immediately. ctx carries the
--- loop's own state (interval, backoff, last_mtime) so run() is nothing but
--- `while true do wait(_tick()) end`, and the error boundaries and the backoff
--- can be exercised without a socket.
+-- loop's own state (base_interval, interval, backoff, last_mtime) so run() is
+-- nothing but `while true do wait(_tick()) end`, and the error boundaries and
+-- the backoff can be exercised without a socket.
 --
 -- Every stage is pcall-wrapped, and that is the point of the split. build_json
 -- shells out to a dozen tools and does arithmetic on their output; one nil in
@@ -763,7 +763,10 @@ function M._write_status(st, fields)
 end
 
 function M._tick(st, cfg, ufhw, ctx)
-	ctx.interval = ctx.interval or 10
+	-- base_interval is the device's own cadence; interval is what the loop
+	-- actually waits, which the controller's noop may have moved.
+	ctx.base_interval = ctx.base_interval or ctx.interval or 10
+	ctx.interval = ctx.interval or ctx.base_interval
 	ctx.backoff  = ctx.backoff  or ctx.interval
 
 	ctx.last_mtime = M._reload_if_changed(st, cfg, ctx.last_mtime)
@@ -875,6 +878,10 @@ function M._tick(st, cfg, ufhw, ctx)
 			-- The controller answered: the daemon is alive and talking to it,
 			-- which is what the status file's readers (tools/deploy.sh, LuCI) ask.
 			pcall(M._write_status, st, {last_ok = M._time(), last_type = "pending"})
+			-- At the device's own cadence: a controller answering 404 is not
+			-- pacing it, and whatever one asked for before (an SSH
+			-- reset-inform or set-inform lands here) no longer applies.
+			ctx.interval = ctx.base_interval
 			ctx.backoff = ctx.interval
 			return ctx.interval
 		end
@@ -888,7 +895,11 @@ function M._tick(st, cfg, ufhw, ctx)
 			ctx.backoff = ctx.interval
 			return ctx.interval
 		end
-		ctx.backoff = math.min(ctx.backoff * 2, 60)
+		-- Doubles from the CURRENT cadence, capped at 60 s -- or at the
+		-- controller's own interval when that is longer, since a failure
+		-- must never make the device poll faster than it was asked to.
+		ctx.backoff = math.min(math.max(ctx.backoff, ctx.interval) * 2,
+			math.max(60, ctx.interval))
 		return ctx.backoff
 	end
 	ctx.backoff = ctx.interval
@@ -919,6 +930,13 @@ function M._tick(st, cfg, ufhw, ctx)
 		return ctx.interval
 	end
 	if st.adopted and M._staevents.pending() > 0 then pcall(M._send_sta_events, st, cfg) end
+	-- The controller's own cadence for this device (noop `interval`, which it
+	-- raises under load), or the device's own when this answer named none.
+	-- The backoff was reset to the old cadence above, before this response
+	-- could move it; follow it here too, or the first failure after a drop
+	-- would double from the stale, longer value.
+	ctx.interval = M._next_interval or ctx.base_interval
+	ctx.backoff  = ctx.interval
 	if applied or M._immediate then
 		-- A config push runs `wifi reload`, which takes every hostapd object
 		-- the RRM collector subscribed to away with it and kills the
@@ -927,9 +945,7 @@ function M._tick(st, cfg, ufhw, ctx)
 		if applied then M._rrm_collector_next = 0 end
 		return 0
 	end
-	-- The controller's own cadence for this device (noop `interval`), which it
-	-- raises under load; ctx.interval only when it named none.
-	return M._next_interval or ctx.interval
+	return ctx.interval
 end
 
 -- Send queued connection events as notification informs, oldest first, a

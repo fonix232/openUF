@@ -39,9 +39,10 @@ function M.handle(ctx, json_str, st, cfg)
 
 	if _type == "noop" then
 		-- The controller's next-inform interval for this device and its "come
-		-- back now" flag. Bounded: a garbled value must not park the daemon.
-		local iv = tonumber(resp.interval)
-		if iv and iv >= 1 and iv <= 300 then ctx._next_interval = iv end
+		-- back now" flag. Clamped (wire.interval): a forged or garbled value
+		-- must neither park the daemon nor make it hammer the controller. A
+		-- noop without one goes back to the device's own cadence.
+		ctx._next_interval = wire.interval(resp.interval)
 		if resp.immediate == true then ctx._immediate = true end
 		return false
 	end
