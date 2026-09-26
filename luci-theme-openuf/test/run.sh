@@ -49,7 +49,15 @@ setup_only=
 [ "${1:-}" != --setup ] || setup_only=1
 
 docker rm -f "$name" >/dev/null 2>&1 || true
-docker run -d --name "$name" -p "127.0.0.1:$port:80" "$image" /sbin/init >/dev/null
+docker create --name "$name" -p "127.0.0.1:$port:80" "$image" /sbin/init >/dev/null
+
+# eth0 is Docker's link, which LuCI is reached over, and the network OpenWrt
+# generates on first boot bridges it into br-lan. netifd cannot take it over
+# without NET_ADMIN, and on some hosts (GitHub's runners) trying hangs netifd
+# for good, and every network page with it. A config in place before boot is
+# kept, so the lab's leaves eth0 out (fixtures/network).
+docker cp "$here/fixtures/network" "$name:/etc/config/network"
+docker start "$name" >/dev/null
 
 if [ -z "$setup_only" ]; then
 	trap 'docker rm -f "$name" >/dev/null 2>&1' EXIT
@@ -65,6 +73,13 @@ until curl -fsS -o /dev/null "http://127.0.0.1:$port/"; do
 	fi
 	sleep 1
 done
+
+# Every network page asks netifd; stop here, with its log, if it does not answer.
+if ! docker exec "$name" ubus -t 20 call network.interface dump >/dev/null 2>&1; then
+	echo "netifd does not answer (ubus call network.interface dump)" >&2
+	docker exec "$name" sh -c 'logread | grep -e netifd -e network | tail -n 30' >&2 || true
+	exit 1
+fi
 
 docker exec "$name" sh -c "printf '%s\n%s\n' '$password' '$password' | passwd root >/dev/null"
 docker exec "$name" sh -c 'cat /etc/openwrt_release' | sed -n "s/^DISTRIB_DESCRIPTION=/testing on /p"
