@@ -28,6 +28,7 @@
 #   UF_COMPAT      0 skips the fallback pass  (1, test/compat.cjs)
 #   UF_FAKE_USTEER 0 leaves luci-app-usteer   (1)
 #                  without its fake daemon
+#   UF_SWCONFIG    1: add a swconfig switch   (off; see test/add-swconfig.sh)
 
 set -eu
 
@@ -94,6 +95,10 @@ case " $packages " in
 *" applications/luci-app-usteer "*)
 	[ "${UF_FAKE_USTEER:-1}" = 0 ] || sh "$here/fake-usteer.sh" "$name" ;;
 esac
+
+# A switch chip for Network > Switch. Off by default, as it switches LuCI's
+# "swconfig" feature on for every page (the Status overview's port card goes).
+[ "${UF_SWCONFIG:-}" != 1 ] || sh "$here/add-swconfig.sh" "$name"
 
 if [ -n "${UF_APK:-}" ]; then
 	# The lab is offline: resolve luci-base from the installed packages.
