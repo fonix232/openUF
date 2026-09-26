@@ -415,6 +415,16 @@ function M.build(ctx, st, cfg, ufhw)
 							security   = net.security,
 							essid      = net.essid,
 						}
+						-- A sibling openUF AP, identified by the IE it beacons
+						-- (sysinfo.peer_ie_hex). is_unifi + serialno is what
+						-- the controller resolves to an adopted device; without
+						-- them every BSS of ours carrying a site SSID was
+						-- listed as an impersonating third-party AP.
+						if net.peer_mac then
+							local e = scan_table[#scan_table]
+							e.is_unifi = true
+							e.serialno = net.peer_mac
+						end
 					end
 					-- 802.11k enrichment: BSSes a CLIENT went off-channel
 					-- and saw, which this radio never could from its own

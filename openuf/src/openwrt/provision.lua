@@ -409,7 +409,8 @@ function M.handle(ctx, json_str, st, cfg)
 						{radio_table = radio_table, vap_table = vap_table, network_table = {}},
 						cfg, {band_steering_active = steering_active,
 							device_name = device_name, keep_vlans = port_vlans,
-							netmodel = netplan})
+							netmodel = netplan,
+							peer_ie = ctx._sysinfo.peer_ie_hex(st and st.mac)})
 					if not ok_ac then
 						io.stderr:write("inform: WiFi config failed: " .. tostring(err_ac) .. "\n")
 						apply_ok = false

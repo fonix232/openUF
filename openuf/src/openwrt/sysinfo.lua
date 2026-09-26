@@ -376,13 +376,85 @@ function M.sta_table(ifname)
 	return clients
 end
 
+-- Sibling-AP recognition. The controller decides whether a scanned BSS is
+-- one of its own from the REPORTING AP's word alone, never from the site's
+-- vap_tables (decompiled 10.6.101, com.ubnt.service.aS.rhAW): a scan entry
+-- tagged is_unifi=true is resolved to a device by its serialno and, if that
+-- device is adopted in the site, recorded as a UniFi neighbour; an untagged
+-- one is a rogue whenever its SSID is one of the site's. Real UniFi APs learn
+-- the tag from a Ubiquiti vendor IE in each other's beacons. openUF had no
+-- such IE, so every openUF AP showed up in AirView as a third-party AP
+-- impersonating the network -- seen live, all six sibling BSSes at home had
+-- is_rogue=true while the vap_tables the controller held were correct.
+--
+-- So every openUF VAP beacons this IE, carrying its device's identity MAC:
+--   dd 0d | 02 6f 55 (OUI) | 6f 55 46 ("oUF") | 01 (version) | 6-byte MAC
+-- The OUI is deliberately NOT Ubiquiti's 00:27:22 -- a real UniFi AP parsing
+-- our layout as theirs would read garbage -- and the magic makes a collision
+-- with any real user of 02:6f:55 harmless in both directions.
+M.PEER_IE_OUI   = "02:6f:55"
+M.PEER_IE_MAGIC = "6f5546"
+M.PEER_IE_VER   = "01"
+
+-- The hostapd vendor_elements value (the whole element as hex) announcing
+-- mac ("xx:xx:xx:xx:xx:xx"), or nil when mac is not a MAC.
+function M.peer_ie_hex(mac)
+	if type(mac) ~= "string" then return nil end
+	local hex = mac:lower():gsub(":", "")
+	if not hex:match("^%x+$") or #hex ~= 12 then return nil end
+	return "dd0d" .. M.PEER_IE_OUI:gsub(":", "") .. M.PEER_IE_MAGIC
+		.. M.PEER_IE_VER .. hex
+end
+
+-- Reading it back cannot go through `iw`: OpenWrt's default iw build strips
+-- the printer for vendor elements it does not know, so ours never appears in
+-- `iw scan dump` output, with or without -u. Checked live 2026-09-26 on both
+-- boards (iw 6.17): not one "Vendor specific" line across a dozen neighbours,
+-- while the same kernel scan cache, read over nl80211, held our element.
+-- ucode's nl80211 module is what OpenWrt's own wifi scripts are built on, so
+-- it is present wherever those are. The script prints "<bssid> <mac>" per
+-- sibling BSS and nothing else; any failure (no ucode, no module) is simply
+-- no siblings.
+local function ucode_bytes(hex)
+	return (hex:gsub("(%x%x)", "\\x%1"))
+end
+
+function M.peer_scan_cmd(ifname)
+	if type(ifname) ~= "string" or not ifname:match("^[%w%.%-_]+$") then return nil end
+	local head = ucode_bytes(M.PEER_IE_OUI:gsub(":", "") .. M.PEER_IE_MAGIC .. M.PEER_IE_VER)
+	local script = 'let nl=require("nl80211");'
+		.. 'let r=nl.request(nl.const.NL80211_CMD_GET_SCAN,nl.const.NLM_F_DUMP,{dev:"' .. ifname .. '"});'
+		.. 'for(let x in (r||[])){let b=x.bss;if(!b)continue;'
+		.. 'for(let l in [b.information_elements||[],b.beacon_ies||[]]){let hit=null;'
+		.. 'for(let e in l){let d=e.data;'
+		.. 'if(e.type==221&&length(d)==13&&substr(d,0,7)=="' .. head .. '"){'
+		.. 'let m=[];for(let i=7;i<13;i++)push(m,sprintf("%02x",ord(d,i)));'
+		.. 'hit=join(":",m);break;}}'
+		.. 'if(hit){print(b.bssid," ",hit,"\\n");break;}}}'
+	return "ucode -e '" .. script .. "' 2>/dev/null"
+end
+
+-- {bssid = identity MAC} for every BSS in ifname's scan cache that carries
+-- the sibling-AP element.
+function M.peer_macs(ifname)
+	local cmd = M.peer_scan_cmd(ifname)
+	if not cmd then return {} end
+	local peers = {}
+	for bssid, mac in (M._run_cmd(cmd) or ""):gmatch(
+			"(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x) (%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)") do
+		peers[bssid:lower()] = mac:lower()
+	end
+	return peers
+end
+
 -- Returns a table of neighboring wireless networks visible to ifname, by
 -- parsing `iw dev <ifname> scan dump` -- the kernel's already-cached BSS
 -- list from cfg80211, not a fresh scan (that's what the spectrum-scan cmd
 -- handler's separate `iw dev <ifname> scan` call triggers; reading the
 -- cache here is cheap and non-disruptive enough to do on every inform,
 -- unlike a real scan).
--- Each entry: {bssid, essid, freq, channel, signal, security, age, bw}
+-- Each entry: {bssid, essid, freq, channel, signal, security, age, bw,
+-- peer_mac} -- peer_mac only for a sibling openUF AP (see peer_ie_hex).
 -- `bw` is channel width in MHz. The controller's Environment tab's "Ch. Width"
 -- column reads this field directly and renders nothing at all when it's
 -- missing (confirmed live 2026-07-14) -- default to 20 (legacy-safe, valid
@@ -510,6 +582,10 @@ function M.scan_table(ifname)
 		end
 	end
 	flush()
+	if #nets > 0 then
+		local peers = M.peer_macs(ifname)
+		for _, n in ipairs(nets) do n.peer_mac = peers[n.bssid:lower()] end
+	end
 	return nets
 end
 

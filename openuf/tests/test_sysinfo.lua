@@ -620,6 +620,46 @@ return {
 		end
 	},
 	{
+		name = "sysinfo: scan_table() tags a sibling openUF AP from the nl80211 reader",
+		fn = function()
+			-- OpenWrt's iw build never prints our vendor element (checked live
+			-- on both boards), so the tag comes from peer_macs' ucode/nl80211
+			-- read, joined on the BSSID.
+			with_fixtures({}, {
+				["scan dump"] = fixture("iw_scan_dump.txt"),
+				["ucode -e"]  = "AA:BB:CC:DD:EE:01 00:00:5E:00:53:20\n",
+			}, function()
+				local nets = sysinfo.scan_table("wlan0")
+				assert_eq(nets[1].peer_mac, "00:00:5e:00:53:20", "the sibling's identity MAC, case-folded")
+				assert_eq(nets[2].peer_mac, nil, "a BSS the reader did not name is not a sibling")
+				assert_eq(nets[1].essid, "NeighborNet", "the iw-parsed fields are untouched")
+			end)
+			with_fixtures({}, {["scan dump"] = fixture("iw_scan_dump.txt")}, function()
+				local nets = sysinfo.scan_table("wlan0")
+				assert_eq(#nets, 2, "no ucode on the box: the scan still reports")
+				assert_eq(nets[1].peer_mac, nil, "...with no siblings")
+			end)
+		end
+	},
+	{
+		name = "sysinfo: peer_scan_cmd() matches exactly the element peer_ie_hex() builds",
+		fn = function()
+			local hex = sysinfo.peer_ie_hex("00:00:5E:00:53:20")
+			assert_eq(hex, "dd0d026f556f55460100005e005320", "hostapd vendor_elements value")
+			-- The reader compares the element body's first 7 bytes (OUI,
+			-- magic, version) and takes the 6 after them. Pin that prefix to
+			-- the builder's, byte for byte, so the two cannot drift.
+			local cmd = sysinfo.peer_scan_cmd("phy0-ap0")
+			local want = hex:sub(5, 18):gsub("(%x%x)", "\\x%1")
+			assert_true(cmd:find('"' .. want .. '"', 1, true) ~= nil, "prefix matches the builder")
+			assert_true(cmd:find("length(d)==13", 1, true) ~= nil, "body length is 0x0d")
+			assert_true(cmd:find('dev:"phy0-ap0"', 1, true) ~= nil, "asks about the right interface")
+			assert_eq(sysinfo.peer_scan_cmd("x'; reboot; '"), nil, "an interface name cannot break out of the quoting")
+			assert_eq(sysinfo.peer_ie_hex(nil), nil, "no identity, no IE")
+			assert_eq(sysinfo.peer_ie_hex("not-a-mac"), nil, "garbage, no IE")
+		end
+	},
+	{
 		name = "sysinfo: scan_table() derives width from the operation elements on iw 6.17",
 		fn = function()
 			-- The fixture is trimmed from real `iw dev ... scan` output taken

@@ -2084,6 +2084,29 @@ return {
 		end
 	},
 	{
+		name = "inform packet: handle_response beacons the identity MAC as opts.peer_ie",
+		fn = function()
+			-- The sibling-AP element carries the MAC the controller knows the
+			-- device by, so another openUF AP's scan can tag this BSS
+			-- is_unifi + serialno instead of reporting it as a rogue.
+			local st = sample_state({mac = "00:00:5e:00:53:20"})
+			local applied_opts
+			inform._ucihelper = {
+				apply_config = function(_, _, opts) applied_opts = opts end,
+			}
+			local orig_usteer = inform._usteer.set_enabled
+			inform._usteer.set_enabled = function() end
+			local sys_cfg = "aaa.1.ssid=openuf-test\naaa.1.wpa=2\n"
+				.. "wireless.1.ssid=openuf-test\nwireless.1.parent=radio0\n"
+			local resp = ('{"_type":"setparam","system_cfg":"%s"}'):format(sys_cfg:gsub("\n", "\\n"))
+			inform.handle_response(resp, st, {net = {lan_cpueth = "eth0"}})
+			inform._ucihelper = nil
+			inform._usteer.set_enabled = orig_usteer
+			assert_eq(applied_opts.peer_ie, "dd0d026f556f55460100005e005320",
+				"the identity MAC, in the element sysinfo.peer_ie_hex builds")
+		end
+	},
+	{
 		name = "inform packet: handle_response setparam applies WiFi config from system_cfg via ucihelper",
 		fn = function()
 			local st = sample_state()
