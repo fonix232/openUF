@@ -18,7 +18,11 @@
 #
 # Environment knobs:
 #   OPENWRT_IMAGE  image to test against      (openwrt/rootfs:x86-64-25.12.5)
-#   LUCI_BRANCH    LuCI branch for extras     (openwrt-25.12)
+#                  openwrt/rootfs:x86-64 is SNAPSHOT, which has no LuCI: it
+#                  is installed from the image's own feed (needs internet)
+#   LUCI_BRANCH    LuCI ref for the extras: a (openwrt-25.12)
+#                  branch, tag or full commit id (master for SNAPSHOT; see
+#                  .github/workflows/feed.yml for the pinned ones)
 #   LUCI_PACKAGES  extras, paths in LuCI      (modules/luci-mod-dashboard
 #                                              applications/luci-app-usteer
 #                                              applications/luci-app-uhttpd)
@@ -63,6 +67,13 @@ if [ -z "$setup_only" ]; then
 	trap 'docker rm -f "$name" >/dev/null 2>&1' EXIT
 fi
 
+# Release images ship LuCI; SNAPSHOT does not, so it comes from its feed.
+if ! docker exec "$name" test -d /www/luci-static; then
+	echo "no LuCI in $image; installing it from the image's feed"
+	sleep 5
+	docker exec "$name" sh -c 'apk update -q && apk add -q luci' >&2
+fi
+
 tries=0
 until curl -fsS -o /dev/null "http://127.0.0.1:$port/"; do
 	tries=$((tries + 1))
@@ -104,19 +115,23 @@ fi
 if [ -n "$packages" ]; then
 	luci="$here/.cache/luci-$branch"
 
+	# A branch, a tag or a full commit id: all can be fetched by name.
 	if [ ! -d "$luci/.git" ]; then
-		mkdir -p "$here/.cache"
-		git clone -q --depth 1 --filter=blob:none --sparse --branch "$branch" \
-			https://github.com/openwrt/luci "$luci" || echo "could not fetch LuCI; skipping $packages" >&2
+		mkdir -p "$luci"
+		git -C "$luci" init -q
+		git -C "$luci" remote add origin https://github.com/openwrt/luci
 	fi
 
-	if [ -d "$luci/.git" ]; then
+	if git -C "$luci" fetch -q --depth 1 --filter=blob:none origin "$branch"; then
 		# shellcheck disable=SC2086 # a space-separated list, by design
 		git -C "$luci" sparse-checkout set $packages
+		git -C "$luci" checkout -q --detach FETCH_HEAD
 
 		for pkg in $packages; do
 			sh "$here/add-luci-package.sh" "$name" "$luci/$pkg"
 		done
+	else
+		echo "could not fetch LuCI $branch; skipping $packages" >&2
 	fi
 fi
 

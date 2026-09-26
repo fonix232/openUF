@@ -9,7 +9,21 @@
  * charts row), and the Port Manager list as a detail tab (off by default;
  * Layout adds it). The nodes are kept between polls and patched, so the
  * five-second redraw leaves a hovered port and its details in place.
+ *
+ * The dashboard as it was before its rework (LuCI of early September 2026
+ * and older) has no widgets: it loads each include, renders it, and places
+ * whatever render() returns. It never asks whether an include is
+ * available, which is how the two are told apart; there the card alone is
+ * returned, as a node.
  */
+
+const themed = () => /\/luci-static\/openuf(-dark|-light)?\/?$/.test(L.env.media || '');
+
+function portManager(menu) {
+	const node = menu ? [ 'admin', 'network', 'network' ].reduce((n, k) => (n && n.children) ? n.children[k] : null, menu) : null;
+
+	return node ? L.url('admin/network/network') : null;
+}
 
 return baseclass.extend({
 	title: _('Ports'),
@@ -21,23 +35,30 @@ return baseclass.extend({
 
 	/* The markup is this theme's; under another one it would be bare. */
 	available() {
-		if (!/\/luci-static\/openuf(-dark|-light)?\/?$/.test(L.env.media || ''))
+		this.slotted = true;
+
+		if (!themed())
 			return false;
 
 		return Promise.all([
 			ports.load(),
 			L.resolveDefault(ui.menu.load(), null)
 		]).then(([ data, menu ]) => {
-			const node = menu ? [ 'admin', 'network', 'network' ].reduce((n, k) => (n && n.children) ? n.children[k] : null, menu) : null;
-
-			this.manager = node ? L.url('admin/network/network') : null;
+			this.manager = portManager(menu);
 
 			return data.ports.length > 0;
 		});
 	},
 
 	load() {
-		return ports.load();
+		if (this.slotted || this.manager !== undefined)
+			return ports.load();
+
+		return Promise.all([ ports.load(), L.resolveDefault(ui.menu.load(), null) ]).then(([ data, menu ]) => {
+			this.manager = portManager(menu);
+
+			return data;
+		});
 	},
 
 	renderCard(data) {
@@ -57,6 +78,9 @@ return baseclass.extend({
 	render(data) {
 		if (!data || !Array.isArray(data.ports) || !data.ports.length)
 			return null;
+
+		if (!this.slotted)
+			return themed() ? this.renderCard(data) : null;
 
 		return {
 			charts: [ { id: 'ports', node: () => this.renderCard(data) } ],
