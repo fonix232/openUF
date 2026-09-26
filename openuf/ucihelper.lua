@@ -1054,7 +1054,8 @@ end
 --       BSS Transition on for every managed iface regardless of each WLAN's
 --       own bss_transition setting, since usteer (Band Steering) needs it
 --       network-wide to function at all -- see openuf/usteer.lua. nil/false
---       leaves each vap's own setting in effect. opts.device_name is the
+--       leaves each vap's own setting in effect. opts.roam_assist_active
+--       (boolean) forces the same, for Roaming Assistant. opts.device_name is the
 --       controller-assigned device name, used as the WPS Device Name value
 --       when a vap has advertise_ap_name enabled ("Show Access Point Name in
 --       Beacon"); defaults to "openUF" if nil. opts.peer_ie is the
@@ -1226,14 +1227,16 @@ function M.apply_config(resp, cfg, opts)
 				-- inter-AP traffic, FT-SAE gets the key holders it cannot work
 				-- without.
 			end
-			if opts and opts.band_steering_active then
+			if opts and (opts.band_steering_active or opts.roam_assist_active) then
 				-- usteer requires 802.11k (neighbor reports) + BSS
 				-- Transition on every managed iface network-wide to
 				-- function at all -- confirmed via the OpenWrt wiki's
 				-- usteer setup guide. This overrides each WLAN's own
 				-- bss_transition/ieee80211k value while device-wide Band
 				-- Steering is on, since usteer can't be scoped to a
-				-- single SSID.
+				-- single SSID. Roaming Assistant needs the same: usteer
+				-- running on every iface for its cross-AP view, and
+				-- bss_transition for hostapd's bss_transition_request.
 				extra.ieee80211k          = "1"
 				extra.bss_transition      = "1"
 				extra.rrm_neighbor_report = "1"
@@ -1299,6 +1302,13 @@ function M.apply_config(resp, cfg, opts)
 				-- -mini/-basic wpad variants leave out. Written explicitly on
 				-- and off, mirroring bss_transition/mcast_enhance.
 				extra.proxy_arp = vap.proxy_arp and "1" or "0"
+			end
+			if vap.roam_assist_enabled then
+				-- "Roaming Assistant" threshold in dBm, read back by
+				-- get_vap_table for openuf/roamassist.lua. Absent means off:
+				-- wlan_clear drops the whole section before every rebuild,
+				-- so switching it off in the controller leaves nothing behind.
+				extra.openuf_roam_assist = tostring(vap.roam_assist_rssi or -75)
 			end
 			if vap.bcfilt_enabled ~= nil then
 				-- "Multicast and Broadcast Blocker". Recorded on the section so
@@ -1848,6 +1858,9 @@ function M.get_vap_table()
 			-- stays in its own UCI option for the VLAN/mobility-domain logic.)
 			id            = s.openuf_wlanconf_id,
 			wlanconf_id   = s.openuf_wlanconf_id,
+			-- Internal, never serialized: build_json consumes it for
+			-- Roaming Assistant and removes it.
+			roam_assist_rssi = tonumber(s.openuf_roam_assist),
 		}
 	end)
 	return vaps

@@ -981,6 +981,59 @@ return {
 		end
 	},
 	{
+		name = "inform json: Roaming Assistant gets one observation per station of its vap, and the threshold never leaks",
+		fn = function()
+			inject_sysinfo(true)  -- aa:bb:cc:dd:ee:ff at -62 dBm (3600 s), 11:22:33:44:55:66 at -75 dBm (42 s)
+			inject_ucihelper()
+			local base = inform._ucihelper.get_vap_table
+			inform._ucihelper.get_vap_table = function()
+				local v = base()
+				v[1].roam_assist_rssi = -70
+				return v
+			end
+			local seen, seen_now, seen_opts
+			local orig = inform._roamassist
+			inform._roamassist = {tick = function(o, now, opts) seen, seen_now, seen_opts = o, now, opts end}
+			local st = {
+				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+				ip = "192.168.1.100", hostname = "testap",
+			}
+			local d = cjson.decode(inform.build_json(st, {config = {roam_assist_diff_db = 6}}, ufhw))
+			inform._roamassist = orig
+			assert_eq(#seen, 2, "both stations observed")
+			local by_mac = {}
+			for _, o in ipairs(seen) do by_mac[o.mac] = o end
+			local o = by_mac["11:22:33:44:55:66"]
+			assert_eq(o.ifname, "wlan0", "live ifname")
+			assert_eq(o.ssid, "test", "vap essid")
+			assert_eq(o.signal, -75, "signal")
+			assert_eq(o.connected_sec, 42, "connected time")
+			assert_eq(o.threshold, -70, "the vap's threshold")
+			assert_true(type(seen_now) == "number", "a clock")
+			assert_eq(seen_opts.diff_db, 6, "conf override passed through")
+			assert_nil(d.vap_table[1].roam_assist_rssi, "internal threshold stripped from the payload")
+		end
+	},
+	{
+		name = "inform json: no Roaming Assistant pass when no vap has it on",
+		fn = function()
+			inject_sysinfo(true)
+			inject_ucihelper()
+			local called = false
+			local orig = inform._roamassist
+			inform._roamassist = {tick = function() called = true end}
+			local st = {
+				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+				ip = "192.168.1.100", hostname = "testap",
+			}
+			inform.build_json(st, nil, ufhw)
+			inform._roamassist = orig
+			assert_false(called, "tick not called")
+		end
+	},
+	{
 		name = "inform json: no stations kicked when the radio's minrssi is disabled",
 		fn = function()
 			inject_sysinfo(true)
@@ -1465,17 +1518,18 @@ return {
 		end
 	},
 	{
-		name = "inform json: wifi_caps2 sets the advertise-device-name-in-beacon bit (0x40)",
+		name = "inform json: wifi_caps2 claims exactly advertise-name (0x40) and assisted roaming (0x20)",
 		fn = function()
 			-- Confirmed via decompiling the controller: Device.
 			-- supportAdvertisingDeviceNameInBeacon() is hasWifiCapability2(64)
 			-- -- a SEPARATE bitmask from fw_caps/wifi_caps -- and gates whether
 			-- wireless.<n>.advertise_ap_name is ever pushed to system_cfg at
-			-- all for "Show Access Point Name in Beacon". Only this bit is
-			-- claimed (see PROTOCOL-VALIDATION.md for the other wifi_caps2
-			-- bits this device does not implement/claim).
+			-- all for "Show Access Point Name in Beacon". supportsAssistedRoaming()
+			-- is hasWifiCapability2(32) and gates wireless.<n>.btm_disassoc
+			-- (Roaming Assistant). No other bit is claimed (see
+			-- PROTOCOL-VALIDATION.md for the ones this device does not implement).
 			local d = build()
-			assert_eq(d.wifi_caps2, 0x40, "wifi_caps2 bit 0x40 set")
+			assert_eq(d.wifi_caps2, 0x60, "wifi_caps2 is exactly 0x40|0x20")
 		end
 	},
 	{

@@ -32,7 +32,7 @@ the device has.
 | `tc-tiny` | `tc` — WiFi Speed Limit (`openuf/shaper.lua`). Busybox has no `tc`; without it the limit is recorded in UCI and never enforced |
 | `kmod-sched-act-police` | The **upload** half of WiFi Speed Limit only. `police` is a tc *action*, a separate module from the ingress qdisc and absent from a stock filogic image. Without it the download cap applies and the upload cap does not — openUF logs which interface `tc` rejected and names this package rather than reporting the whole limit as applied |
 | `coreutils-stat` | `stat` — only if your build has no `stat` applet (some do not). `inform.lua` uses `stat -c %Y` to notice an out-of-process `state.json` write, i.e. an SSH `set-adopt` or a manual `reset-inform`; without it those are ignored until restart. Enabling busybox's own `stat` applet is smaller |
-| `usteer` | Band Steering (Behavior Controls) — ubus-based client-steering daemon, driven by `openuf/usteer.lua` |
+| `usteer` | Band Steering (Behavior Controls) — ubus-based client-steering daemon, driven by `openuf/usteer.lua`. Roaming Assistant needs it too, for its view of which AP hears a client how loudly |
 | `wpad-wolfssl` (or `wpad-openssl`, `wpad-mbedtls`, `wpad`) | Full hostapd build with 802.11k/v support — required for BSS Transition and Band Steering. Any of the full builds will do; `wpad-basic-*` lacks `bss_transition` entirely and errors with "unknown configuration item 'bss_transition'" |
 
 `install.sh install` installs all of the above automatically when missing, so a
@@ -467,6 +467,7 @@ Settings carried through from the controller:
 | Fast Roaming (802.11r) | `ieee80211r`. The controller carries **two** toggles — `ft.status` for the WLAN and `wpa3.ft.status` for the SAE akm alone (SAE pushes only). OpenWrt has one switch feeding hostapd's `key_mgmt`, and on `sae-mixed` it yields FT-PSK *and* FT-SAE together, so FT is enabled if **either** asks for it and a disagreement is logged |
 | BSS Transition (802.11v) | `bss_transition` — **needs a full `wpad` build** |
 | Band Steering | `usteer` config, not a hostapd option |
+| Roaming Assistant (per WLAN, 5 GHz) | `openuf_roam_assist=<dBm>` on the 5 GHz section (openUF's own marker, absent when off); enforced by openUF over hostapd's ubus, not by a hostapd option — see below |
 | Auto/Custom DTIM Period | `dtim_period` |
 | Multicast Enhancement | `multicast_to_unicast` |
 | Minimum Data Rate | per-**radio** `basic_rate` / `supported_rates` / `legacy_rates` / `beacon_rate` |
@@ -811,6 +812,30 @@ per-BSS `roam_events` counters do not increment for BTM-driven band steers, so t
 not a useful health check. A successful steer looks like
 `BSS-TM-RESP <sta> status_code=0 target_bssid=<the 5 GHz BSSID>` in `logread`.
 
+**Roaming Assistant** (Settings → WiFi → *WLAN* → Advanced, 5 GHz) moves a weak client to
+an AP that hears it clearly better. It does nothing to a client that has no better AP to go
+to. It is per WLAN and runs in openUF (`openuf/roamassist.lua`), not in usteer, because usteer's own
+roam trigger can only be switched on for the whole device. For each client on a WLAN with it on:
+
+1. Its signal has been below the WLAN's threshold for 30 s, it has been associated for at
+   least 60 s, and it was not moved in the last 120 s.
+2. Another openUF AP on the same SSID and band hears it at or above the threshold **and** at
+   least `roam_assist_diff_db` (default 8) dB louder. usteer shares those readings
+   between APs. If no AP qualifies, nothing is sent, and the client is looked at again after 30 s.
+3. openUF sends an 802.11v BSS Transition request naming that AP. A client still associated
+   10 s later is disassociated, with a 30 s ban on the weak BSS only, so it cannot bounce straight
+   back. That is also how a client without 802.11v gets moved.
+
+It needs `usteer` running on every AP (openUF starts it whenever Roaming Assistant or Band
+Steering is on) and a full `wpad` build. Each action is logged:
+`logread | grep roamassist`. usteer's readings are up to two minutes old, so a client that has
+just walked away can be pointed at an AP that is no longer better. The disassociation then
+lets it pick for itself, which is where a UniFi AP would leave it too.
+
+| Setting | Meaning |
+|---|---|
+| `roam_assist_diff_db` | How much louder (dB) the other AP must hear the client. Default 8 |
+
 The **Environment** tab (Insights → AirView) is fed from `iw dev <ifname> scan dump`, the
 kernel's passive BSS cache. That cache is filled from beacons the radio overhears **on the
 channel it is already serving**, so on its own the tab lists near-channel neighbours and
@@ -1115,6 +1140,7 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 | Controller rejects device ("firmware incompatible") | Adjust `fw.ver` in `ufmodel/u6iw.lua` |
 | hostapd fails: "unknown configuration item 'bss_transition'" | A `wpad-basic-*` build is installed — replace it with `apk add wpad-wolfssl` |
 | Band Steering has no effect | `usteer` not installed or not running — `/etc/init.d/usteer status` |
+| Roaming Assistant never moves a weak client | Expected when no other AP hears it clearly better. Check `ubus call usteer get_client_info '{"address":"<mac>"}'`: another AP (`<ip>#hostapd.*`) on the same SSID and band needs a signal at or above the threshold and at least `roam_assist_diff_db` stronger. No remote entries at all means the usteer instances are not peering — both APs need usteer running on the same L2 network. `logread \| grep roamassist` shows every action |
 | Locate/LED does nothing | `dev.conf.led` is `nil` in your modelmap — set it to a path from `ls /sys/class/leds` |
 | JSON decode error in controller logs | AES key mismatch — try `syswrapper.sh reset-inform` |
 | `inform: parse error: ... inflate: truncated stream` | A compressed controller response arrived incomplete. One heartbeat is lost and the next retries, so an occasional line is harmless; a steady stream of them points at the link to the controller (an MTU or proxy problem), not at the device |

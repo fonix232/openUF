@@ -70,6 +70,11 @@ config = {
 	-- is to keep the Environment tab honest, not to poll.
 	rrm_request_interval = 600,
 
+	-- Roaming Assistant (controller: WLAN -> Advanced, 5 GHz): how much louder,
+	-- in dB, another AP must hear a weak client before openUF moves it there.
+	-- The threshold itself comes from the controller.
+	roam_assist_diff_db = 8,
+
 	-- L2 discovery broadcasts (announce.lua, UDP port 10001). On by default:
 	-- it is how the device shows up in UniFi Discover without any set-inform.
 	--

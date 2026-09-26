@@ -1842,6 +1842,68 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: apply_config forces 802.11k/BSS-Transition on for Roaming Assistant alone",
+		fn = function()
+			with_ucihelper(function(db)
+				local resp = {
+					radio_table = {},
+					vap_table = {
+						{ssid = "corp", radio = "radio0", security = "wpa2",
+						 x_passphrase = "hunter22", bss_transition = false},
+					},
+				}
+				ucihelper.apply_config(resp, nil, {roam_assist_active = true})
+				local s = db.wireless.openuf_radio0_corp
+				assert_eq(s.bss_transition, "1", "bss_transition forced on")
+				assert_eq(s.ieee80211k, "1", "802.11k forced on")
+				assert_eq(s.rrm_neighbor_report, "1", "neighbor reports forced on")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: Roaming Assistant's threshold is stamped on its vap only, and read back",
+		fn = function()
+			with_ucihelper(function(db)
+				seed_radios({"radio0", "radio1"})
+				local resp = {
+					radio_table = {},
+					vap_table = {
+						{ssid = "corp", radio = "radio1", security = "wpa2",
+						 x_passphrase = "hunter22", roam_assist_enabled = true,
+						 roam_assist_rssi = -72},
+						{ssid = "corp", radio = "radio0", security = "wpa2",
+						 x_passphrase = "hunter22", roam_assist_enabled = false},
+					},
+				}
+				ucihelper.apply_config(resp, nil, {roam_assist_active = true})
+				assert_eq(db.wireless.openuf_radio1_corp.openuf_roam_assist, "-72", "stamped")
+				assert_nil(db.wireless.openuf_radio0_corp.openuf_roam_assist, "absent where off")
+				local by_radio = {}
+				for _, v in ipairs(ucihelper.get_vap_table()) do by_radio[v.radio_name] = v end
+				assert_eq(by_radio.radio1.roam_assist_rssi, -72, "read back as a number")
+				assert_nil(by_radio.radio0.roam_assist_rssi, "nil where off")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: switching Roaming Assistant off removes the stamp",
+		fn = function()
+			with_ucihelper(function(db)
+				local function push(on)
+					ucihelper.apply_config({radio_table = {}, vap_table = {
+						{ssid = "corp", radio = "radio1", security = "wpa2",
+						 x_passphrase = "hunter22", roam_assist_enabled = on,
+						 roam_assist_rssi = on and -75 or nil},
+					}}, nil, {})
+				end
+				push(true)
+				assert_eq(db.wireless.openuf_radio1_corp.openuf_roam_assist, "-75", "on")
+				push(false)
+				assert_nil(db.wireless.openuf_radio1_corp.openuf_roam_assist, "gone once off")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: apply_config respects per-vap bss_transition when band steering is off",
 		fn = function()
 			with_ucihelper(function(db)

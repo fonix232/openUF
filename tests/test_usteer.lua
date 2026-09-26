@@ -115,6 +115,56 @@ return {
 		end
 	},
 	{
+		name = "usteer: Roaming Assistant alone runs the daemon with band steering neutralised",
+		fn = function()
+			with_usteer(function(db, cmds)
+				usteer.set_enabled(false, nil, true)
+				local s = db.usteer["local"]
+				assert_eq(s.band_steering_threshold, "0", "no band steering")
+				assert_eq(s.openuf_active, "1", "stamped as running")
+				assert_true(cmds_contain(cmds, "usteer restart"), "daemon started")
+				assert_false(cmds_contain(cmds, "usteer stop"), "not stopped")
+				-- usteer's own device-wide roam trigger stays off: the decision
+				-- is roamassist.lua's, per WLAN.
+				assert_nil(s.roam_trigger_snr, "no roam_trigger_snr")
+				assert_nil(s.signal_diff_threshold, "no signal_diff_threshold")
+			end)
+		end
+	},
+	{
+		name = "usteer: turning Roaming Assistant off (band steering off) stops the daemon",
+		fn = function()
+			-- The case the old threshold-only guard would have swallowed: the
+			-- threshold is "0" before and after, only the running state moves.
+			with_usteer(function(db, cmds)
+				usteer.set_enabled(false, nil, true)
+				local n = #cmds
+				usteer.set_enabled(false, nil, false)
+				assert_true(#cmds > n, "acted on the transition")
+				assert_true(cmds_contain(cmds, "usteer stop"), "stopped")
+				assert_eq(db.usteer["local"].openuf_active, "0", "stamped as stopped")
+				local m = #cmds
+				usteer.set_enabled(false, nil, false)
+				assert_eq(#cmds, m, "steady off is a no-op")
+			end)
+		end
+	},
+	{
+		name = "usteer: a device configured before the openuf_active stamp is rewritten once",
+		fn = function()
+			with_usteer(function(db, cmds, commits)
+				local cursor = usteer._uci.cursor()
+				cursor:set("usteer", "local", "usteer")
+				cursor:set("usteer", "local", "network", "lan")
+				cursor:set("usteer", "local", "band_steering_threshold", "5")
+				usteer.set_enabled(true, nil)
+				assert_eq(commits.usteer, 1, "one migration write")
+				usteer.set_enabled(true, nil)
+				assert_eq(commits.usteer, 1, "then steady")
+			end)
+		end
+	},
+	{
 		name = "usteer: set_enabled uses cfg.net.lan_name when present",
 		fn = function()
 			with_usteer(function(db, cmds)

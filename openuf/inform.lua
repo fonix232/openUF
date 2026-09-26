@@ -60,6 +60,7 @@ local firewall  = _require_sibling("firewall")
 local usteer    = _require_sibling("usteer")
 local switchvlan = _require_sibling("switchvlan")
 local rrmscan   = _require_sibling("rrmscan")
+local roamassist = _require_sibling("roamassist")
 local sysconf   = _require_sibling("sysconf")
 local l2guard   = _require_sibling("l2guard")
 
@@ -81,6 +82,7 @@ M._firewall  = firewall
 M._usteer    = usteer
 M._switchvlan = switchvlan
 M._rrmscan    = rrmscan
+M._roamassist = roamassist
 M._sysconf    = sysconf
 M._l2guard    = l2guard
 
@@ -1063,6 +1065,9 @@ function M.build_json(st, cfg, ufhw)
 			radio_live_by_name[radio.name] = radio
 		end
 		local now = M._time()
+		-- Roaming Assistant: one observation per station on a vap that has
+		-- it on, decided on after the loop (see openuf/roamassist.lua).
+		local roam_obs = {}
 		for _, vap in ipairs(vap_table) do
 			local live = radio_live_by_name[vap.radio_name]
 			if live then
@@ -1144,6 +1149,12 @@ function M.build_json(st, cfg, ufhw)
 				local minrssi_threshold = minrssi_threshold_by_radio[vap.radio_name]
 				if minrssi_threshold and sta.signal and sta.signal < minrssi_threshold then
 					pcall(ufuci.kick_station, ifname, sta.mac)
+				elseif vap.roam_assist_rssi and sta.signal then
+					roam_obs[#roam_obs + 1] = {
+						ifname = ifname, ssid = vap.essid, mac = sta.mac,
+						signal = sta.signal, connected_sec = sta.connected_sec,
+						threshold = vap.roam_assist_rssi,
+					}
 				end
 				-- throughput: delta-sampled byte rate (bytes/sec), same
 				-- approach as M._sysinfo.cpu_percent()'s /proc/stat delta
@@ -1357,6 +1368,11 @@ function M.build_json(st, cfg, ufhw)
 				vap.cu_self_tx = cu.cu_self_tx
 				vap.cu_interf  = cu.cu_interf
 			end
+			vap.roam_assist_rssi = nil  -- internal, consumed above
+		end
+		if M._roamassist and #roam_obs > 0 then
+			pcall(M._roamassist.tick, roam_obs, now,
+				{diff_db = cfg and cfg.config and cfg.config.roam_assist_diff_db})
 		end
 		-- Forget stations not seen for ten minutes. Each entry is tiny, but
 		-- the table is keyed by CLIENT MAC and was never emptied, so on a
@@ -1701,12 +1717,17 @@ function M.build_json(st, cfg, ufhw)
 		-- Beacon" WLAN toggle is silently dropped, which is exactly what a
 		-- live capture showed (toggling it produced zero system_cfg/mgmt_cfg
 		-- diff, and the controller didn't even bother re-pushing config on
-		-- the next change) before this bit was added. Only this one bit is
-		-- claimed -- wifi_caps2 also gates several other real-hardware-only
-		-- features (Mesh MLO parent/child, assisted roaming, etc., see
-		-- PROTOCOL-VALIDATION.md) that openUF does not implement and must
-		-- not claim.
-		wifi_caps2       = 0x40,
+		-- the next change) before this bit was added.
+		--
+		-- Bit 0x20 (32): Device.supportsAssistedRoaming(). Without it the
+		-- controller never emits a WLAN's "Roaming Assistant"
+		-- (wireless.<n>.btm_disassoc.*), which openuf/roamassist.lua
+		-- implements. Decompiled from controller 10.6.101.
+		--
+		-- No other bit is claimed: wifi_caps2 also gates real-hardware-only
+		-- features (Mesh MLO parent/child and others, see
+		-- PROTOCOL-VALIDATION.md) that openUF does not implement.
+		wifi_caps2       = 0x60,
 		-- Device-level (not per-radio -- see radio_table_stats above)
 		-- Device-level Experience: the mean of every connected client's own
 		-- satisfaction, across all VAPs. Same reasoning as the per-VAP copy
@@ -2310,6 +2331,17 @@ function M._parse_wifi_system_cfg(sys_raw)
 				-- derivation). "enabled"/"disabled" string, same
 				-- convention as bss_transition/no2ghz_oui.
 				advertise_ap_name     = _wire_bool(w.advertise_ap_name),
+				-- wireless.<n>.btm_disassoc.status/.threshold: the WLAN's
+				-- "Roaming Assistant". Decompiled from controller 10.6.101
+				-- (com.ubnt.service.config.ubntconf, the class holding the
+				-- -75/-88 constants): emitted only for 5GHz/6GHz vaps, only
+				-- when wifi_caps2 bit 0x20 (supportsAssistedRoaming) is
+				-- claimed, and only while the per-band toggle is on --
+				-- status=enabled plus threshold=<dBm>, default -75 (na) /
+				-- -88 (6e). Absent means off; there is no status=disabled.
+				-- Enforced by openuf/roamassist.lua, not by UCI.
+				roam_assist_enabled   = _wire_bool(w["btm_disassoc.status"]) or false,
+				roam_assist_rssi      = tonumber(w["btm_disassoc.threshold"]),
 				-- aaa.<n>.sae.anti_clogging / aaa.<n>.sae.sync: "SAE
 				-- Anti-clogging"/"SAE Sync Time" (WPA3-SAE tuning).
 				-- CONFIRMED via decompiling the controller's WLAN-config-
@@ -2902,14 +2934,21 @@ function M.handle_response(json_str, st, cfg)
 					-- device-wide config, so band steering is treated as
 					-- active for the whole device whenever ANY WLAN has it
 					-- enabled.
-					local steering_active = false
+					--
+					-- Roaming Assistant (wireless.<n>.btm_disassoc) is
+					-- decided per WLAN by openuf/roamassist.lua, but it reads
+					-- usteer's cross-AP view and sends 802.11v requests, so
+					-- it needs the daemon and 802.11k/v the same way.
+					local steering_active, roam_assist_active = false, false
 					for _, vap in ipairs(vap_table) do
 						if vap.no2ghz_oui then steering_active = true end
+						if vap.roam_assist_enabled then roam_assist_active = true end
 					end
-					M._usteer.set_enabled(steering_active, cfg)
+					M._usteer.set_enabled(steering_active, cfg, roam_assist_active)
 					pcall(ufuci.apply_config,
 						{radio_table = radio_table, vap_table = vap_table, network_table = {}},
 						cfg, {band_steering_active = steering_active,
+							roam_assist_active = roam_assist_active,
 							device_name = device_name, keep_vlans = port_vlans,
 							peer_ie = M._sysinfo.peer_ie_hex(st and st.mac)})
 				end

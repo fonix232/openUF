@@ -680,6 +680,48 @@ return {
 		end
 	},
 	{
+		name = "inform packet: _parse_wifi_system_cfg reads Roaming Assistant (btm_disassoc) per vap",
+		fn = function()
+			-- Wire format from the decompiled 10.6.101 generator: status is the
+			-- builder's enabled/disabled boolean, threshold a plain dBm string,
+			-- only on 5/6 GHz vaps; absent means off.
+			local sys_cfg = "aaa.1.ssid=net\naaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=WPA-PSK\n"
+				.. "wireless.1.ssid=net\nwireless.1.parent=radio0\n"
+				.. "aaa.2.ssid=net\naaa.2.wpa=2\naaa.2.wpa.key.1.mgmt=WPA-PSK\n"
+				.. "wireless.2.ssid=net\nwireless.2.parent=radio1\n"
+				.. "wireless.2.btm_disassoc.status=enabled\nwireless.2.btm_disassoc.threshold=-72\n"
+			local _, vap_table = inform._parse_wifi_system_cfg(sys_cfg)
+			assert_false(vap_table[1].roam_assist_enabled, "absent -> off")
+			assert_nil(vap_table[1].roam_assist_rssi, "no threshold where off")
+			assert_true(vap_table[2].roam_assist_enabled, "enabled")
+			assert_eq(vap_table[2].roam_assist_rssi, -72, "threshold in dBm")
+		end
+	},
+	{
+		name = "inform packet: handle_response runs usteer and forces 802.11k/v for Roaming Assistant",
+		fn = function()
+			local st = sample_state()
+			local args
+			local orig = inform._usteer.set_enabled
+			inform._usteer.set_enabled = function(...) args = {...} end
+			local applied_opts
+			inform._ucihelper = {
+				apply_config = function(_, _, opts) applied_opts = opts end,
+			}
+			local sys_cfg = "aaa.1.ssid=openuf-test\naaa.1.wpa=2\n"
+				.. "wireless.1.ssid=openuf-test\nwireless.1.parent=radio1\n"
+				.. "wireless.1.btm_disassoc.status=enabled\nwireless.1.btm_disassoc.threshold=-75\n"
+			local resp = ('{"_type":"setparam","system_cfg":"%s"}'):format(sys_cfg:gsub("\n", "\\n"))
+			inform.handle_response(resp, st, {net = {lan_cpueth = "eth0"}})
+			inform._usteer.set_enabled = orig
+			inform._ucihelper = nil
+			assert_false(args[1], "band steering itself stays off")
+			assert_true(args[3], "usteer told Roaming Assistant is on")
+			assert_true(applied_opts.roam_assist_active, "roam_assist_active threaded to apply_config")
+			assert_false(applied_opts.band_steering_active, "band_steering_active untouched")
+		end
+	},
+	{
 		name = "inform packet: _parse_wifi_system_cfg reads per-radio and per-VAP disable",
 		fn = function()
 			-- CONFIRMED live 2026-07-19: Radios -> Transmit Power -> Disabled

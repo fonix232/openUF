@@ -46,32 +46,50 @@ local function get_uci()
 	return require("uci")
 end
 
--- Enable or disable band steering.
--- enabled: boolean
--- cfg:     device configuration (from conf.lua); cfg.net.lan_name selects the
---          usteer network to bind to, defaulting to "lan" when absent.
-function M.set_enabled(enabled, cfg)
+-- Enable or disable band steering, and keep the daemon running for Roaming
+-- Assistant.
+-- enabled:     boolean, Band Steering
+-- cfg:         device configuration (from conf.lua); cfg.net.lan_name selects the
+--              usteer network to bind to, defaulting to "lan" when absent.
+-- roam_assist: boolean, Roaming Assistant (wireless.<n>.btm_disassoc). The
+--              steering decision itself is openuf/roamassist.lua's, per WLAN;
+--              it needs usteer only for its cross-AP table of which AP hears
+--              which client how loudly. So Roaming Assistant alone runs the
+--              daemon with band steering neutralised (threshold 0), and
+--              usteer's own device-wide roam trigger (roam_trigger_snr,
+--              signal_diff_threshold) is never set: it cannot be scoped to a
+--              WLAN or a band, and its only scoping knob, ssid_list, switches
+--              every usteer function off for the other SSIDs.
+function M.set_enabled(enabled, cfg, roam_assist)
 	local uci = get_uci()
 	local cursor = uci.cursor()
 	local network = (cfg and cfg.net and cfg.net.lan_name) or "lan"
 	local desired = enabled and tostring(M.USTEER_DEFAULTS.band_steering_threshold) or "0"
+	local run = (enabled or roam_assist) and "1" or "0"
 
 	-- No-op discipline (same hazard class as switchvlan's reload guard):
 	-- this runs on EVERY WiFi setparam, and unconditionally committing +
 	-- restarting bounced the steering daemon -- dropping its learned station
 	-- table -- on every steady-state inform. Skip when UCI already matches;
 	-- the first-ever call (get -> nil) still writes.
+	--
+	-- openuf_active records whether openUF last ran or stopped the daemon.
+	-- The threshold alone can't: it is "0" both when everything is off and
+	-- when only Roaming Assistant is on. usteer's init script reads a fixed
+	-- list of option names, so this stamp never reaches the daemon.
 	if cursor:get("usteer", "local", "band_steering_threshold") == desired
-		and cursor:get("usteer", "local", "network") == network then
+		and cursor:get("usteer", "local", "network") == network
+		and cursor:get("usteer", "local", "openuf_active") == run then
 		return true
 	end
 
 	cursor:set("usteer", "local", "usteer")
 	cursor:set("usteer", "local", "network", network)
 	cursor:set("usteer", "local", "band_steering_threshold", desired)
+	cursor:set("usteer", "local", "openuf_active", run)
 	cursor:commit("usteer")
 
-	if enabled then
+	if run == "1" then
 		M._run_cmd("/etc/init.d/usteer enable 2>/dev/null")
 		M._run_cmd("/etc/init.d/usteer restart 2>/dev/null")
 	else

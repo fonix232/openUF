@@ -11,7 +11,7 @@ decompiling the controller's own Java bytecode and React bundles.
 **Where this document and the third-party references disagree, this document wins.**
 In particular, go-unifi models the controller's *admin REST API*, which is a different
 surface from the inform wire protocol — several fields that exist there
-(`bandsteering_mode`, `dtim_mode`, `roamingAssistant*`) have no counterpart on the wire.
+(`bandsteering_mode`, `dtim_mode`) have no counterpart on the wire.
 
 This is a **reference for the confirmed current state**, not a lab journal. Superseded
 hypotheses and the investigation trails that produced these facts have been removed;
@@ -697,6 +697,7 @@ openUF maps these to hostapd's `sae_anti_clogging_threshold` / `sae_sync`
 | `hide_ssid` | **Hide WiFi Name.** `true`\|`false` — note the vocabulary, not the `enabled`/`disabled` most keys here use. Always present, emitted on both band entries, and duplicated verbatim as `aaa.<n>.hide_ssid`. → OpenWrt `hidden` (hostapd `ignore_broadcast_ssid`). |
 | `mcastrate` | Multicast rate. Observed only ever as `auto` — no WLAN-level control in 10.4.57's UI moves it, and OpenWrt's `mcast_rate` is adhoc/mesh-only anyway, so openUF does not map it. |
 | `advertise_ap_name` | "Show Access Point Name in Beacon". **Only emitted when the device declares `wifi_caps2` bit `0x40`** — see [capability bitmasks](#capability-bitmasks). |
+| `btm_disassoc.status`, `btm_disassoc.threshold` | **Roaming Assistant.** 5/6 GHz vaps only, and only when the device declares `wifi_caps2` bit `0x20` — see [below](#wirelessnbtm_disassoc--roaming-assistant). |
 | `iot`, `qbssload` | **"Force WiFi 4 Mode"** (IoT Optimization; REST field `enhanced_iot`). Absent entirely when off; appear together as `iot=enabled` + `qbssload=disabled` on the WLAN's 2.4 GHz entry when on. The parent radio is *not* touched — `radio.<n>.ieee_mode` keeps the site's configured width — so this is a per-BSS flag only. `qbssload` is its one distinct on-air effect (suppress the QBSS Load IE); the rest of the mode arrives as ordinary keys: the 5 GHz vap is dropped outright, security pinned to WPA2, and `bss_transition`/`proxy_arp`/`no2ghz_oui`/PMF/`advertise_ap_name` all forced off. |
 
 ### `radio.<n>.*` — per-radio config
@@ -724,8 +725,8 @@ applied channel width at all.
 
 Indexed the same as `radio.<n>`, **not** tied to any SSID. This is a device/radio-level
 setting (Devices → [AP] → Radios), not a WLAN one — distinct from the WLAN Advanced panel's
-"Roaming Assistant", which is a different feature with its own REST fields
-(`roamingAssistantNaEnabled`/`Rssi`) that never appear on the wire.
+"Roaming Assistant", a different feature with its own wire keys,
+[`wireless.<n>.btm_disassoc.*`](#wirelessnbtm_disassoc--roaming-assistant).
 
 ```
 stamgr.1.status=true
@@ -748,6 +749,47 @@ format): Minimum RSSI is a **roaming aid, not a block**. The AP sends a single d
 a below-threshold client; there is no persistent drop rule and the client may reassociate
 immediately, even to the same AP. This is materially different from `block-sta`, so it has its
 own helper, `ucihelper.kick_station()`, rather than reusing `firewall.deauth()`.
+
+### `wireless.<n>.btm_disassoc.*` — Roaming Assistant
+
+A per-WLAN, per-band setting (Settings → WiFi → *WLAN* → Advanced; REST
+`roaming_assistant_na_enabled`/`_na_rssi` and `_6e_enabled`/`_6e_rssi` on `wlanconf`).
+Confirmed live 2026-09-26 against the lab's 10.4.57, by setting
+`roaming_assistant_na_enabled=true, roaming_assistant_na_rssi=-72` over REST and diffing
+`system_cfg`. Exactly two keys appeared, only on the WLAN's 5 GHz entry:
+
+```
+wireless.2.btm_disassoc.status=enabled
+wireless.2.btm_disassoc.threshold=-72
+```
+
+Switching it off removed both again. There is no `status=disabled`: absence is off.
+
+- **The threshold is plain dBm**, unlike `stamgr.<n>.minrssi.rssi`.
+- **The generator** is `com.ubnt.service.config.ubntconf.cZldsW` in 10.6.101, the class
+  holding the defaults `-75` (5 GHz) and `-88` (6 GHz). It emits only when all of these hold:
+  `Device.supportsAssistedRoaming()` (= `hasWifiCapability2(32)`, **`wifi_caps2` bit `0x20`**),
+  the vap's radio is `na` or `6e`, the WLAN is neither WDS nor an Element WLAN, and that band's
+  toggle is on. `status` goes through the builder's boolean helper (`enabled`/`disabled`).
+- **Why earlier captures never showed it:** openUF claimed only `0x40`. An earlier version of
+  this document concluded that the REST fields "never appear on the wire". That was the missing
+  capability bit, not the protocol.
+- **What a UniFi AP does with it**, from the key name and the controller's
+  `MOVED_DUE_TO_ROAMING_ASSISTANT` event: a BSS Transition Management request, then a
+  disassociation. openUF implements that in `openuf/roamassist.lua`, but only when another
+  AP on the same SSID and band hears the client at or above the threshold and at least
+  `roam_assist_diff_db` (default 8) dB better. A client with no better AP is left alone.
+- **usteer's own roam trigger is not used.** It is device-wide, and its only scoping knob,
+  `ssid_list`, switches every usteer function off for the other SSIDs, band steering included
+  (usteer `local_node.c`, 2025.10.04). openUF reads usteer's cross-AP table
+  (`get_client_info`) and makes the per-vap decision itself. Every entry in that table expires
+  `local_sta_timeout` (120 s) after the client was last heard, locally or remotely (usteer
+  `sta.c`, `remote.c`), so a reading is at most about 2 minutes old.
+- **The hostapd calls** are `bss_transition_request` with the target's neighbor-report hex
+  (usteer's `rrm_nr[2]`), then, if the client is still there 10 s later, `del_client` with
+  reason 12 and a 30 s `ban_time` on the source BSS only. In OpenWrt 25.12's hostapd `ubus.c`,
+  `bss_transition_request` has no 802.11v capability check: the frame goes out regardless and a
+  non-11v client simply ignores it.
 
 ### `macacl.*` — MAC Address Filter
 
@@ -1374,7 +1416,7 @@ Everything openUF sends. Names were audited against the controller's own Device 
 | `mem_total`, **`mem_used`** | Bytes. `mem_used = total − free`; the schema has `mem_used`, not `mem_free`. |
 | **`system-stats`** | Hyphenated key, `{cpu, mem, uptime}` — all three **strings**, cpu/mem as percentages. Not `sys_stats`, and not loadavgs. `cpu` is `0` on the very first inform (delta-sampling `/proc/stat` has no prior sample). |
 | **`fw_caps`** | `0x110` — see [capability bitmasks](#capability-bitmasks) |
-| **`wifi_caps2`** | `0x40` — see [capability bitmasks](#capability-bitmasks) |
+| **`wifi_caps2`** | `0x60` — see [capability bitmasks](#capability-bitmasks) |
 | `spectrum_scanning`, `spectrum_scan_timestamp` | **Device-level**, not per-radio (the per-radio fields are `spectrum_table`/`spectrum_table_time`) |
 | `if_table[]` | `name`, `mac`, `rx_bytes`, `tx_bytes`, `rx_packets`, `tx_packets`, `rx_errors`, `tx_errors` |
 | `radio_table[]`, `radio_table_stats[]`, `vap_table[]`, `scan_radio_table[]`, `port_table[]`, `lldp_table[]` | See below |
@@ -1404,11 +1446,13 @@ by the controller's own startup log: `firmware[U6IW] new version (6.8.2.15592) i
 | `fw_caps` | `0x10` (16) | `Device.hasQCASwitch()` = `hasFirmwareCapability(16)` | The Ports view's projection of `port_table` into the device DTO doesn't happen. Wired-client *ingestion* is gated only on `isSwitch()` (a model-registry property), so clients still appear in the list — but the Ports view stays empty. |
 | `fw_caps` | `0x100` (256) | `Device.hasOWRTSwitch()` = `hasFirmwareCapability(256)` | Per-port VLAN assignment is rejected outright — see below. |
 | `wifi_caps2` | `0x40` (64) | `Device.supportAdvertisingDeviceNameInBeacon()` = `hasWifiCapability2(64)` | The controller never emits `wireless.<n>.advertise_ap_name` at all, and doesn't even re-push config on the toggle. |
+| `wifi_caps2` | `0x20` (32) | `Device.supportsAssistedRoaming()` = `hasWifiCapability2(32)` | The controller never emits a WLAN's Roaming Assistant (`wireless.<n>.btm_disassoc.*`). Confirmed live in the lab: set, the keys appear on the 5 GHz entry. |
 
 `wifi_caps2` is a **second, entirely separate** bitmask from `wifi_caps` (which gates
-`supportBandsteering()`/`supportZeroHandoff()` — openUF sets neither). Only bit `0x40` is
-claimed; the mask also gates Mesh MLO, assisted roaming, and quick/neighbour scan, which
-openUF does not implement and must not claim.
+`supportBandsteering()`/`supportZeroHandoff()` — openUF sets neither). Only bits `0x40` and
+`0x20` are claimed; the mask also gates Mesh MLO, quick/neighbour scan, roam topology stats,
+Green AP, ACS-DFS and the multicast suppressor, which openUF does not implement and must not
+claim.
 
 **The per-port VLAN validator** (`com.ubnt.ace.api.e.VVyiC`, reachable only once
 `hasQCASwitch()` is true):
@@ -1859,7 +1903,7 @@ them for measured values.
 | `spectrum_scanning` = `false` | Always false: scans are run synchronously inside the cmd handler, so the device is never "currently scanning" when a payload is built |
 | `lldp_table[].is_wired` = `true` | LLDP is inherently a wired-link protocol |
 | `model` / `platform` / `version` / `required_version` / `bootrom_version` | The emulated UniFi identity from `ufmodel/*.lua` — deliberately not the host hardware. This is the point of the project, not an accidental approximation |
-| `fw_caps` = `0x110`, `wifi_caps2` = `0x40` | Claimed capability bits, each derived from the controller's own bytecode and confirmed live — see [Capability bitmasks](#capability-bitmasks). openUF claims only bits whose features it actually implements |
+| `fw_caps` = `0x110`, `wifi_caps2` = `0x60` | Claimed capability bits, each derived from the controller's own bytecode and confirmed live — see [Capability bitmasks](#capability-bitmasks). openUF claims only bits whose features it actually implements |
 | `ucihelper` `wps_device_name` / `ap_setup_locked` | Standards-based rather than Ubiquiti-derived — see the beacon row in the [feature matrix](#feature-matrix) |
 | ~~`usteer.lua`'s `USTEER_DEFAULTS`~~ | ✅ **Resolved 2026-09-10.** Verified against the installed package (usteer 2025.10.04) on the Archer C5. `band_steering_threshold` is a real option — it is in the init script's own list of keys fed to `ubus call usteer set_config`. The named `local` section is read too: the loader does `config_foreach uci_usteer usteer`, which visits every section of type `usteer`, named or anonymous. `network` is read from `uci get usteer.@usteer[-1].network`, the last section of that type — openUF's — so both writes are load-bearing and correctly named. |
 
@@ -2119,6 +2163,7 @@ through the real UI with the resulting wire payload captured or the effect verif
 | 37 | MAC Address Filter | top-level `macacl.<m>.*`, joined on `wireless.<n>.devname` | ✅ Confirmed live 2026-07-18 by enabling the control with one allow-listed MAC and diffing `system_cfg`: the whole `macacl` section appeared at once, keyed by devname (`ath0`/`ath2`) and numbered independently of `wireless.<n>`, so **the devname join is mandatory**. Two keys already on the wire were **excluded** by the same diff: `wireless.<n>.mac_acl.status`/`.policy` (sit at `enabled`/`deny` with the control off) and `aaa.<n>.radius.macacl.status` (the separate RADIUS MAC Authentication control). → OpenWrt `macfilter` + `maclist`, whose allow/deny vocabulary matches the controller's 1:1. Enforced by hostapd itself, so no openUF-side ruleset is involved. |
 | 38 | WiFi Speed Limit | top-level `qos.vap.<m>.*`, joined on `wireless.<n>.devname` | ✅ Wire format confirmed live 2026-07-18 by creating a speed-limit profile (33/17 Mbps) and assigning it to a WLAN. Values are **kbps**, and the discriminator is the presence of `maxspeed` — an unlimited vap still gets a block, carrying only `minspeed` set to its raw `devspeed`. The cap is a **per-VAP aggregate**, not per-client. Requires a profile to exist before the per-WLAN toggle does anything. ⚠️ Enforcement is openUF's own `tc` ruleset (`shaper.lua`), since no hostapd/OpenWrt option expresses a throughput cap: HTB on egress for downlink, ingress policing for uplink. Every generated command is verified against real tc (iproute2 6.9.0), but the on-air throughput is unverified (no real radios). |
 | 39 | Ports view Connection column on an **uplink** port | `port_table[]` with **no** `mac_table` field on `is_uplink` ports | ✅ Blank (or a retained stale value) is the CORRECT state, verified 2026-09-12. Reporting the one MAC on the other end of the cable is tempting — openUF knows it, since finding it is how the uplink socket is identified, and a real UniFi gateway visibly does it on its own uplink port — but it would invert the topology map: the controller files a known device seen alone on a port into this device's `downlink_table`, and the `isUplinkMac` guard against that is ANDed with `!is_uplink`, so it disables itself on exactly the port where it is needed. The gateway would hang beneath every AP that reported it. A real gateway escapes it only because the ISP's router is not an adopted device. Live proof of the correct shape: both APs' `downlink_table` empty, the gateway's holding both APs. The stale text persists because `last_connection` is never recomputed when a port sends no `mac_table` field (and only ever recomputed when a port reports exactly **one** MAC) — clear it with the Ports view's **Clear Last Seen Device**. |
+| 40 | Roaming Assistant | `wifi_caps2` bit `0x20` → `wireless.<n>.btm_disassoc.status`/`.threshold` | ⚠️ Wire format, capability gate and teardown confirmed live in the lab (10.4.57, 2026-09-26) and by decompiling 10.6.101. The consumer side (UCI stamp, forced 802.11k/v, usteer running with band steering neutralised) was confirmed against the lab's UCI mock. The steering itself (`roamassist.lua`: BTM request, disassociation with a ban, the no-better-AP rule) is unit-tested only until it has run on real radios. |
 
 ---
 
