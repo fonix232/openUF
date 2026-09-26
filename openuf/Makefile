@@ -131,7 +131,9 @@ define Package/openuf/postinst
 exit 0
 endef
 
-# Removal (not upgrade): the SSH adoption account goes with the package.
+# Removal (not upgrade): the SSH adoption account goes with the package, and
+# so does the controller's cron block (sysconf.lua), whose job calls the
+# syswrapper.sh the package takes away. Lines outside the markers stay.
 define Package/openuf/prerm
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
@@ -139,6 +141,10 @@ define Package/openuf/prerm
 if grep -q '^ubnt:[^:]*:[0-9]*:[0-9]*:openuf bootstrap adoption:' /etc/passwd 2>/dev/null; then
 	sed -i '/^ubnt:/d' /etc/passwd /etc/shadow
 	sed -i '/^openuf:/d' /etc/group
+fi
+if grep -q '^# openuf-cron-begin' /etc/crontabs/root 2>/dev/null; then
+	sed -i '/^# openuf-cron-begin/,/^# openuf-cron-end$$/d' /etc/crontabs/root
+	/etc/init.d/cron restart >/dev/null 2>&1
 fi
 exit 0
 endef

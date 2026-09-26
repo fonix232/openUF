@@ -68,6 +68,41 @@ return {
 		end
 	},
 	{
+		name = "package: removal takes sysconf's marked cron block out of root's crontab, and nothing else",
+		fn = function()
+			-- The markers live in sysconf.lua and in the prerm's sed; a drifted
+			-- one leaves a nightly job calling the syswrapper.sh the removal
+			-- took away, or deletes the operator's lines after it. So the
+			-- prerm's own expression runs on the block apply_cron writes.
+			local prerm = read("Makefile"):match("define Package/openuf/prerm\n(.-)\nendef")
+			assert_not_nil(prerm, "prerm found")
+			local expr = prerm:match("sed %-i '(/%^# openuf%-cron%-begin/[^']*)' /etc/crontabs/root")
+			assert_not_nil(expr, "the prerm edits root's crontab")
+			expr = expr:gsub("%$%$", "$")   -- make's escape
+			local sysconf = dofile("src/openwrt/sysconf.lua")
+			local files = {[sysconf.CRONTAB] = "# mine\n30 3 * * * /usr/bin/backup.sh\n"}
+			sysconf._read_file = function(p) return files[p] end
+			sysconf._write_file = function(p, c) files[p] = c; return true end
+			sysconf._exec = function() return 0 end
+			local real = io.stderr
+			io.stderr = {write = function() end}
+			local ok = sysconf.apply_cron({enabled = true, jobs = {
+				{schedule = "0 4 * * *", cmd = "syswrapper.sh 11k-scan", enabled = true}}})
+			io.stderr = real
+			assert_true(ok, "block written")
+			local tmp = "/tmp/openuf_test_prerm_crontab"
+			local f = assert(io.open(tmp, "w"))
+			f:write(files[sysconf.CRONTAB], "15 2 * * * /usr/bin/after.sh\n")
+			f:close()
+			local p = assert(io.popen("sed -e '" .. expr .. "' " .. tmp))
+			local out = p:read("*a")
+			p:close()
+			os.remove(tmp)
+			assert_eq(out, "# mine\n30 3 * * * /usr/bin/backup.sh\n15 2 * * * /usr/bin/after.sh\n",
+				"the block is gone, the lines around it stay")
+		end
+	},
+	{
 		name = "package: every install path the LuCI backend reads is a file the package ships",
 		fn = function()
 			local src = read("../luci-app-openuf/root/usr/share/rpcd/ucode/luci.openuf")

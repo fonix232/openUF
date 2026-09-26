@@ -202,7 +202,7 @@ local function cmd_11k_scan()
 	end
 	f:write(tostring(os.time()), "\n")
 	f:close()
-	io.stdout:write("syswrapper: neighbour scan requested\n")
+	io.stdout:write("syswrapper: neighbour scan requested; the inform daemon picks it up within one heartbeat\n")
 	return true
 end
 

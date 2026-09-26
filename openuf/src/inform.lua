@@ -686,7 +686,8 @@ end
 -- Where `syswrapper.sh 11k-scan` -- the controller's nightly cron job, see
 -- sysconf.lua -- leaves its dated request. Consumed by the next heartbeat;
 -- ignored when older than SCAN_REQUEST_MAX_AGE, so a request a stopped daemon
--- never saw does not fire at the next boot.
+-- never saw does not fire at the next boot, or when dated more than a minute
+-- ahead (the clock was stepped back since, and its age is anyone's guess).
 M.SCAN_REQUEST_FILE    = "/tmp/openuf-scan-request"
 M.SCAN_REQUEST_MAX_AGE = 600
 
@@ -709,7 +710,8 @@ function M._scan_requested()
 	f:close()
 	os.remove(M.SCAN_REQUEST_FILE)
 	local at = tonumber(raw:match("%d+"))
-	if not at or M._time() - at > M.SCAN_REQUEST_MAX_AGE then
+	local age = at and (M._time() - at)
+	if not age or age < -60 or age > M.SCAN_REQUEST_MAX_AGE then
 		io.stderr:write("inform: ignoring a stale 11k-scan request\n")
 		return false
 	end

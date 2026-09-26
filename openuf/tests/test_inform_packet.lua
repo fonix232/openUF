@@ -3672,7 +3672,7 @@ return {
 		end
 	},
 	{
-		name = "inform: an 11k-scan request makes the next beacon request due, a stale one does not",
+		name = "inform: an 11k-scan request makes the next beacon request due, a stale or future-dated one does not",
 		fn = function()
 			local file = "/tmp/openuf_test_scan_request"
 			local orig_file, orig_time, orig_stderr = inform.SCAN_REQUEST_FILE, inform._time, io.stderr
@@ -3685,7 +3685,48 @@ return {
 			f = io.open(file, "w"); f:write("10\n"); f:close()
 			assert_false(inform._scan_requested(), "stale request ignored")
 			assert_false(inform._scan_requested(), "nothing waiting")
+			-- Dated an hour ahead: the clock was stepped back since it was
+			-- written, so its age cannot be judged.
+			f = io.open(file, "w"); f:write("4600\n"); f:close()
+			assert_false(inform._scan_requested(), "future-dated request ignored")
+			assert_nil(io.open(file, "r"), "but still removed")
 			inform.SCAN_REQUEST_FILE, inform._time, io.stderr = orig_file, orig_time, orig_stderr
+		end
+	},
+	{
+		name = "inform: a setparam's timezone/NTP/cron blocks reach sysconf, and are not reported as dropped",
+		fn = function()
+			local orig = {sysconf = inform._sysconf, stderr = io.stderr}
+			local parsed_from, applied
+			inform._sysconf = {
+				parse = function(raw) parsed_from = raw; return {timezone = "CET-1CEST,M3.5.0,M10.5.0/3"} end,
+				apply = function(sc) applied = sc; return {} end,
+			}
+			local logged = {}
+			io.stderr = {write = function(_, ...)
+				for _, v in ipairs({...}) do logged[#logged + 1] = tostring(v) end
+			end}
+			-- The dropped-key report is gated on debug_dump_file, which
+			-- handle_response reads off cfg on every call.
+			local sys_raw = "system.timezone=CET-1CEST,M3.5.0,M10.5.0/3\n"
+				.. "locale.timezone=CET-1CEST,M3.5.0,M10.5.0/3\n"
+				.. "ntpclient.status=enabled\nntpclient.1.server=0.ubnt.pool.ntp.org\n"
+				.. "cron.status=enabled\ncron.1.status=enabled\ncron.1.user=pusheduser\n"
+				.. "cron.1.job.1.schedule=0 4 * * *\ncron.1.job.1.cmd=syswrapper.sh 11k-scan\n"
+			local ok, err = pcall(inform.handle_response,
+				cjson.encode({_type = "setparam", system_cfg = sys_raw}),
+				sample_state({adopted = true}), {config = {debug_dump_file = "/dev/null"}})
+			inform._sysconf, io.stderr = orig.sysconf, orig.stderr
+			inform._debug_dropped_keys = false
+			assert_true(ok, "handle_response survives: " .. tostring(err))
+			assert_eq(parsed_from, sys_raw, "sysconf parses the whole system_cfg")
+			assert_eq(applied and applied.timezone, "CET-1CEST,M3.5.0,M10.5.0/3", "and applies what it parsed")
+			local out = table.concat(logged)
+			assert_contains(out, "cron.<n>.user", "the ignored cron user is still reported as dropped")
+			for _, k in ipairs({"system.timezone", "locale.timezone", "ntpclient.", "cron.status",
+					"cron.<n>.status", "cron.<n>.job"}) do
+				assert_nil(out:find(k, 1, true), k .. " is recognized, not dropped")
+			end
 		end
 	},
 	{

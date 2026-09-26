@@ -61,8 +61,9 @@ local function with_stderr(fn)
 	return table.concat(buf)
 end
 
--- The three blocks exactly as AP2 received them on 2026-09-15 (IPs and the
--- user renamed), plus two decoys and a duplicate timezone.
+-- The three blocks in the shape a real push carries them (yesrab/openUF's
+-- capture of 2026-09-15, the site's SSH user renamed), plus two decoys and a
+-- duplicate timezone.
 local CAPTURE = table.concat({
 	"system.timezone=IST-5:30",
 	"locale.timezone=IST-5:30",
@@ -73,7 +74,7 @@ local CAPTURE = table.concat({
 	"ntpclient.4.status=enabled", "ntpclient.4.server=3.ubnt.pool.ntp.org",
 	"cron.status=enabled",
 	"cron.1.status=enabled",
-	"cron.1.user=MQWWaWh",
+	"cron.1.user=pusheduser",
 	"cron.1.job.1.status=enabled",
 	"cron.1.job.1.schedule=0 4 * * *",
 	"cron.1.job.1.cmd=syswrapper.sh 11k-scan",
@@ -104,7 +105,7 @@ return {
 			assert_eq(#p.cron.jobs, 1, "one job")
 			assert_eq(p.cron.jobs[1].schedule, "0 4 * * *", "schedule")
 			assert_eq(p.cron.jobs[1].cmd, "syswrapper.sh 11k-scan", "cmd")
-			assert_eq(p.cron.jobs[1].user, "MQWWaWh", "user carried (ignored by apply)")
+			assert_eq(p.cron.jobs[1].user, "pusheduser", "user carried (ignored by apply)")
 			assert_true(p.cron.jobs[1].enabled, "job enabled")
 		end
 	},

@@ -15,8 +15,8 @@
 	04:00 (device local time) neighbour scan on every AP through the AP's own
 	cron -- the "automated RRM scans" Ubiquiti's Channel AI describes. The
 	verb is added to syswrapper.sh, which asks the running inform daemon to
-	scan on its next heartbeat (inform.lua's _maybe_scan_neighbours), so the
-	scan code stays in one place and the result rides out on the next inform.
+	scan on its next heartbeat (inform.lua's _scan_requested), so the scan
+	code stays in one place and the result rides out on the next inform.
 
 	Timezone -> UCI system.@system[0].timezone (the wire string IS a POSIX TZ
 	string, which is exactly what that option holds); NTP -> system.ntp.server.
@@ -113,11 +113,6 @@ local function system_section(cursor)
 	return sec
 end
 
--- UCI system.@system[0].timezone <- the pushed POSIX string. Written only when
--- it differs; the original is stamped once as openuf_timezone_orig. zonename
--- (the Olson name LuCI keeps alongside the string it derived) is moved to
--- openuf_zonename_orig, since it now names a different zone. Returns true
--- when something was written.
 -- A POSIX TZ string without its explicit transition times ("/1", "/3", ...):
 -- the controller sends "GMT0BST,M3.5.0,M10.5.0" for Europe/London, where
 -- OpenWrt's zoneinfo has "GMT0BST,M3.5.0/1,M10.5.0". Same zone, same rules,
@@ -126,6 +121,11 @@ function M.tz_zone(tz)
 	return (tostring(tz or ""):gsub("/[%d:+-]+", ""))
 end
 
+-- UCI system.@system[0].timezone <- the pushed POSIX string. Written only when
+-- it differs; the original is stamped once as openuf_timezone_orig. zonename
+-- (the Olson name LuCI keeps alongside the string it derived) is moved to
+-- openuf_zonename_orig, since it now names a different zone. Returns true
+-- when something was written.
 function M.apply_timezone(tz)
 	if not M.is_valid_tz(tz) then
 		if tz ~= nil then
@@ -236,7 +236,9 @@ end
 -- commands in CRON_COMMANDS are installed; anything else is logged and
 -- skipped. Rewritten only when the resulting file differs, and crond told
 -- when it does. cron.status=disabled, or no installable job, removes the
--- block. Returns true when the file was rewritten.
+-- block, so apply_cron({enabled = false}) is how the block is taken away
+-- (inform._release_disabled, for a switched-off system_cron). Returns true
+-- when the file was rewritten.
 function M.apply_cron(cron)
 	if type(cron) ~= "table" then return false end
 	local lines = {}

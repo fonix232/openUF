@@ -170,6 +170,16 @@ return {
 			local f = io.open(file, "r"); local raw = f:read("*a"); f:close()
 			os.remove(file)
 			assert_true(math.abs(tonumber(raw:match("%d+")) - os.time()) <= 2, "dated now")
+			-- An unwritable path fails loudly rather than pretending.
+			sw._scan_request_file("/nonexistent-dir/x")
+			local err = ""
+			local rs = io.stderr
+			io.stderr = {write = function(_, s) err = err .. s end}
+			local failed = not sw.cmd_11k_scan()
+			io.stderr = rs
+			sw._scan_request_file("/tmp/openuf-scan-request")
+			assert_true(failed, "fails")
+			assert_contains(err, "cannot write", "says so")
 		end
 	},
 	{

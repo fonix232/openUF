@@ -91,8 +91,8 @@ owut`, § 6) tells owut to leave openUF's packages out of the ASU request; when 
 build.
 
 **Uninstalling.** `apk del luci-app-openuf openuf`. The service stops, the
-temporary SSH adoption account goes, and `/etc/openuf/` stays, so a reinstall finds the
-adoption again. Delete it by hand to forget the device.
+temporary SSH adoption account and the controller's cron jobs go (§ 6), and `/etc/openuf/`
+stays, so a reinstall finds the adoption again. Delete it by hand to forget the device.
 
 **From a tarball install** (the `install.sh` era, code in `/opt/openuf`): install the
 package over it. Before its files go in, the package stops the old service, keeps the old
@@ -955,6 +955,49 @@ sends up to eight events after each successful inform. A client that joins is an
 `association` (with its RSSI, which the roaming detector needs) and a `success`; one that
 leaves is a `sta_leave`, with `last_seen` in device uptime. Events queue while the
 controller is unreachable (200 at most). `sta_events = false` turns them off.
+
+### Controller-managed system settings (timezone, NTP, nightly scan)
+
+Every full `system_cfg` push also carries three blocks, which `sysconf.lua` applies, each
+behind its own option (`system_timezone`, `system_ntp`, `system_cron`):
+
+| Wire keys | Applied to | Undo trail |
+|---|---|---|
+| `system.timezone` (and its twin `locale.timezone`), a POSIX TZ string such as `CET-1CEST,M3.5.0,M10.5.0/3` | UCI `system.@system[0].timezone`, then `/etc/init.d/system reload`. The stale Olson `zonename` is moved aside, because it now names a different zone. The same zone in a less precise form keeps the board's string: the controller sends `GMT0BST,M3.5.0,M10.5.0` for London, an hour off OpenWrt's `GMT0BST,M3.5.0/1,M10.5.0` at each clock change | `openuf_timezone_orig` / `openuf_zonename_orig` on the same section (the first original is kept) |
+| `ntpclient.status`, `ntpclient.<n>.server` | UCI `system.ntp.server` (a list, in slot order), then `/etc/init.d/sysntpd restart`. An explicit `ntpclient.status=disabled` puts the board's own list back | `openuf_ntp_orig` + the `openuf_ntp_managed` marker on `system.ntp` |
+| `cron.<n>.job.<m>.schedule` / `.cmd` | A marked block in `/etc/crontabs/root` (`# openuf-cron-begin` … `# openuf-cron-end`), then `cron enable` + `restart`. Lines outside the markers are never touched. The block is removed once a push stops carrying jobs, when `system_cron` is switched off, and when the package is removed | the markers themselves |
+
+Nothing is written when the pushed value already matches, so the identical pushes of
+a steady state cost no flash writes. Malformed values (a timezone with a quote, a
+server name with a space, a schedule that is not five plain fields) are logged and
+refused.
+
+**Cron runs only commands openUF provides.** The one the controller pushes today is
+`syswrapper.sh 11k-scan` at `0 4 * * *`, the nightly neighbour scan. Anything else is
+logged as `not a command this build provides` and never written: crond runs it as
+root. The pushed `cron.<n>.user` is ignored, since that account does not exist here.
+
+`syswrapper.sh 11k-scan` does not scan by itself. It leaves a dated request in
+`/tmp/openuf-scan-request`, and the inform daemon consumes it on its next heartbeat by
+making the next 802.11k beacon request due at once (with `rrm_enrichment` on): a client
+sweeps and reports back, and the AP never leaves its channel. Upstream openUF answers
+the same job with `iw dev <if> scan ap-force` on every radio. openUF deliberately asks a
+client instead, because a measured off-channel sweep cost an associated client 12%
+packet loss for the ~3 s it ran (PROTOCOL-VALIDATION, *Enriching it without scanning*). A request older than ten minutes (say, one left behind by a stopped daemon),
+or dated more than a minute ahead, is discarded rather than served. You can run it by
+hand:
+
+```sh
+syswrapper.sh 11k-scan
+logread | grep 11k-scan   # "11k-scan requested -- asking a client for a beacon report now"
+```
+
+To take a board back from the controller's timezone, copy `openuf_timezone_orig` back
+to `timezone` (`uci get system.@system[0].openuf_timezone_orig`). For NTP, copy
+`openuf_ntp_orig` back to `server`, delete both stamps, and run `uci commit system`.
+Switch the matching `system_*` option off first, or the controller re-applies its
+values on the next full push. Removing the package takes the marked cron block out,
+but it leaves the timezone and NTP values in place.
 
 ### Config pushes that fail to apply
 
