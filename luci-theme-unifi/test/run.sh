@@ -13,6 +13,8 @@
 # fetched from the OpenWrt package feeds. Extra LuCI packages that are not in
 # the image (luci-mod-dashboard) are installed from LuCI's own sources, and a
 # two-radio wireless config gives the Wireless pages something to show.
+# Switch ports (lan1-lan4, wan) for the port panel are veth pairs made from
+# the host (test/add-ports.sh; needs root, nsenter and iproute2 here).
 #
 # Environment knobs:
 #   OPENWRT_IMAGE  image to test against      (openwrt/rootfs:x86-64-25.12.5)
@@ -29,6 +31,7 @@
 #   UF_FAKE_USTEER 0 leaves luci-app-usteer   (1)
 #                  without its fake daemon
 #   UF_SWCONFIG    1: add a swconfig switch   (off; see test/add-swconfig.sh)
+#   UF_PORTS       0: no switch ports         (1)
 
 set -eu
 
@@ -39,6 +42,7 @@ packages=${LUCI_PACKAGES:-modules/luci-mod-dashboard applications/luci-app-ustee
 name=${UF_NAME:-luci-theme-unifi-test}
 port=${UF_PORT:-8080}
 out=${UF_OUT:-$here/out}
+ports=${UF_PORTS:-1}
 password=unifi-test
 setup_only=
 
@@ -69,6 +73,17 @@ docker exec -i "$name" sh -c 'cat > /etc/config/wireless' < "$here/fixtures/wire
 # Answer Attended Sysupgrade's one-time "check online for upgrades?" prompt,
 # which otherwise opens over the Status overview on every visit.
 docker exec "$name" sh -c 'uci -q set attendedsysupgrade.client.login_check_for_upgrades=0 && uci commit attendedsysupgrade' || true
+
+# smoke.cjs expects the ports when they could be made (UF_PORTS=0 skips them).
+if [ "$ports" != 0 ]; then
+	sh "$here/add-ports.sh" "$name" || echo "warning: could not add switch ports" >&2
+
+	if docker exec "$name" test -d /sys/class/net/lan1; then
+		ports=1
+	else
+		ports=0
+	fi
+fi
 
 # LuCI packages the image lacks, from a sparse checkout cached in test/.cache.
 if [ -n "$packages" ]; then
@@ -116,7 +131,7 @@ if [ -n "$setup_only" ]; then
 fi
 
 mkdir -p "$out"
-NODE_PATH=${NODE_PATH:-$(npm root -g)} node "$here/smoke.cjs" "http://127.0.0.1:$port" "$password" "$out"
+UF_PORTS=$ports NODE_PATH=${NODE_PATH:-$(npm root -g)} node "$here/smoke.cjs" "http://127.0.0.1:$port" "$password" "$out"
 
 # Again as Firefox and Safari see it, without the CSS only Chromium has.
 if [ "${UF_COMPAT:-1}" != 0 ]; then

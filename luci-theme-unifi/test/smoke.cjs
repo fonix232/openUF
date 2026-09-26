@@ -88,6 +88,47 @@ async function shot(page, name) {
 	await page.screenshot({ path: path.join(out, `${name}.png`) });
 }
 
+/* The port panel, against the lab's ports (run.sh, add-ports.sh): five
+ * squares, lan1-lan4 and wan, some with link and some without. The Status
+ * overview's own Port status card shows the same five. */
+const PORTS = 5;
+
+async function checkPorts(page, route) {
+	await page.goto(`${base}/cgi-bin/luci/${route}`);
+	await settle(page);
+
+	if (route == 'admin/status/overview') {
+		const tiles = await page.locator('.ifacebox img[src*="/port_"]').count();
+
+		if (tiles != PORTS)
+			fail(`${route}: Port status shows ${tiles} ports, not ${PORTS}`);
+
+		return;
+	}
+
+	await page.waitForSelector('.uf-ports-card .uf-port', { timeout: 10000 }).catch(() => {});
+
+	const seen = await page.evaluate(() => {
+		const count = (sel) => document.querySelectorAll(sel).length;
+
+		return {
+			cards: count('.uf-ports-card'),
+			squares: count('.uf-ports-card .uf-port'),
+			linked: count('.uf-ports-card .uf-port:is([data-state="fe"], [data-state="gbe"], [data-state="mgig"], [data-state="up"])'),
+			unlinked: count('.uf-ports-card .uf-port:is([data-state="down"], [data-state="disabled"])')
+		};
+	});
+
+	if (seen.cards != 1)
+		fail(`${route}: ${seen.cards} Ports cards, not one`);
+	else if (seen.squares != PORTS)
+		fail(`${route}: the Ports card shows ${seen.squares} ports, not ${PORTS}`);
+	else if (!seen.linked || !seen.unlinked)
+		fail(`${route}: the Ports card shows ${seen.linked} ports with link and ${seen.unlinked} without; expected some of each`);
+	else
+		console.log(`  ok   ports on ${route}: ${seen.linked} linked, ${seen.unlinked} not`);
+}
+
 async function signIn(page) {
 	await page.goto(`${base}/cgi-bin/luci/`);
 
@@ -140,6 +181,23 @@ async function signIn(page) {
 
 		if (SHOTS[route])
 			await shot(page, `${SHOTS[route]}-light`);
+	}
+
+	/* run.sh sets UF_PORTS=1 once the lab has its ports. */
+	if (process.env.UF_PORTS == '1') {
+		for (const route of [ 'admin/network/network', 'admin/dashboard', 'admin/status/overview' ])
+			await checkPorts(page, route);
+
+		await page.goto(`${base}/cgi-bin/luci/admin/network/network`);
+		await settle(page);
+		await page.click('.uf-ports-card .uf-ports-manager').catch(() => fail('the Ports card has no Port Manager button'));
+		await page.waitForSelector('.uf-ports-card .uf-ports-list', { timeout: 5000 })
+			.catch(() => fail('Port Manager did not show the port list on the Devices tab'));
+		await page.waitForTimeout(300);
+		await shot(page, 'ports-light');
+
+		/* LuCI remembers the tab; the next visits expect Interfaces. */
+		await page.click('#view .cbi-tabmenu > li[data-tab="interface"] > a').catch(() => {});
 	}
 
 	/* Unsaved changes: the top-bar chip and the changes dialog. */

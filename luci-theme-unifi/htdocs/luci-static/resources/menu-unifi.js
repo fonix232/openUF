@@ -58,6 +58,108 @@ return baseclass.extend({
 		}
 
 		this.bindChrome();
+
+		if (L.env.dispatchpath.join('/') == 'admin/network/network')
+			this.renderPorts();
+	},
+
+	/* Network > Interfaces: the router's ports as UniFi's port strip, in a
+	 * card above LuCI's view (never inside it, which LuCI redraws), with
+	 * the Port Manager list while the Devices tab is open. */
+	renderPorts() {
+		const view = document.querySelector('#view');
+
+		if (!view)
+			return;
+
+		/* network.js asks LuCI for the system's features, which it has only
+		 * once it has set the page up. */
+		const loaded = L.loaded ? Promise.resolve() : new Promise((resolve) => document.addEventListener('luci-loaded', resolve, { once: true }));
+
+		Promise.all([ L.require('view.unifi.ports'), L.require('poll'), loaded ]).then(([ ports, poll ]) => {
+			const devicesTab = () => document.querySelector('#view .cbi-map-tabbed > [data-tab="device"][data-tab-active="true"]');
+			let card = null;
+			let data = null;
+
+			const draw = () => {
+				const full = !!devicesTab();
+				const body = ports.render(data, { mode: full ? 'full' : 'strip', clickable: true });
+
+				card = ports.patch(card, body ? ports.card(body, {
+					title: _('Ports'),
+					desc: ports.summary(data),
+					actions: full ? null : [ E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-action uf-ports-manager' }, [ _('Port Manager') ]) ]
+				}) : null);
+
+				if (card && !card.parentNode) {
+					card.addEventListener('click', (ev) => {
+						if (ev.target.closest('.uf-ports-manager'))
+							this.openPort(null);
+					});
+					card.addEventListener('uf-port-select', (ev) => this.openPort(ev.detail.port));
+					view.parentNode.insertBefore(card, view);
+				}
+			};
+
+			const update = () => ports.load().then((d) => {
+				data = d;
+				draw();
+			});
+
+			/* Tab panes announce themselves without bubbling, so listen in the
+			 * capture phase; LuCI marks the other panes inactive only after
+			 * the event, so look once it has done. */
+			document.addEventListener('cbi-tab-active', () => {
+				if (data)
+					window.setTimeout(draw, 0);
+			}, true);
+
+			return update().then(() => poll.add(update, 5));
+		}).catch((err) => console.warn('luci-theme-unifi: no port panel:', err));
+	},
+
+	/* Show a port's settings: the Devices tab, and on it the dialog of the
+	 * port's bridge (its VLAN tab, if it filters) or of the port itself.
+	 * With no port, just the Devices tab. swconfig ports live on the
+	 * Switch page. */
+	openPort(port) {
+		if (port && port.switch) {
+			window.location.href = L.url('admin/network/switch');
+			return;
+		}
+
+		const tab = document.querySelector('#view .cbi-tabmenu > li[data-tab="device"] > a');
+
+		if (!tab)
+			return;
+
+		if (!document.querySelector('#view .cbi-map-tabbed > [data-tab="device"][data-tab-active="true"]'))
+			tab.click();
+
+		const sid = port ? (port.bridge ? port.bridge.sid : (port.section || (port.device ? 'dev:' + port.device : null))) : null;
+		const row = sid ? document.querySelector('#cbi-network-device .cbi-section-table-row[data-sid="%s"]'.format(CSS.escape(sid))) : null;
+		const edit = row ? row.querySelector('.cbi-button-edit') : null;
+
+		if (!edit)
+			return (row || tab).scrollIntoView({ block: 'nearest' });
+
+		edit.click();
+
+		if (!port.bridge || !port.bridge.filtering)
+			return;
+
+		/* The dialog renders asynchronously; give it a moment to appear. */
+		const until = Date.now() + 3000;
+		const pick = () => {
+			const vlans = document.querySelector('.modal .cbi-tabmenu > li[data-tab="bridgevlan"] > a');
+
+			if (vlans)
+				vlans.click();
+			else if (Date.now() < until)
+				window.setTimeout(pick, 50);
+		};
+
+		pick();
 	},
 
 	renderModeMenu(tree) {

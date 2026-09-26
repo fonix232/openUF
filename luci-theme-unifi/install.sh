@@ -6,7 +6,7 @@
 #   sh install.sh root@192.168.1.1      from a workstation, over SSH
 #   sh install.sh --uninstall [TARGET]  remove it again
 #
-# The theme is nothing but files (templates, a stylesheet, a script and a
+# The theme is only files (templates, stylesheet, scripts, an rpcd ACL, a
 # uci-defaults hook), so this does what the package's install and postinst
 # would: unpack the files, register the theme, and drop LuCI's caches.
 #
@@ -51,11 +51,15 @@ uci -q delete luci.themes.UniFiLight || true
 uci commit luci
 rm -rf /www/luci-static/unifi /www/luci-static/unifi-dark /www/luci-static/unifi-light \
 	/www/luci-static/resources/menu-unifi.js \
+	/www/luci-static/resources/view/unifi \
+	/www/luci-static/resources/view/dashboard/include/25_ports.js \
+	/usr/share/rpcd/acl.d/luci-theme-unifi.json \
 	/usr/share/ucode/luci/template/themes/unifi \
 	/usr/share/ucode/luci/template/themes/unifi-dark \
 	/usr/share/ucode/luci/template/themes/unifi-light
 rm -f /tmp/luci-indexcache.*
 rm -rf /tmp/luci-modulecache/
+/etc/init.d/rpcd reload 2>/dev/null || true
 echo "luci-theme-unifi removed; theme: $(uci -q get luci.main.mediaurlbase)"
 '
 

@@ -1,0 +1,18 @@
+{
+	"luci-theme-unifi-ports": {
+		"description": "Grant access to the port panel (Network > Interfaces, the dashboard's Ports card)",
+		"read": {
+			"file": {
+				"/etc/board.json": [ "read" ]
+			},
+			"ubus": {
+				"file": [ "read" ],
+				"luci": [ "getBuiltinEthernetPorts", "getSwconfigFeatures", "getSwconfigPortState" ],
+				"luci-rpc": [ "getBoardJSON", "getNetworkDevices" ],
+				"network.device": [ "status" ],
+				"network.interface": [ "dump" ]
+			},
+			"uci": [ "network", "firewall" ]
+		}
+	}
+}
