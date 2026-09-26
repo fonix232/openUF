@@ -64,6 +64,12 @@ return baseclass.extend({
 			if (mod && typeof(mod.enhance) == 'function')
 				mod.enhance();
 		});
+
+		/* The names the design marks to fade (cascade.css, "Fading names"). */
+		L.resolveDefault(L.require('view.openuf-theme.fade'), null).then((fade) => {
+			if (fade)
+				fade.watch(document.querySelector('#view'));
+		});
 	},
 
 	render(tree) {

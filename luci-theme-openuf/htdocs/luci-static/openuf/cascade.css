@@ -4044,6 +4044,54 @@ body.modal-overlay-active #modal_overlay {
 	}
 }
 
+/* Fading names
+ * ------------
+ * A name too long for its column (an SSID, a host, an interface) stays on
+ * one line and fades out at the end, and while hovered (or tapped) it
+ * slides along until its end shows, the fade moving to the start. A
+ * script marks the element with data-uf-fade; view/openuf-theme/fade.js
+ * measures it and sets "over" (with how far and how long to slide) or
+ * "fit". The element must be a block of inline content, as text-indent
+ * does the sliding. Without @property the fade edges switch instead of
+ * gliding. */
+
+@property --uf-fade-start {
+	syntax: '<length>';
+	inherits: false;
+	initial-value: 0px;
+}
+
+@property --uf-fade-end {
+	syntax: '<length>';
+	inherits: false;
+	initial-value: 0px;
+}
+
+[data-uf-fade] {
+	min-width: 0;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: clip;
+}
+
+[data-uf-fade="over"] {
+	--uf-fade-start: 0px;
+	--uf-fade-end: 24px;
+	-webkit-mask-image: linear-gradient(to right, transparent, #000 var(--uf-fade-start), #000 calc(100% - var(--uf-fade-end)), transparent);
+	mask-image: linear-gradient(to right, transparent, #000 var(--uf-fade-start), #000 calc(100% - var(--uf-fade-end)), transparent);
+	transition: text-indent .25s ease-out, --uf-fade-start .15s, --uf-fade-end .15s .1s;
+}
+
+[data-uf-fade="over"]:is(:hover, :focus-within, [data-uf-fade-run]) {
+	--uf-fade-start: 24px;
+	--uf-fade-end: 0px;
+	text-indent: var(--uf-fade-shift, 0px);
+	transition:
+		text-indent var(--uf-fade-time, 1s) linear .3s,
+		--uf-fade-start .15s linear .3s,
+		--uf-fade-end .15s linear calc(.15s + var(--uf-fade-time, 1s));
+}
+
 /* File browser
  * ------------ */
 
