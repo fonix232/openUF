@@ -10274,28 +10274,6 @@ body[data-page="admin-services-uhttpd"] .cbi-value[data-widget="CBI.ButtonValue"
  * on one line, rather than a dozen wrapping in two or three. */
 @media screen and (min-width: 961px) {
 	body[data-page="admin-services-uhttpd"] .cbi-value label.cbi-value-title {
-
-/* ==== page: switch ==== */
-/* Network > Switch, on boards with a swconfig switch chip: the switch's
- * settings, then its VLANs as a matrix of ports (one select per port and
- * VLAN) under a row of UniFi's port squares, which LuCI draws as the
- * matrix's second header row. */
-
-body[data-page="admin-network-switch"] {
-	/* UniFi's port strip: a rounded tile with the jack cut out; the uplink
-	 * with a chevron in its place; a CPU port (the switch's link to the
-	 * SoC, not a socket) as a chip. */
-	--uf-switch-i-port: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 20'><path fill-rule='evenodd' d='M3.5 0h17A3.5 3.5 0 0 1 24 3.5v13a3.5 3.5 0 0 1-3.5 3.5h-17A3.5 3.5 0 0 1 0 16.5v-13A3.5 3.5 0 0 1 3.5 0ZM7 5v8h2.5v2.5h5V13H17V5Z'/></svg>");
-	--uf-switch-i-uplink: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 20'><path fill-rule='evenodd' d='M3.5 0h17A3.5 3.5 0 0 1 24 3.5v13a3.5 3.5 0 0 1-3.5 3.5h-17A3.5 3.5 0 0 1 0 16.5v-13A3.5 3.5 0 0 1 3.5 0ZM12 6.2l-5.3 5.3 1.6 1.6 3.7-3.7 3.7 3.7 1.6-1.6Z'/></svg>");
-	--uf-switch-i-cpu: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 20'><path fill-rule='evenodd' d='M3.5 0h17A3.5 3.5 0 0 1 24 3.5v13a3.5 3.5 0 0 1-3.5 3.5h-17A3.5 3.5 0 0 1 0 16.5v-13A3.5 3.5 0 0 1 3.5 0ZM7.5 5.5v9h9v-9ZM10 8h4v4h-4Z'/></svg>");
-}
-
-/* Settings
- * -------- */
-
-/* "Enable mirroring of incoming packets" on one line, as its neighbours. */
-@media screen and (min-width: 961px) {
-	body[data-page="admin-network-switch"] .cbi-section-node > .cbi-value > label.cbi-value-title {
 		flex-basis: 280px;
 	}
 }
@@ -10323,6 +10301,31 @@ body[data-page="admin-network-switch"] {
 }
 
 /* ==== end page: uhttpd ==== */
+
+/* ==== page: switch ==== */
+/* Network > Switch, on boards with a swconfig switch chip: the switch's
+ * settings, then its VLANs as a matrix of ports (one select per port and
+ * VLAN) under a row of UniFi's port squares, which LuCI draws as the
+ * matrix's second header row. */
+
+body[data-page="admin-network-switch"] {
+	/* UniFi's port strip: a rounded tile with the jack cut out; the uplink
+	 * with a chevron in its place; a CPU port (the switch's link to the
+	 * SoC, not a socket) as a chip. */
+	--uf-switch-i-port: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 20'><path fill-rule='evenodd' d='M3.5 0h17A3.5 3.5 0 0 1 24 3.5v13a3.5 3.5 0 0 1-3.5 3.5h-17A3.5 3.5 0 0 1 0 16.5v-13A3.5 3.5 0 0 1 3.5 0ZM7 5v8h2.5v2.5h5V13H17V5Z'/></svg>");
+	--uf-switch-i-uplink: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 20'><path fill-rule='evenodd' d='M3.5 0h17A3.5 3.5 0 0 1 24 3.5v13a3.5 3.5 0 0 1-3.5 3.5h-17A3.5 3.5 0 0 1 0 16.5v-13A3.5 3.5 0 0 1 3.5 0ZM12 6.2l-5.3 5.3 1.6 1.6 3.7-3.7 3.7 3.7 1.6-1.6Z'/></svg>");
+	--uf-switch-i-cpu: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 20'><path fill-rule='evenodd' d='M3.5 0h17A3.5 3.5 0 0 1 24 3.5v13a3.5 3.5 0 0 1-3.5 3.5h-17A3.5 3.5 0 0 1 0 16.5v-13A3.5 3.5 0 0 1 3.5 0ZM7.5 5.5v9h9v-9ZM10 8h4v4h-4Z'/></svg>");
+}
+
+/* Settings
+ * -------- */
+
+/* "Enable mirroring of incoming packets" on one line, as its neighbours. */
+@media screen and (min-width: 961px) {
+	body[data-page="admin-network-switch"] .cbi-section-node > .cbi-value > label.cbi-value-title {
+		flex-basis: 280px;
+	}
+}
 
 /* VLAN matrix
  * ----------- */
