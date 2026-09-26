@@ -1,0 +1,89 @@
+{
+	"model": {
+		"id": "linksys,e8450-ubi",
+		"name": "Linksys E8450 (UBI)"
+	},
+	"led": {
+		"wan": {
+			"name": "WAN",
+			"sysfs": "inet:blue",
+			"type": "netdev",
+			"device": "wan",
+			"mode": "link tx rx"
+		}
+	},
+	"network": {
+		"lan": {
+			"ports": [
+				"lan1",
+				"lan2",
+				"lan3",
+				"lan4"
+			],
+			"protocol": "static"
+		},
+		"wan": {
+			"device": "wan",
+			"protocol": "dhcp"
+		}
+	},
+	"wlan": {
+		"wl0": {
+			"path": "platform/18000000.wmac",
+			"info": {
+				"antenna_rx": 15,
+				"antenna_tx": 15,
+				"bands": {
+					"2G": {
+						"ht": true,
+						"max_width": 40,
+						"modes": [
+							"NOHT",
+							"HT20",
+							"HT40"
+						],
+						"default_channel": 1
+					}
+				},
+				"radios": [
+				]
+			}
+		},
+		"wl1": {
+			"path": "1a143000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0",
+			"info": {
+				"antenna_rx": 15,
+				"antenna_tx": 15,
+				"bands": {
+					"5G": {
+						"ht": true,
+						"vht": true,
+						"he": true,
+						"max_width": 160,
+						"modes": [
+							"NOHT",
+							"HT20",
+							"VHT20",
+							"HE20",
+							"HT40",
+							"VHT40",
+							"HE40",
+							"VHT80",
+							"HE80",
+							"HE160"
+						],
+						"default_channel": 36
+					}
+				},
+				"radios": [
+				]
+			}
+		},
+		"wl2": {
+			"path": "1a145000.pcie/pci0001:00/0001:00:01.0/0001:01:00.0"
+		}
+	},
+	"system": {
+		"compat_version": "2.0"
+	}
+}
