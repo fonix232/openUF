@@ -9,15 +9,18 @@
  * LuCI writes a radio's and an SSID's status as a run of "Label: value"
  * items, and which items appear shifts with the state, so the stylesheet
  * cannot tell a BSSID from a cipher by position. This names each item by
- * its label (data-uf-key), gives the stylesheet a few short values it
- * cannot cut out itself (a rate without its PHY details, a radio's
- * channel, band and width) and the column titles, in LuCI's own
- * translations.
+ * its label (data-uf-key), marks radio and SSID rows (data-uf-row) and
+ * gives the stylesheet what it cannot work out itself: the column titles
+ * (--uf-th-*), the network an SSID serves (--uf-wifi-network), a radio's
+ * channel, band and width, a station's rates without their PHY details,
+ * and a name for the Disconnect button once it shows as an icon, all in
+ * LuCI's own translations; and it marks the names that fade out when too
+ * long (data-uf-fade).
  *
- * It only adds attributes: LuCI's nodes are never moved, replaced or
- * re-rendered. It runs again after every redraw (the 5s status poll
- * replaces the items), and without it the page keeps a plain label/value
- * look. menu-openuf.js calls enhance() on this page.
+ * It only adds attributes and custom properties: LuCI's nodes are never
+ * moved, replaced or re-rendered. It runs again after every redraw (the
+ * 5s status poll replaces the items), and without it the page keeps a
+ * plain label/value look. menu-openuf.js calls enhance() on this page.
  */
 
 const KEYS = [
@@ -27,25 +30,41 @@ const KEYS = [
 	[ 'country', 'Country' ]
 ];
 
-/* Where LuCI writes status items: the list's rows and the dialog's status. */
-const ITEMS = [
-	'#cbi-wireless-wifi-device [data-name="_stat"] .nowrap',
-	'.modal .ifacebadge.large[data-network] .nowrap'
-].join(', ');
-
 const BANDS = { '2g': '2.4', '5g': '5', '6g': '6', '60g': '60' };
 
+/* A CSS string, for content: var(...). */
+function cssString(s) {
+	return '"' + String(s).replace(/[\\"]/g, '\\$&').replace(/[\n\r]+/g, ' ') + '"';
+}
+
 /* Set an attribute (null removes it), touching the node only on a change. */
-function set(node, name, value) {
+function attr(node, name, value) {
 	if (value == null)
 		node.removeAttribute(name);
 	else if (node.getAttribute(name) !== value)
 		node.setAttribute(name, value);
 }
 
+/* The same for a custom property. */
+function prop(node, name, value) {
+	if (value == null)
+		node.style.removeProperty(name);
+	else if (node.style.getPropertyValue(name) !== value)
+		node.style.setProperty(name, value);
+}
+
+/* A name to fade out at its end when too long (cascade.css, "Fading
+ * names"). Marked once: fade.js then keeps the attribute's value. */
+function fade(node) {
+	if (node && !node.hasAttribute('data-uf-fade'))
+		node.setAttribute('data-uf-fade', '');
+}
+
 return baseclass.extend({
 	enhance() {
-		if (this.keys)
+		const view = document.querySelector('#view');
+
+		if (!view || this.keys)
 			return;
 
 		this.keys = {};
@@ -53,68 +72,121 @@ return baseclass.extend({
 		for (const [ key, msgid ] of KEYS)
 			this.keys[_(msgid)] = key;
 
-		this.pending = false;
-		new MutationObserver(() => this.schedule())
-			.observe(document.body, { childList: true, subtree: true });
+		/* Tag after LuCI's redraw has settled, once per frame at most. The
+		 * dialog's status is drawn outside the view, in LuCI's modal. */
+		let queued = false;
+		const observer = new MutationObserver(() => {
+			if (queued)
+				return;
 
-		this.schedule();
+			queued = true;
+			window.requestAnimationFrame(() => {
+				queued = false;
+				this.tag(view);
+			});
+		});
+
+		observer.observe(view, { childList: true, subtree: true });
+
+		const modal = document.querySelector('#modal_overlay');
+
+		if (modal)
+			observer.observe(modal, { childList: true, subtree: true });
+
+		this.tag(view);
 	},
 
-	schedule() {
-		if (this.pending)
-			return;
+	tag(view) {
+		try {
+			const section = view.querySelector('#cbi-wireless-wifi-device');
+			const stations = view.querySelector('#wifi_assoclist_table');
 
-		this.pending = true;
-		window.requestAnimationFrame(() => {
-			this.pending = false;
-			this.apply();
-		});
+			if (section) {
+				this.titles(section, {
+					name: _('SSID'),
+					network: _('Network'),
+					bssid: _('BSSID'),
+					encryption: _('Encryption'),
+					signal: _('Signal'),
+					status: _('Status')
+				});
+
+				for (const row of section.querySelectorAll('.cbi-section-table-row[data-sid]'))
+					this.tagRow(row);
+			}
+
+			if (stations)
+				this.tagStations(stations);
+
+			for (const list of document.querySelectorAll('.modal .ifacebadge.large[data-network] > span'))
+				this.tagItems(list);
+		}
+		catch (e) {
+			/* Unfamiliar markup: leave the page as LuCI drew it. */
+		}
 	},
 
-	apply() {
-		document.querySelectorAll(ITEMS).forEach((item) => this.tagItem(item));
-
-		this.heads('#cbi-wireless-wifi-device > .table',
-			[ _('Mode'), _('BSSID') ], [ _('Encryption'), _('Signal') ]);
-
-		document.querySelectorAll('#cbi-wireless-wifi-device .tr[data-sid]').forEach((row) => this.tagRadio(row));
-		/* A station's rates: receive and transmit, either side of a <br>. */
-		document.querySelectorAll('#wifi_assoclist_table > .tr > .td > span > br').forEach((br) => {
-			this.tagRate(br.previousElementSibling);
-			this.tagRate(br.nextElementSibling);
-		});
+	titles(node, titles) {
+		for (const name in titles)
+			prop(node, `--uf-th-${name}`, cssString(titles[name]));
 	},
 
 	/* "BSSID: 3C:22:FB:31:D3:C9" is data-uf-key="bssid"; an item without a
-	 * label ("Wireless is not associated") is the status. */
-	tagItem(item) {
-		const label = item.firstElementChild?.matches('strong') ? item.firstElementChild : null;
-		const key = label ? this.keys[label.textContent.replace(/:\s*$/, '')] : 'status';
+	 * label ("Wireless is not associated", a pending-changes link) is the
+	 * status. */
+	tagItems(list) {
+		for (const item of list.children) {
+			if (item.matches('.nowrap')) {
+				const label = item.firstElementChild?.matches('strong') ? item.firstElementChild : null;
 
-		set(item, 'data-uf-key', key || 'other');
+				attr(item, 'data-uf-key', label ? (this.keys[label.textContent.replace(/:\s*$/, '')] ?? 'other') : 'status');
+			}
+			else if (item.matches('em, a')) {
+				attr(item, 'data-uf-key', 'status');
+			}
+		}
 	},
 
-	/* Four column titles for a list that has none, as the ::before and
-	 * ::after of the table and of its body. */
-	heads(selector, table, body) {
-		const node = document.querySelector(selector);
+	/* A radio's row is the one that can add a network. */
+	tagRow(row) {
+		const sid = row.getAttribute('data-sid');
+		const stat = row.querySelector('[data-name="_stat"]');
 
-		if (!node || !node.tBodies[0])
+		if (!stat)
 			return;
 
-		set(node, 'data-uf-before', table[0]);
-		set(node, 'data-uf-after', table[1]);
-		set(node.tBodies[0], 'data-uf-before', body[0]);
-		set(node.tBodies[0], 'data-uf-after', body[1]);
+		if (row.querySelector('.cbi-section-actions .cbi-button-add')) {
+			attr(row, 'data-uf-row', 'radio');
+
+			for (const list of stat.querySelectorAll(':scope > div > div'))
+				this.tagItems(list);
+
+			if (uci.get('wireless', sid, '.type') == 'wifi-device')
+				this.tagRadio(row, sid);
+
+			/* The chipset, which a phone may not fit. */
+			fade(stat.querySelector(':scope > div > big'));
+		}
+		else {
+			attr(row, 'data-uf-row', 'network');
+
+			for (const list of stat.querySelectorAll(':scope > div'))
+				this.tagItems(list);
+
+			fade(stat.querySelector('[data-uf-key="ssid"]'));
+
+			const networks = L.toArray(uci.get('wireless', sid, 'network')).join(', ');
+
+			prop(row, '--uf-wifi-network', networks ? cssString(networks) : null);
+		}
 	},
 
-	/* A radio row: "Channel 36 · 5 GHz · 80 MHz" for its chip, the channel
-	 * in use if it is up, else the configured one. */
-	tagRadio(row) {
-		const sid = row.getAttribute('data-sid');
-		const badge = row.querySelector('[data-name="_badge"]');
+	/* A radio: "Channel 36 · 5 GHz · 80 MHz" for its chip, the channel in
+	 * use if it is up, else the configured one. */
+	tagRadio(row, sid) {
+		const badge = row.querySelector('[data-name="_badge"] > div');
 
-		if (!badge || uci.get('wireless', sid) == null || uci.get('wireless', sid, '.type') != 'wifi-device')
+		if (!badge)
 			return;
 
 		const live = row.querySelector('[data-uf-key="channel"]')?.lastChild?.textContent.match(/^\s*(\d+)/);
@@ -125,21 +197,44 @@ return baseclass.extend({
 		const width = htmode ? (htmode == 'NOHT' ? 20 : +(htmode.match(/\d+/) || [])[0]) : null;
 		const channel = live ? live[1] : (conf && conf != 'auto' ? conf : _('auto'));
 
-		set(badge, 'data-uf-chip', [
+		attr(badge, 'data-uf-chip', [
 			`${_('Channel')} ${channel}`,
 			BANDS[band] ? `${BANDS[band]} ${_('GHz')}` : null,
 			width ? `${width} ${_('MHz')}` : null
 		].filter(Boolean).join(' · '));
 	},
 
-	/* "866.7 Mbit/s, 80 MHz, VHT-MCS 9, …" shows as its rate; the rest is its title. */
-	tagRate(rate) {
-		if (!rate)
-			return;
+	/* The stations: the rates split into their own column titles; each
+	 * rate ("866.7 Mbit/s, 80 MHz, VHT-MCS 9, …") shows as its figure,
+	 * the rest is its title; Disconnect, drawn as an icon, keeps a name. */
+	tagStations(table) {
+		this.titles(table, {
+			rx: `\u2193 ${_('RX Rate')}`,
+			tx: `\u2191 ${_('TX Rate')}`
+		});
 
-		const text = rate.textContent;
+		for (const br of table.querySelectorAll(':scope > .tr > .td > span > br')) {
+			for (const rate of [ br.previousElementSibling, br.nextElementSibling ]) {
+				if (!rate)
+					continue;
 
-		set(rate, 'data-uf-value', text.split(', ')[0]);
-		set(rate, 'title', text);
+				const text = rate.textContent;
+
+				attr(rate, 'data-uf-value', text.split(', ')[0]);
+				attr(rate, 'title', text);
+			}
+		}
+
+		/* The host and the network it is on. */
+		for (const host of table.querySelectorAll(':scope > .tr:not(.table-titles, .placeholder) > .td:nth-child(3)'))
+			fade(host);
+
+		for (const network of table.querySelectorAll(':scope > .tr > .td:nth-child(1) > .ifacebadge > span'))
+			fade(network);
+
+		for (const button of table.querySelectorAll(':scope > .tr > .td > .cbi-button-remove')) {
+			attr(button, 'title', _('Disconnect'));
+			attr(button, 'aria-label', _('Disconnect'));
+		}
 	}
 });

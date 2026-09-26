@@ -1,31 +1,42 @@
-/* Network > Interfaces as UniFi lists devices: the "list" design
- * (luci.openuf_theme.interfaces=list). One compact row per network and device:
- * a state dot before a bold name with its device in grey after it, then
- * aligned columns, and the row's actions as icons that show when the row
- * is hovered (a click on the row edits it, as a click opens UniFi's
- * device panel). LuCI brings "Label: value" runs instead of columns;
- * view/openuf-theme/network/interfaces-list.js names each run (data-uf-key) and
- * adds the column titles, and without it the rows keep a two-line layout
- * with the labels shown.
+/* Network > Interfaces as UniFi lists clients: the "list" design
+ * (luci.openuf_theme.interfaces=list). One compact row per network and
+ * device: a state dot, a tile in the zone's colour and a bold name with
+ * its device under it (a long one fading out), then aligned columns, and
+ * the row's actions as quiet icons at the end (a click on the name's cell
+ * edits it, as a click opens UniFi's client panel). LuCI brings "Label:
+ * value" runs instead of columns;
+ * view/openuf-theme/network/interfaces-list.js names each run
+ * (data-uf-key) and hands over the column titles (--uf-th-*), the zone,
+ * the state and a few configured values; without it the rows keep a
+ * two-line layout with the labels shown.
  *
  * header.ut links this after cascade.css on this page only; the rules the
  * other network pages share stay in cascade.css ("page: network"). */
 
 :root {
 	/* A zone's tile is its colour washed over the card, as the base washes
-	 * zone badges; thinner on a dark card. */
+	 * zone badges; its dot is shaded towards the text, so pastel zone
+	 * colours still show on white. Thinner and unshaded on a dark card. */
 	--uf-network-zone-wash: .45;
+	--uf-network-zone-shade: 30%;
 
 	--uf-network-i-restart: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='M19.25 12a7.25 7.25 0 1 1-2.1-5.1'/><path d='M19.25 4.5v4.75H14.5'/></svg>");
-	--uf-network-i-stop: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'><rect x='6.75' y='6.75' width='10.5' height='10.5' rx='2'/></svg>");
+	--uf-network-i-stop: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5'><circle cx='12' cy='12' r='8.25'/><rect x='8.75' y='8.75' width='6.5' height='6.5' rx='1.25' fill='black' stroke='none'/></svg>");
 	--uf-network-i-edit: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='M4.75 19.25h3.5L18.6 8.9a2.47 2.47 0 0 0-3.5-3.5L4.75 15.75Z'/><path d='m13.6 6.9 3.5 3.5'/></svg>");
 	--uf-network-i-trash: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='M4.75 6.75h14.5M9.75 6.75v-2h4.5v2M6.75 6.75l.8 12.5h8.9l.8-12.5M10.25 10.5v5M13.75 10.5v5'/></svg>");
+	--uf-network-i-plus: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><path d='M12 5.5v13M5.5 12h13'/></svg>");
 	--uf-network-i-down: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'><path d='M12 4.5v15M6 13.5l6 6 6-6'/></svg>");
 	--uf-network-i-up: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'><path d='M12 19.5v-15M6 10.5l6-6 6 6'/></svg>");
+
+	/* The name column of the wide list. A share of the list rather than
+	 * its content, so the name's click area (see Row actions) can be the
+	 * same width without measuring it. */
+	--uf-network-name-w: max(160px, 16%);
 }
 
 :root[data-darkmode="true"] {
 	--uf-network-zone-wash: .24;
+	--uf-network-zone-shade: 0%;
 }
 
 /* UniFi's download and upload: a figure in cyan or purple after its
@@ -48,13 +59,6 @@
 	mask-image: var(--uf-network-i-up);
 }
 
-/* The signal meter at the size of the text beside it. */
-[data-page="admin-network-network"] img[src*="/icons/signal-"] {
-	width: 20px;
-	height: 20px;
-	vertical-align: middle;
-}
-
 /* Values LuCI marks as unset ("none", "unspecified", "any") are grey, as
  * UniFi's "-" is, not italic. */
 [data-page="admin-network-network"] .cbi-section-table .td.cbi-value-field > em {
@@ -64,30 +68,93 @@
 
 /* Lists
  * -----
- * Interfaces and devices: rows with a hover tint and a
- * faint rule between them, drawn on the row (not its cells, some of which
- * are only containers here). */
+ * Interfaces and Devices: the card's title and its "Add" share the top
+ * line, as UniFi's "Create New" sits beside a list's title; the list runs
+ * full width under them. These lists fit their card, so the card is not
+ * the wide grids' sideways scroller, which would also clip the device
+ * cards that pop up over a row. */
 
-[data-page="admin-network-network"] #cbi-network-interface > .table > .tbody > .tr.cbi-section-table-row:not(.placeholder):hover > .td {
-	background: none;
+[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 14px 16px;
+}
+
+[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device)[data-tab-active="true"] {
+	overflow: visible;
+}
+
+[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) > * {
+	grid-column: 1 / -1;
+	min-width: 0;
+	margin: 0;
+}
+
+/* Nothing scrolls past the title here, so it need not stick. */
+[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) > :not(.table) {
+	position: static;
+}
+
+[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) > h3 {
+	grid-column: 1;
+	grid-row: 1;
+}
+
+[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) > .cbi-section-create {
+	grid-column: 2;
+	grid-row: 1;
+	padding: 0;
+}
+
+/* "Add new interface…": the list's one primary action, solid blue with a
+ * plus. */
+[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) > .cbi-section-create > .cbi-button-add {
+	--uf-btn-fg: var(--uf-on-accent);
+	--uf-btn-bg: var(--uf-blue-fill);
+	--uf-btn-line: var(--uf-blue-fill);
+	padding: 0 14px 0 10px;
+}
+
+[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) > .cbi-section-create > .cbi-button-add:hover {
+	--uf-btn-bg: var(--uf-blue-fill-hover);
+	--uf-btn-line: var(--uf-blue-fill-hover);
+}
+
+[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) > .cbi-section-create > .cbi-button-add::before {
+	content: "";
+	flex: 0 0 auto;
+	width: 16px;
+	height: 16px;
+	background: currentColor;
+	-webkit-mask: var(--uf-network-i-plus) center / contain no-repeat;
+	mask: var(--uf-network-i-plus) center / contain no-repeat;
+}
+
+/* Rows with a hover tint and a faint rule above each, drawn by the row
+ * (a shadow: its cells are only containers in the wide list, and its
+ * ::before and ::after carry the column titles there). */
+[data-page="admin-network-network"] #cbi-network-interface > .table,
+[data-page="admin-network-network"] #cbi-network-interface > .table > .tbody {
+	display: block;
 }
 
 [data-page="admin-network-network"] #cbi-network-interface > .table > .tbody > .tr.cbi-section-table-row {
 	position: relative;
 	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
 	align-items: center;
-	column-gap: 16px;
+	gap: 2px 16px;
 	padding: 7px 8px;
 	border-radius: var(--uf-radius-sm);
 }
 
-[data-page="admin-network-network"] #cbi-network-interface > .table > .tbody > .tr.cbi-section-table-row + .tr::before {
-	content: "";
-	position: absolute;
-	inset: -1px 0 auto;
-	height: 1px;
-	background: var(--uf-divider);
-	pointer-events: none;
+[data-page="admin-network-network"] #cbi-network-interface > .table > .tbody > .tr.cbi-section-table-row + .tr {
+	box-shadow: 0 -1px 0 var(--uf-divider);
+}
+
+[data-page="admin-network-network"] #cbi-network-interface > .table > .tbody > .tr.cbi-section-table-row:not(.placeholder):hover > .td {
+	background: none;
 }
 
 /* No hover tint on a phone, where a touch would leave it on a row. */
@@ -97,25 +164,31 @@
 	}
 }
 
-/* Cells: the row has the padding and the rule. Kept weak, so each cell's
- * own rule below sets its inset. */
+/* Cells: the row has the padding and the rule. */
 [data-page="admin-network-network"] #cbi-network-interface .tr > .td {
 	min-width: 0;
 	padding: 0;
 	border: 0;
 }
 
-/* Row actions: UniFi's quiet icons, the label kept for screen readers and
- * LuCI's title as the tip. They show while the row is hovered or holds
- * the focus; on touch screens and phones, always. */
+/* Row actions
+ * -----------
+ * UniFi's quiet icons, always shown: grey, blue when hovered to restart
+ * or edit, red to stop or delete. The label stays the button's accessible
+ * name and LuCI's title its tip. Not the base's pinned action cell: these
+ * lists fit their card. */
+
 [data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .tr > .td.cbi-section-actions {
+	position: static;
 	width: auto !important; /* over LuCI's inline width, measured for text buttons */
 	min-width: 0 !important;
+	background: none;
+	box-shadow: none;
+	animation: none;
 }
 
 [data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .tr > .td.cbi-section-actions > div {
 	gap: 2px;
-	transition: opacity .12s;
 }
 
 [data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .tr > .td.cbi-section-actions .cbi-button {
@@ -123,7 +196,7 @@
 	--uf-btn-bg: transparent;
 	--uf-btn-line: transparent;
 	flex: 0 0 auto;
-	width: 30px;
+	width: 28px;
 	height: 30px;
 	padding: 0;
 	font-size: 0;
@@ -143,19 +216,24 @@
 	--uf-btn-bg: var(--uf-border-strong);
 }
 
-[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .tr > .td.cbi-section-actions :is(.cbi-button-edit, .cbi-button-action, .cbi-button-add):not([disabled]):hover {
+[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .tr > .td.cbi-section-actions :is(.cbi-button-edit, .reconnect):not([disabled]):hover {
 	--uf-btn-fg: var(--uf-blue);
 	--uf-btn-bg: var(--uf-blue-soft);
 }
 
-[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .tr > .td.cbi-section-actions :is(.cbi-button-remove, .cbi-button-negative):not([disabled]):hover {
+[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .tr > .td.cbi-section-actions :is(.cbi-button-remove, .down):not([disabled]):hover {
 	--uf-btn-fg: var(--uf-red-text);
 	--uf-btn-bg: rgba(var(--uf-red-rgb), .1);
 }
 
 /* Busy (Restart, Stop): the base's spinner in place of the icon. */
-[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .tr > .td.cbi-section-actions .cbi-button.spinning::before {
+[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .tr > .td.cbi-section-actions .cbi-button.spinning {
 	--uf-network-icon: var(--uf-i-spinner);
+	padding-left: 0 !important; /* over .spinning's room for its spinner */
+}
+
+[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .tr > .td.cbi-section-actions .cbi-button.spinning::before {
+	position: static;
 	background: var(--uf-blue);
 }
 
@@ -167,47 +245,36 @@
 
 [data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .cbi-section-actions .cbi-button-remove { --uf-network-icon: var(--uf-network-i-trash); }
 
-@media (hover: hover) and (min-width: 641px) {
-	[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .tr:not(:hover, :focus-within, :has(.spinning)) > .td.cbi-section-actions > div {
-		opacity: 0;
-	}
-
-	/* A click anywhere on the row edits it: the Edit button's hit area
-	 * covers the row, under the other buttons, links and the device's
-	 * tip. Its cell is not the base's sticky one, which would hold it. */
-	[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .tr.cbi-section-table-row:has(.cbi-button-edit:enabled) {
-		position: relative;
-		cursor: pointer;
-	}
-
-	[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .tr > .td.cbi-section-actions {
-		position: static;
-		z-index: auto; /* a grid item keeps the base's, and would lift the hit area */
-		background: none;
-		box-shadow: none;
-		animation: none;
-	}
-
-	/* The devices' table tints its cells, the actions' too. */
-	[data-page="admin-network-network"] #cbi-network-device .tr.cbi-section-table-row:hover > .td.cbi-section-actions {
-		background: var(--uf-hover);
-	}
-
-	[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .cbi-section-actions .cbi-button-edit:enabled::after {
+/* A click on a network's name or tile edits it, as the Edit button: its
+ * hit area covers the name's part of the row, under the tile's device
+ * card. The rest of the row stays plain text, to select and copy. Where
+ * the columns show, that part is the name column; above it, the name's
+ * two lines beside the actions. */
+@media (hover: hover) {
+	[data-page="admin-network-network"] #cbi-network-interface .cbi-section-actions .cbi-button-edit:enabled::after {
 		content: "";
 		position: absolute;
-		inset: 0;
-		border-radius: inherit;
+		top: 0;
+		left: 0;
+		width: calc(100% - 150px);
+		height: 47px; /* the row's padding and the name's two lines */
+		border-radius: var(--uf-radius-sm) 0 0 var(--uf-radius-sm);
 	}
 
 	/* Pressed, the base nudges a button down; a transform would make the
 	 * button hold its hit area, and the click would miss. */
-	[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .cbi-section-actions .cbi-button-edit:active {
+	[data-page="admin-network-network"] #cbi-network-interface .cbi-section-actions .cbi-button-edit:active {
 		transform: none;
 	}
 
-	[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .cbi-section-actions .cbi-button:not(.cbi-button-edit),
-	[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .tr :is(.cbi-tooltip-container, a) {
+	[data-page="admin-network-network"] #cbi-network-interface .ifacebox .cbi-tooltip-container {
+		z-index: 1;
+	}
+
+	/* A name too long for its column is over the hit area, so a hover
+	 * slides it into view (and a click on it does not edit); one that
+	 * fits stays under it. */
+	[data-page="admin-network-network"] #cbi-network-interface .ifacebox [data-uf-fade="over"] {
 		position: relative;
 		z-index: 1;
 	}
@@ -216,13 +283,14 @@
 /* Interfaces
  * ----------
  * Name: the state dot, a tile in the zone's colour with the device's
- * icon (UniFi's client thumbnail), the network's name and its device.
- * LuCI tells the state only through the buttons: Stop is disabled while
- * the network is down, Restart while changes wait to be applied. */
+ * icon (UniFi's client thumbnail), the network's name and, under it, its
+ * device and a bridge's ports. */
 
 [data-page="admin-network-network"] #cbi-network-interface .ifacebox {
+	position: relative;
 	display: grid;
-	grid-template-columns: 8px 28px minmax(0, max-content) minmax(0, max-content) minmax(0, max-content);
+	grid-template-columns: 8px 28px minmax(0, 1fr);
+	grid-template-rows: auto auto;
 	align-items: center;
 	column-gap: 10px;
 	min-width: 0;
@@ -234,16 +302,15 @@
 	overflow: visible;
 	line-height: 20px;
 	text-align: left;
-	white-space: nowrap;
 }
 
-[data-page="admin-network-network"] #cbi-network-interface .ifacebox > :is(.ifacebox-head, .ifacebox-body) {
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox > .ifacebox-head {
 	display: contents;
 }
 
 [data-page="admin-network-network"] #cbi-network-interface .ifacebox-head::before {
 	content: "";
-	grid-area: 1 / 1;
+	grid-area: 1 / 1 / 3 / 2;
 	width: 8px;
 	height: 8px;
 	border-radius: 50%;
@@ -253,65 +320,85 @@
 /* The zone's tile. LuCI gives the colour inline, on the head. */
 [data-page="admin-network-network"] #cbi-network-interface .ifacebox-head::after {
 	content: "";
-	grid-area: 1 / 2;
+	grid-area: 1 / 2 / 3 / 3;
 	width: 28px;
 	height: 28px;
 	border-radius: 6px;
 	background: rgba(var(--zone-color-rgb, 238, 238, 238), var(--uf-network-zone-wash));
 }
 
+/* A long name fades out at its end, and slides into view when hovered
+ * (the script marks it: cascade.css, "Fading names"). */
 [data-page="admin-network-network"] #cbi-network-interface .ifacebox-head > strong {
 	grid-area: 1 / 3;
 	min-width: 0;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
 	color: var(--uf-text-1);
 	font-weight: 600;
 }
 
-[data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > .cbi-tooltip-container {
-	grid-area: 1 / 2;
-	justify-self: center;
+/* The device, with a bridge's ports after it. */
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox > .ifacebox-body {
+	grid-area: 2 / 3;
 	display: flex;
+	align-items: center;
+	gap: 0 8px;
+	min-width: 0;
+	padding: 0;
+	color: var(--uf-text-3);
+	font-size: 13px;
+	line-height: 20px;
 }
 
-[data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > .cbi-tooltip-container > img {
+/* The device's icon, in the tile. */
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > .cbi-tooltip-container:first-child {
+	position: absolute;
+	top: 50%;
+	left: 23px;
+	display: flex;
+	margin-top: -9px;
+}
+
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > .cbi-tooltip-container:first-child > img {
 	width: 18px;
 	height: 18px;
 	--uf-device-color: var(--uf-text-1);
 }
 
-[data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > .cbi-tooltip-container > img[src*="_disabled."] {
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > .cbi-tooltip-container:first-child > img[src*="_disabled."] {
 	--uf-device-color: var(--uf-text-3);
+}
+
+/* Its device card opens under the tile, not over the name. */
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > .cbi-tooltip-container:first-child > .cbi-tooltip {
+	top: 28px;
 }
 
 [data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > br {
 	display: none;
 }
 
+/* The device fades as the name does, the ports kept whole after it. */
 [data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > small {
-	grid-area: 1 / 4;
+	flex: 0 1 auto;
+	order: 1;
 	min-width: 0;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	color: var(--uf-text-3);
-	font-size: 13px;
+	font-size: inherit;
 }
 
 [data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > small > em {
 	font-style: normal;
 }
 
-/* A bridge's ports, after its name: small, quiet icons. */
+/* A bridge's ports: small port glyphs, without LuCI's brackets, each
+ * with its own device card. */
 [data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > span:not(.cbi-tooltip-container) {
-	grid-area: 1 / 5;
+	flex: none;
+	order: 2;
 	display: inline-flex;
 	align-items: center;
 	gap: 2px;
-	color: var(--uf-text-4);
-	font-size: 12px;
+	font-size: 0;
+	line-height: 0;
 }
 
 [data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > span:not(.cbi-tooltip-container) img {
@@ -319,36 +406,49 @@
 	height: 14px;
 }
 
-/* State: green while up, orange while changes wait (the status then links
- * to them), red with an error, grey otherwise. */
-[data-page="admin-network-network"] #cbi-network-interface .tr:has(.cbi-section-actions .reconnect:enabled):has(.cbi-section-actions .down:enabled) {
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > span:not(.cbi-tooltip-container) > .cbi-tooltip-container {
+	position: relative;
+	display: inline-flex;
+}
+
+[data-page="admin-network-network"] #cbi-network-interface .ifacebox-body > span:not(.cbi-tooltip-container) .cbi-tooltip {
+	top: 20px;
+	font-size: 12px;
+	line-height: 17px;
+}
+
+/* State: green while up, orange while it comes up or changes wait, red
+ * with an error, grey otherwise. From the script; without it, LuCI's
+ * buttons tell up (both enabled) and coming up (Restart disabled). */
+[data-page="admin-network-network"] #cbi-network-interface .tr:not([data-uf-state]):has(.cbi-section-actions .reconnect:enabled):has(.cbi-section-actions .down:enabled),
+[data-page="admin-network-network"] #cbi-network-interface .tr[data-uf-state="up"] {
 	--uf-network-state: var(--uf-green);
 }
 
-[data-page="admin-network-network"] #cbi-network-interface .tr:has([data-uf-key="error"]) {
-	--uf-network-state: var(--uf-red);
-}
-
-[data-page="admin-network-network"] #cbi-network-interface .tr:has(.cbi-section-actions .reconnect:disabled):has(.cbi-section-actions .down:enabled),
-[data-page="admin-network-network"] #cbi-network-interface .tr:has(> [data-name="_ifacestat"] > div > .nowrap > a:first-child) {
+[data-page="admin-network-network"] #cbi-network-interface .tr:not([data-uf-state]):has(.cbi-section-actions .reconnect:disabled):has(.cbi-section-actions .down:enabled),
+[data-page="admin-network-network"] #cbi-network-interface .tr:is([data-uf-state="busy"], [data-uf-state="pending"]) {
 	--uf-network-state: var(--uf-orange);
 }
 
-/* The row: name and actions on the first line, the status under the
- * name. The columns below replace this where the card is wide enough. */
-[data-page="admin-network-network"] #cbi-network-interface > .table {
-	display: block;
+[data-page="admin-network-network"] #cbi-network-interface .tr[data-uf-state="error"] {
+	--uf-network-state: var(--uf-red);
 }
 
-[data-page="admin-network-network"] #cbi-network-interface > .table > .tbody {
-	display: block;
+/* Down or disabled: the row reads grey, as UniFi's offline clients do;
+ * so does traffic that has not moved. */
+[data-page="admin-network-network"] #cbi-network-interface .tr:is([data-uf-state="down"], [data-uf-state="disabled"]) .ifacebox-head > strong,
+[data-page="admin-network-network"] #cbi-network-interface .tr:is([data-uf-state="down"], [data-uf-state="disabled"]) [data-name="_ifacestat"] > div > *,
+[data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] [data-uf-idle] {
+	color: var(--uf-text-3);
 }
 
-[data-page="admin-network-network"] #cbi-network-interface > .table > .tbody > .tr.cbi-section-table-row {
-	grid-template-columns: minmax(0, 1fr) auto;
-	row-gap: 2px;
+[data-page="admin-network-network"] #cbi-network-interface .tr[data-uf-state="disabled"] .ifacebox-head::after {
+	opacity: .6;
 }
 
+/* The status: protocol, zone and addresses on a line, then the state and
+ * the traffic, under the name. The columns below replace this where the
+ * card is wide enough. The items are the cell's own flex line. */
 [data-page="admin-network-network"] #cbi-network-interface .tr > [data-name="_ifacebox"] {
 	grid-area: 1 / 1;
 }
@@ -359,15 +459,17 @@
 
 [data-page="admin-network-network"] #cbi-network-interface .tr > [data-name="_ifacestat"] {
 	grid-area: 2 / 1 / 3 / 3;
-	padding-left: 46px;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0 14px;
+	padding-left: 56px;
+	color: var(--uf-text-2);
+	line-height: 20px;
 }
 
 [data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] > div {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 0 16px;
-	color: var(--uf-text-2);
-	line-height: 20px;
+	display: contents;
 }
 
 [data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] > div > br {
@@ -375,11 +477,10 @@
 }
 
 [data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] .nowrap {
+	min-width: 0;
 	white-space: nowrap;
 }
 
-/* Named, the items read as the columns do: protocol, address, status,
- * then the traffic. */
 [data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] > div > * {
 	order: 3;
 }
@@ -400,12 +501,44 @@
 	order: 5;
 }
 
-/* A line break after the protocol and addresses: the status and the
- * traffic read together on the next line. */
-[data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] > div:has(> [data-uf-key])::after {
+/* The zone, before the protocol: its colour's dot and its name. */
+[data-page="admin-network-network"] #cbi-network-interface .tr[style*="--uf-network-zone-rgb"] > [data-name="_ifacestat"]::before {
+	content: var(--uf-network-zone);
+	order: 1;
+}
+
+/* A line break before the state: it and the traffic read together. */
+[data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"]:has([data-uf-key])::after {
 	content: "";
-	flex-basis: 100%;
 	order: 2;
+	flex-basis: 100%;
+}
+
+/* The state (the uptime, an error, or the script's word): as wide as it
+ * needs where there is room, narrower (and wrapped) where there is not,
+ * so the traffic after it never breaks away onto a line of its own. */
+[data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] > div > :is([data-uf-key="uptime"], [data-uf-key="error"], [data-uf-key="noboot"], [data-uf-key="note"], [data-uf-key="other"], [data-uf-key="info"]),
+[data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] > div[data-uf-state-label]::before {
+	flex: 1 1 0;
+	max-width: max-content;
+	white-space: normal;
+}
+
+[data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] > div[data-uf-state-label]::before {
+	content: attr(data-uf-state-label);
+	order: 3;
+	min-width: 0;
+	color: var(--uf-text-3);
+}
+
+/* A static network's configured addresses while it is down, grey where
+ * the live ones would be. */
+[data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] > div[data-uf-address]::after {
+	content: attr(data-uf-address);
+	order: 2;
+	color: var(--uf-text-3);
+	white-space: pre-line;
+	font-variant-numeric: tabular-nums;
 }
 
 [data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] .nowrap > strong {
@@ -413,22 +546,22 @@
 	font-weight: 400;
 }
 
-/* "Interface is starting…", "Interface disabled": UniFi's grey status. */
+/* "Interface is starting…", "Not started on boot": UniFi's grey status. */
 [data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] em,
-[data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] [data-uf-key="info"] {
+[data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] :is([data-uf-key="info"], [data-uf-key="noboot"]) {
 	font-style: normal;
 	color: var(--uf-text-3);
 }
 
 [data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] [data-uf-key="error"] {
 	color: var(--uf-red-text);
-	white-space: normal;
 }
 
 /* With the items named: the values speak for themselves, so their labels
- * go; carrier and MAC stay in the device's tip and the dialog. */
+ * go; carrier and MAC stay in the device's card and the dialog, and the
+ * script's "Disabled" stands for "Interface disabled". */
 [data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] [data-uf-key]:not([data-uf-key="other"]) > strong,
-[data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] :is([data-uf-key="carrier"], [data-uf-key="mac"], [data-uf-key="device"]) {
+[data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] :is([data-uf-key="carrier"], [data-uf-key="mac"], [data-uf-key="device"], [data-uf-key="disabled"]) {
 	display: none;
 }
 
@@ -459,134 +592,219 @@
 	font-variant-numeric: tabular-nums;
 }
 
-/* Down: the row reads grey, as UniFi's offline clients do; so does
- * traffic that has not moved. */
-[data-page="admin-network-network"] #cbi-network-interface .tr:has(.cbi-section-actions .down:disabled) :is(.ifacebox-head > strong, [data-name="_ifacestat"] > div, [data-name="_ifacestat"] [data-uf-key^="ipv"]),
-[data-page="admin-network-network"] #cbi-network-interface .tr:has(.cbi-section-actions .down:disabled) [data-name="_ifacestat"] :is([data-uf-key="rx"], [data-uf-key="tx"]),
-[data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] [data-uf-idle] {
+[data-page="admin-network-network"] #cbi-network-interface .tr:is([data-uf-state="down"], [data-uf-state="disabled"]) [data-name="_ifacestat"] :is([data-uf-key="rx"], [data-uf-key="tx"]) {
 	color: var(--uf-text-3);
 }
 
-/* Columns, where the card has room for them: name, protocol, address,
- * status (the uptime, or why it is down), received and sent, then the
- * actions, under titles the script supplies as the ::before and ::after
- * of the table and its body. Each row is a subgrid of the table, so the
- * columns line up down the list; they size to their content and share
- * what is left, as a table's do, the name first to its full length. */
+/* The zone: a dot in its colour, shaded as a chip's, and its name. */
+[data-page="admin-network-network"] #cbi-network-interface .tr > [data-name="_ifacebox"]::after,
+[data-page="admin-network-network"] #cbi-network-interface .tr > [data-name="_ifacestat"]::before {
+	padding-left: 14px;
+	background: radial-gradient(circle at 4px 50%, color-mix(in srgb, rgb(var(--uf-network-zone-rgb)), var(--uf-text-1) var(--uf-network-zone-shade)) 3.5px, transparent 4px) no-repeat;
+	color: var(--uf-text-2);
+	font-size: 13px;
+	line-height: 20px;
+	white-space: nowrap;
+}
+
+/* Columns, where the card has room for them: name, zone, protocol,
+ * address, status (the uptime, or why it is down), received and sent,
+ * then the actions, under the titles the script supplies. Each row is a
+ * subgrid of the table, so the columns line up down the list; the name
+ * takes a share of the width, the others size to their content and
+ * share what is left. A value sits on the name's line; a second address
+ * or a long error runs on under it. */
 [data-page="admin-network-network"] #cbi-network-interface {
 	container: uf-ifaces / inline-size;
 }
 
-@container uf-ifaces (min-width: 780px) {
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] {
+@container uf-ifaces (min-width: 920px) {
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] > .table {
 		display: grid;
 		grid-template-columns:
-			[name] minmax(224px, auto)
-			[protocol] minmax(96px, auto)
-			[address] minmax(min-content, auto)
-			[status] minmax(100px, auto)
-			[rx] minmax(min-content, auto)
-			[tx] minmax(min-content, auto)
+			[name] var(--uf-network-name-w)
+			[zone] minmax(44px, .5fr)
+			[protocol] minmax(90px, 1fr)
+			[address] minmax(min-content, 1fr)
+			[status] minmax(170px, 2fr)
+			[rx] minmax(max-content, .5fr)
+			[tx] minmax(max-content, .5fr)
 			[actions] max-content;
-		column-gap: 16px;
+		column-gap: 10px;
 	}
 
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] > .tbody {
+	/* The room the titles stand in. */
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] > .table:has(> .tbody > .tr:first-child[data-sid]) {
+		padding-top: 30px;
+	}
+
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] > .table > .tbody {
 		display: contents;
 	}
 
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before]::before,
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before]::after,
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] > .tbody::before,
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] > .tbody::after {
-		grid-row: 1;
-		padding: 0 0 8px;
-		color: var(--uf-text-1);
-		font-weight: 600;
-		white-space: nowrap;
-	}
-
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before]::before {
-		content: attr(data-uf-before);
-		grid-column: protocol;
-	}
-
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before]::after {
-		content: attr(data-uf-after);
-		grid-column: address;
-	}
-
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] > .tbody::before {
-		content: attr(data-uf-before);
-		grid-column: status;
-	}
-
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] > .tbody::after {
-		content: attr(data-uf-after);
-		grid-column: rx / actions;
-	}
-
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] > .tbody > .tr.cbi-section-table-row {
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] > .table > .tbody > .tr.cbi-section-table-row {
 		grid-column: 1 / -1;
 		grid-template-columns: subgrid;
 		grid-auto-flow: row dense;
+		align-items: start;
 		row-gap: 0;
 	}
 
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] > .table > .tbody > .tr.placeholder > .td {
+		grid-column: 1 / -1;
+	}
+
 	/* The rule under the titles, across every column. */
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] > .tbody > .tr:first-child::before {
-		content: "";
-		position: absolute;
-		inset: -1px 0 auto;
-		height: 1px;
-		background: var(--uf-border);
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] > .table > .tbody > .tr:first-child {
+		box-shadow: 0 -1px 0 var(--uf-border);
 	}
 
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] .tr > [data-name="_ifacebox"] {
-		grid-area: 1 / name;
-	}
-
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] .tr > .cbi-section-actions {
-		grid-area: 1 / actions;
-	}
-
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] .tr > [data-name="_ifacestat"],
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] [data-name="_ifacestat"] > div {
+	/* The cells step aside for what they hold. */
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr > :is([data-name="_ifacebox"], [data-name="_ifacestat"], .cbi-section-actions),
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] [data-name="_ifacestat"] > div {
 		display: contents;
 	}
 
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] [data-name="_ifacestat"] > div::after {
-		display: none;
+	/* The actions beside the name's two lines, the tile's middle. */
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr > [data-name="_ifacebox"] > .ifacebox {
+		grid-column: name;
+		grid-row: 1 / span 2;
+	}
+
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr > .cbi-section-actions > div {
+		grid-column: actions;
+		grid-row: 1 / span 2;
+		margin-top: 5px;
+	}
+
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] [data-name="_ifacestat"]::after {
+		content: none;
 	}
 
 	/* Anything unnamed (a message, a pending-changes link) is status. */
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] [data-name="_ifacestat"] > div > * {
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] [data-name="_ifacestat"] > div > *,
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] [data-name="_ifacestat"] > div[data-uf-state-label]::before {
 		grid-column: status;
 		min-width: 0;
+		max-width: none;
 		white-space: normal;
 		overflow-wrap: anywhere;
 	}
 
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] [data-name="_ifacestat"] > div > [data-uf-key="protocol"] {
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] [data-name="_ifacestat"] > div > [data-uf-key="protocol"] {
 		grid-column: protocol;
 	}
 
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] [data-name="_ifacestat"] > div > :is([data-uf-key="ipv4"], [data-uf-key="ipv6"], [data-uf-key="ipv6-pd"]) {
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] [data-name="_ifacestat"] > div > :is([data-uf-key="ipv4"], [data-uf-key="ipv6"], [data-uf-key="ipv6-pd"]),
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] [data-name="_ifacestat"] > div[data-uf-address]::after {
 		grid-column: address;
 	}
 
 	/* An IPv4 address stays whole; an IPv6 one may break (it would
 	 * otherwise hold its column at its full length). */
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] [data-name="_ifacestat"] > div > [data-uf-key="ipv4"] {
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] [data-name="_ifacestat"] > div > [data-uf-key="ipv4"] {
 		white-space: nowrap;
 	}
 
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] [data-name="_ifacestat"] > div > :is([data-uf-key="rx"], [data-uf-key="tx"]) {
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] [data-name="_ifacestat"] > div > :is([data-uf-key="rx"], [data-uf-key="tx"]) {
 		grid-column: rx;
 		white-space: nowrap;
 	}
 
-	[data-page="admin-network-network"] #cbi-network-interface > .table[data-uf-before] [data-name="_ifacestat"] > div > [data-uf-key="tx"] {
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] [data-name="_ifacestat"] > div > [data-uf-key="tx"] {
+		grid-column: tx;
+	}
+
+	/* The zone, in its column; "–" where there is none. */
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr > [data-name="_ifacestat"]::before {
+		content: none;
+	}
+
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr > [data-name="_ifacebox"]::after {
+		content: var(--uf-network-zone, none);
+		grid-column: zone;
+		grid-row: 1;
+		min-width: 0;
+		overflow: hidden;
+		/* A zone longer than its column fades at the column's end, as the
+		 * names do (they are measured; this is not, so it only rests). */
+		-webkit-mask-image: linear-gradient(to left, transparent, black 16px);
+		mask-image: linear-gradient(to left, transparent, black 16px);
+	}
+
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr:not([style*="--uf-network-zone-rgb"]) > [data-name="_ifacebox"]::after {
+		content: "\2013";
+		padding-left: 0;
+		color: var(--uf-text-4);
+	}
+
+	/* The click area is the name column. */
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .cbi-section-actions .cbi-button-edit:enabled::after {
+		width: var(--uf-network-name-w);
+		height: auto;
+		bottom: 0;
+	}
+
+	/* Column titles, over the first row, one per column: LuCI gives this
+	 * list none, so the first row carries them above itself (in the
+	 * table's top padding), on the pseudo-elements its cells leave free. */
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr:first-child[data-sid]::before,
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr:first-child[data-sid]::after,
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr:first-child[data-sid] > [data-name="_ifacebox"]::before,
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr:first-child[data-sid] > [data-name="_ifacestat"]::before,
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr:first-child[data-sid] > [data-name="_ifacestat"]::after,
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr:first-child[data-sid] > .cbi-section-actions::before,
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr:first-child[data-sid] > .cbi-section-actions::after {
+		position: absolute;
+		bottom: 100%;
+		left: 0;
+		right: 0;
+		order: 0;
+		margin-bottom: 8px;
+		padding: 0;
+		background: none;
+		overflow: hidden;
+		color: var(--uf-text-1);
+		font-size: 13px;
+		font-weight: 600;
+		line-height: 20px;
+		text-align: left;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr:first-child[data-sid]::before {
+		content: var(--uf-th-name, none);
+		grid-column: name;
+	}
+
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr:first-child[data-sid]::after {
+		content: var(--uf-th-zone, none);
+		grid-column: zone;
+	}
+
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr:first-child[data-sid] > [data-name="_ifacebox"]::before {
+		content: var(--uf-th-protocol, none);
+		grid-column: protocol;
+	}
+
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr:first-child[data-sid] > [data-name="_ifacestat"]::before {
+		content: var(--uf-th-address, none);
+		grid-column: address;
+	}
+
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr:first-child[data-sid] > [data-name="_ifacestat"]::after {
+		content: var(--uf-th-status, none);
+		grid-column: status;
+	}
+
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr:first-child[data-sid] > .cbi-section-actions::before {
+		content: var(--uf-th-rx, none);
+		grid-column: rx;
+	}
+
+	[data-page="admin-network-network"] #cbi-network-interface[style*="--uf-th-name"] .tr:first-child[data-sid] > .cbi-section-actions::after {
+		content: var(--uf-th-tx, none);
 		grid-column: tx;
 	}
 }
@@ -728,11 +946,12 @@
 	font-weight: 400;
 }
 
-/* Dialogs' status
- * ---------------
- * The block at the top of the interface dialog is UniFi's
- * device panel: the icon in a tile, then its facts
- * as label/value rows, two to a line where there is room. */
+/* Dialog status
+ * -------------
+ * The block at the top of the interface dialog, as the Status overview's
+ * cards: the device's icon in a tile, then label/value pairs, the value
+ * at the right and a hairline under each pair, two pairs to a line where
+ * there is room. */
 
 [data-page="admin-network-network"] .modal .ifacebadge.large {
 	display: flex;
@@ -740,7 +959,8 @@
 	gap: 14px;
 	width: 100%;
 	max-width: 100%;
-	padding: 12px 14px;
+	min-width: 0;
+	padding: 8px 16px 10px 14px;
 	background: var(--uf-field);
 	border: 0;
 	border-radius: var(--uf-radius);
@@ -752,26 +972,23 @@
 
 [data-page="admin-network-network"] .modal .ifacebadge.large > img {
 	flex: 0 0 auto;
-	box-sizing: content-box;
 	width: 22px;
 	height: 22px;
-	padding: 9px;
-	border-radius: var(--uf-radius);
+	margin: 7px 4px 0 2px;
 	--uf-device-color: var(--uf-text-1);
 }
 
-/* Two pairs to a line where there is room. A flex line, not a grid: the
- * wireless one has bare " | " between its items, which has no font and
- * so no size here, where a grid would give it a cell. */
+[data-page="admin-network-network"] .modal .ifacebadge.large > img[src*="_disabled."] {
+	--uf-device-color: var(--uf-text-3);
+}
+
 [data-page="admin-network-network"] .modal [id$="-ifc-status"].ifacebadge > span {
-	display: flex;
-	flex-wrap: wrap;
 	flex: 1 1 auto;
-	gap: 2px 0;
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+	gap: 0 28px;
 	min-width: 0;
-	color: var(--uf-text-3);
-	font-size: 0;
-	line-height: 0;
+	font-size: 0; /* any bare text between the facts */
 }
 
 [data-page="admin-network-network"] .modal [id$="-ifc-status"].ifacebadge > span > br {
@@ -780,30 +997,39 @@
 
 [data-page="admin-network-network"] .modal [id$="-ifc-status"].ifacebadge > span > :is(.nowrap, em) {
 	display: flex;
-	flex: 1 1 calc(50% - 24px);
-	gap: 8px;
-	min-width: 220px;
-	margin-right: 24px;
+	align-items: baseline;
+	gap: 12px;
+	min-width: 0;
+	padding: 6px 0;
+	border-bottom: 1px solid var(--uf-border);
 	color: var(--uf-text-1);
 	font-size: 13px;
+	font-style: normal;
 	line-height: 20px;
 	white-space: normal;
+	text-align: right;
 	overflow-wrap: anywhere;
+	font-variant-numeric: tabular-nums;
 }
 
+/* The label at the left; the value (and a figure's arrow) at the right. */
 [data-page="admin-network-network"] .modal [id$="-ifc-status"].ifacebadge > span > .nowrap > strong {
-	flex: 0 0 88px;
+	flex: none;
+	order: -1;
+	margin-right: auto;
 	color: var(--uf-text-3);
 	font-weight: 400;
+	text-align: left;
 }
 
 [data-page="admin-network-network"] .modal [id$="-ifc-status"].ifacebadge > span > :is(.nowrap:not(:has(> strong)), em) {
-	flex-basis: 100%;
-	font-style: normal;
+	grid-column: 1 / -1;
+	border-bottom: 0;
 	color: var(--uf-text-3);
+	text-align: left;
 }
 
-/* Traffic in the dialog: the arrow before the figure, in its colour. */
+/* Traffic: the arrow beside its figure, in its colour. */
 [data-page="admin-network-network"] .modal [id$="-ifc-status"] > span > .nowrap[data-uf-key="rx"] {
 	color: var(--uf-cyan-text);
 }
@@ -813,55 +1039,19 @@
 }
 
 [data-page="admin-network-network"] .modal [id$="-ifc-status"] > span > :is([data-uf-key="rx"], [data-uf-key="tx"])::before {
-	margin-top: 4px;
+	align-self: center;
+	margin-right: -8px; /* the arrow to its figure: 4px, not the pair's gap */
 }
 
-[data-page="admin-network-network"] .modal [id$="-ifc-status"] > span > :is([data-uf-key="rx"], [data-uf-key="tx"]) > strong {
-	order: -1;
-}
-
-/* Signal badges: the meter beside the reading ("-48/-95 dBm"), or above
- * it where LuCI wraps it (scan results, the dialog's status). */
-[data-page="admin-network-network"] .ifacebadge[data-signal],
-[data-page="admin-network-network"] .center[data-signal] {
-	color: var(--uf-text-2);
-	font-variant-numeric: tabular-nums;
-	white-space: nowrap;
-}
-
-[data-page="admin-network-network"] .ifacebadge[data-signal] {
-	display: inline-flex;
-	flex-direction: row;
-	align-items: center;
-	gap: 8px;
-	padding: 0;
-	background: none;
-	border: 0;
-	/* Centred on the line, not sat on its baseline by the meter. */
-	vertical-align: middle;
-}
-
-[data-page="admin-network-network"] .center[data-signal] {
-	display: inline-flex;
-	flex-direction: column;
-	align-items: center;
-	gap: 2px;
-	font-size: 12px;
-	line-height: 16px;
-}
-
-[data-page="admin-network-network"] .center[data-signal] br {
-	display: none;
-}
-
-[data-page="admin-network-network"] .center[data-signal] em {
-	font-style: normal;
-	color: var(--uf-text-3);
+/* An error, across the block, in red. */
+[data-page="admin-network-network"] .modal [id$="-ifc-status"].ifacebadge > span > [data-uf-key="error"] {
+	grid-column: 1 / -1;
+	color: var(--uf-red-text);
 }
 
 @media screen and (max-width: 640px) {
-	/* The lists keep their own rows: no stacked cells, no gap between
-	 * rows, and cells that do not clip the device's tip. */
+	/* The list keeps its own rows: no stacked cells, no gap between rows,
+	 * and cells that do not clip the device's card. */
 	[data-page="admin-network-network"] #cbi-network-interface > .table > .tbody > .tr.cbi-section-table-row {
 		margin: 0;
 		padding: 10px 4px;
@@ -872,41 +1062,30 @@
 		overflow: visible;
 	}
 
-	/* The base pads a stacked row's ::before; here it is the rule. */
-	[data-page="admin-network-network"] #cbi-network-interface > .table > .tbody > .tr.cbi-section-table-row::before {
-		padding: 0;
-	}
-
 	[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .tr > .td.cbi-section-actions > div {
 		justify-content: flex-end;
 		gap: 0;
 	}
 
-	/* Always shown here, so as small as a touch allows: the name keeps
-	 * the room. */
+	/* As small as a touch allows: the name keeps the room. */
 	[data-page="admin-network-network"] :is(#cbi-network-interface, #cbi-network-device) .tr > .td.cbi-section-actions .cbi-button {
 		width: 32px;
 		height: 32px;
 	}
 
-	/* Interfaces: the status under the whole row, not indented, which
-	 * would wrap it the sooner. */
+	/* The status under the whole row, not indented, which would wrap it
+	 * the sooner. */
 	[data-page="admin-network-network"] #cbi-network-interface .tr > [data-name="_ifacestat"] {
+		column-gap: 12px;
 		padding-left: 0;
 	}
 
-	[data-page="admin-network-network"] #cbi-network-interface [data-name="_ifacestat"] > div {
-		gap: 0 12px;
+	/* The dialog's status: one pair a line. */
+	[data-page="admin-network-network"] .modal [id$="-ifc-status"].ifacebadge > span {
+		grid-template-columns: minmax(0, 1fr);
 	}
 
-	/* The dialogs' status: one pair a line, a narrower label column. */
-	[data-page="admin-network-network"] .modal [id$="-ifc-status"].ifacebadge > span > :is(.nowrap, em) {
-		min-width: 0;
-		margin-right: 0;
-		flex-basis: 100%;
-	}
-
-	[data-page="admin-network-network"] .modal [id$="-ifc-status"].ifacebadge > span > .nowrap > strong {
-		flex-basis: 72px;
+	[data-page="admin-network-network"] .modal .ifacebadge.large > img {
+		display: none;
 	}
 }
