@@ -6,9 +6,10 @@
 #   sh install.sh root@192.168.1.1      from a workstation, over SSH
 #   sh install.sh --uninstall [TARGET]  remove it again
 #
-# The theme is only files (templates, stylesheet, scripts, an rpcd ACL, a
-# uci-defaults hook), so this does what the package's install and postinst
-# would: unpack the files, register the theme, and drop LuCI's caches.
+# The theme is only files (templates, stylesheets, scripts, a menu entry, an
+# rpcd ACL, a uci-defaults hook), so this does what the package's install
+# and postinst would: unpack the files, register the theme, and drop LuCI's
+# caches.
 #
 # UF_REMOTE_SHELL replaces ssh as the transport. It is run as
 # "$UF_REMOTE_SHELL TARGET sh -c SCRIPT", SCRIPT one argument and the payload
@@ -23,7 +24,7 @@ target=
 for arg in "$@"; do
 	case "$arg" in
 		--uninstall) action=uninstall ;;
-		-h|--help) sed -n '3,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help) sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		-*) echo "unknown option: $arg" >&2; exit 2 ;;
 		*) target=$arg ;;
 	esac
@@ -48,12 +49,14 @@ esac
 uci -q delete luci.themes.UniFi || true
 uci -q delete luci.themes.UniFiDark || true
 uci -q delete luci.themes.UniFiLight || true
+uci -q delete luci.unifi || true
 uci commit luci
 rm -rf /www/luci-static/unifi /www/luci-static/unifi-dark /www/luci-static/unifi-light \
 	/www/luci-static/resources/menu-unifi.js \
 	/www/luci-static/resources/view/unifi \
 	/www/luci-static/resources/view/dashboard/include/25_ports.js \
 	/usr/share/rpcd/acl.d/luci-theme-unifi.json \
+	/usr/share/luci/menu.d/luci-theme-unifi.json \
 	/usr/share/ucode/luci/template/themes/unifi \
 	/usr/share/ucode/luci/template/themes/unifi-dark \
 	/usr/share/ucode/luci/template/themes/unifi-light

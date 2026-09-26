@@ -109,6 +109,9 @@
 					<div class="uf-user-menu" role="menu">
 						<div class="uf-user-name">{{ entityencode(user, true) }}</div>
 						<div class="uf-user-host">{{ striptags(hostname) }}</div>
+						{% if (dispatcher.lookup('admin/system/unifi-theme')): %}
+						<a role="menuitem" href="{{ dispatcher.build_url('admin/system/unifi-theme') }}">{{ _('Theme settings') }}</a>
+						{% endif %}
 						{% if (dispatcher.lookup('admin/system/admin')): %}
 						<a role="menuitem" href="{{ dispatcher.build_url('admin/system/admin') }}">{{ _('Router Password') }}</a>
 						{% endif %}

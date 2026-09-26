@@ -18,9 +18,15 @@
  */
 
 /* Tokens
- * ------ */
+ * ------
+ * .uf-scheme-light and .uf-scheme-dark carry a palette of their own into a
+ * subtree, whatever the page's: the colour scheme previews on System >
+ * UniFi Theme. The dark one takes both blocks, so tokens derived from
+ * others (--uf-blue from --uf-blue-rgb) are derived from its own. */
 
-:root {
+:root,
+.uf-scheme-light,
+.uf-scheme-dark {
 	--uf-font: "UI Sans", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 	--uf-mono: "UI Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 
@@ -172,7 +178,8 @@
  * #5aa2ff for text and lines, so it reads on its own tint inside a dialog;
  * solid fills keep a deeper blue, darker still on hover, so white labels
  * on them stay legible (4.5:1). */
-:root[data-darkmode="true"] {
+:root[data-darkmode="true"],
+.uf-scheme-dark {
 	--uf-blue-rgb: 90, 162, 255;
 	--uf-blue-strong: #7db6ff;
 	--uf-blue-soft: rgba(90, 162, 255, .14);
@@ -10530,3 +10537,176 @@ body[data-page="admin-status-overview"] div[style*="grid-template-columns"] > .i
 }
 
 /* ==== end page: ports ==== */
+
+/* ==== page: unifi-theme ==== */
+/* System > UniFi Theme (view/unifi/settings.js): the theme's own settings.
+ * Each choice is a card, as UniFi offers a layout: a schematic of it (an
+ * SVG the view draws, coloured here by class), its name and a line about
+ * it, the radio beside the name. LuCI's radio widget is underneath. */
+
+/* The schematics' parts, in the page's scheme; a scheme's own preview
+ * takes its palette from .uf-scheme-light or .uf-scheme-dark (Tokens). */
+.uf-choice-preview .uf-pv-card { fill: var(--uf-surface); stroke: var(--uf-border-strong); stroke-width: .75; }
+.uf-choice-preview .uf-pv-canvas { fill: var(--uf-canvas); }
+.uf-choice-preview .uf-pv-bar { fill: var(--uf-topbar); }
+.uf-choice-preview .uf-pv-rail { fill: var(--uf-surface); }
+.uf-choice-preview .uf-pv-text { fill: var(--uf-text-2); }
+.uf-choice-preview .uf-pv-line { fill: var(--uf-border-strong); }
+.uf-choice-preview .uf-pv-rule { fill: var(--uf-border); }
+.uf-choice-preview .uf-pv-icon,
+.uf-choice-preview .uf-pv-muted { fill: var(--uf-text-4); }
+.uf-choice-preview .uf-pv-green { fill: var(--uf-green); }
+.uf-choice-preview .uf-pv-orange { fill: var(--uf-orange); }
+.uf-choice-preview .uf-pv-red { fill: var(--uf-red); }
+.uf-choice-preview .uf-pv-cyan { fill: var(--uf-cyan); }
+.uf-choice-preview .uf-pv-purple { fill: var(--uf-purple); }
+.uf-choice-preview .uf-pv-accent { fill: var(--uf-blue-fill); }
+.uf-choice-preview .uf-pv-chip { fill: var(--uf-border); }
+.uf-choice-preview .uf-pv-chip-off { fill: var(--uf-border-strong); }
+.uf-choice-preview .uf-pv-chip-on,
+.uf-choice-preview .uf-pv-zone { fill: rgba(var(--uf-green-rgb), .35); }
+.uf-choice-preview .uf-pv-tile { fill: rgba(var(--uf-blue-rgb), .2); }
+.uf-choice-preview .uf-pv-tile-alt { fill: rgba(var(--uf-red-rgb), .22); }
+
+/* The title heads the row of cards, not their middle. */
+body[data-page="admin-system-unifi-theme"] .cbi-value:has(.uf-choices) {
+	align-items: flex-start;
+}
+
+/* The cards: as many to a row as fit, the field's full width. */
+body[data-page="admin-system-unifi-theme"] .cbi-value-field > .uf-choices {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+	gap: 12px;
+	max-width: 640px;
+	padding: 4px 0;
+}
+
+body[data-page="admin-system-unifi-theme"] .uf-choices > br {
+	display: none;
+}
+
+/* A card: the schematic on top, the radio and the name under it, then
+ * the line about it. The label LuCI adds for its own radio is empty. */
+body[data-page="admin-system-unifi-theme"] .cbi-value-field > .uf-choices > .cbi-radio {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr);
+	grid-template-rows: auto auto 1fr;
+	align-items: center;
+	gap: 4px 8px;
+	height: auto;
+	min-height: 0;
+	margin: 0;
+	padding: 8px 10px 10px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border-strong);
+	border-radius: var(--uf-radius);
+	transition: border-color .15s, box-shadow .15s;
+}
+
+body[data-page="admin-system-unifi-theme"] .uf-choices > .cbi-radio:hover {
+	border-color: var(--uf-blue-line);
+}
+
+body[data-page="admin-system-unifi-theme"] .uf-choices > .cbi-radio:has(> input:checked) {
+	border-color: var(--uf-blue);
+	box-shadow: 0 0 0 1px var(--uf-blue);
+}
+
+/* The ring goes round the card, not the small radio in it. */
+body[data-page="admin-system-unifi-theme"] .uf-choices > .cbi-radio:has(> input:focus-visible) {
+	outline: 2px solid rgba(var(--uf-blue-rgb), .45);
+	outline-offset: 2px;
+}
+
+body[data-page="admin-system-unifi-theme"] .uf-choices > .cbi-radio > input:focus-visible {
+	outline: none;
+}
+
+body[data-page="admin-system-unifi-theme"] .uf-choices > .cbi-radio > input {
+	grid-area: 2 / 1;
+	margin: 0;
+}
+
+body[data-page="admin-system-unifi-theme"] .uf-choices > .cbi-radio > label {
+	display: none;
+}
+
+/* The view's own nodes lay out on the card's grid. */
+body[data-page="admin-system-unifi-theme"] .uf-choices > .cbi-radio > span,
+body[data-page="admin-system-unifi-theme"] .uf-choices .uf-choice {
+	display: contents;
+}
+
+body[data-page="admin-system-unifi-theme"] .uf-choice-preview {
+	grid-area: 1 / 1 / 2 / 3;
+	display: block;
+	margin-bottom: 4px;
+	padding: 6px;
+	background: var(--uf-canvas);
+	border-radius: var(--uf-radius-sm);
+}
+
+body[data-page="admin-system-unifi-theme"] .uf-choice-preview > svg {
+	display: block;
+	width: 100%;
+	height: auto;
+}
+
+/* A scheme's preview is the page itself, edge to edge. */
+body[data-page="admin-system-unifi-theme"] .cbi-value[data-name="mediaurlbase"] .uf-choice-preview {
+	padding: 0;
+	overflow: hidden;
+	border: 1px solid var(--uf-border);
+}
+
+body[data-page="admin-system-unifi-theme"] .uf-choice-title {
+	grid-area: 2 / 2;
+	color: var(--uf-text-1);
+	font-weight: 600;
+	line-height: 18px;
+}
+
+body[data-page="admin-system-unifi-theme"] .uf-choice-desc {
+	grid-area: 3 / 2;
+	align-self: start;
+	color: var(--uf-text-3);
+	font-size: 12px;
+	line-height: 16px;
+}
+
+/* Narrow screens: one card a line, the schematic beside the words. */
+@media screen and (max-width: 640px) {
+	body[data-page="admin-system-unifi-theme"] .cbi-value-field > .uf-choices {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 8px;
+	}
+
+	body[data-page="admin-system-unifi-theme"] .cbi-value-field > .uf-choices > .cbi-radio {
+		grid-template-columns: 108px auto minmax(0, 1fr);
+		grid-template-rows: auto 1fr;
+		gap: 2px 8px;
+		padding: 8px;
+	}
+
+	body[data-page="admin-system-unifi-theme"] .uf-choice-preview {
+		grid-area: 1 / 1 / 3 / 2;
+		align-self: start;
+		margin: 0 4px 0 0;
+		padding: 4px;
+	}
+
+	body[data-page="admin-system-unifi-theme"] .uf-choices > .cbi-radio > input {
+		grid-area: 1 / 2;
+	}
+
+	body[data-page="admin-system-unifi-theme"] .uf-choice-title {
+		grid-area: 1 / 3;
+	}
+
+	body[data-page="admin-system-unifi-theme"] .uf-choice-desc {
+		grid-area: 2 / 2 / 3 / 4;
+	}
+}
+
+/* ==== end page: unifi-theme ==== */

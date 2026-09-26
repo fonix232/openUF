@@ -14,5 +14,14 @@
 			},
 			"uci": [ "network", "firewall" ]
 		}
+	},
+	"luci-theme-unifi-settings": {
+		"description": "Grant access to the UniFi theme's settings (System > UniFi Theme)",
+		"read": {
+			"uci": [ "luci" ]
+		},
+		"write": {
+			"uci": [ "luci" ]
+		}
 	}
 }

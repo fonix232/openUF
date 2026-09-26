@@ -5,7 +5,8 @@
 #
 # Plain package rules rather than luci.mk, like luci-app-openuf, so this feed
 # builds without the LuCI feed checked out beside it. The theme is files
-# only: templates, a stylesheet, a few scripts and a uci-defaults hook.
+# only: templates, stylesheets, a few scripts, a menu entry, an rpcd ACL and
+# a uci-defaults hook.
 #
 
 include $(TOPDIR)/rules.mk
@@ -87,6 +88,7 @@ esac
 uci -q delete luci.themes.UniFi
 uci -q delete luci.themes.UniFiDark
 uci -q delete luci.themes.UniFiLight
+uci -q delete luci.unifi
 uci commit luci
 rm -f /tmp/luci-indexcache.*
 rm -rf /tmp/luci-modulecache/
