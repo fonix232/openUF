@@ -7,6 +7,7 @@
 // reading as bare text, so what CSS cannot see (a good signal from a poor
 // one, a connected client from a probing one) stays text.
 @use '../abstracts' as *;
+@use '../abstracts/pages-b' as *;
 
 // A list's data row: neither its column titles nor its "no entries" note.
 $row: '.tr:not(.table-titles, .placeholder)';

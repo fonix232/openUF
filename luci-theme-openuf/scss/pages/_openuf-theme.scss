@@ -3,6 +3,7 @@
 // (an SVG the view draws, coloured here by class), its name and a line about
 // it, the radio beside the name. LuCI's radio widget is underneath.
 @use '../abstracts' as *;
+@use '../abstracts/pages-b' as *;
 
 // The schematics' parts, in the page's scheme; a scheme's own preview takes
 // its palette from .uf-scheme-light or .uf-scheme-dark (Tokens).

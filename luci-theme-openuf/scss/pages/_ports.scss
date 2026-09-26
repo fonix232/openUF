@@ -5,6 +5,7 @@
 // Ethernet, blue from 2.5 GbE, grey without link, outlined when disabled; a
 // chevron marks the uplink and a bolt a port giving power.
 @use '../abstracts' as *;
+@use '../abstracts/pages-b' as *;
 
 // A disabled port's square: an outline, with its hover and focus rings.
 $outline: inset 0 0 0 1.5px var(--uf-border-strong);

@@ -4,6 +4,7 @@
 // markup only their views render.
 @use 'sass:map';
 @use '../abstracts' as *;
+@use '../abstracts/pages-b' as *;
 
 // Which design the Language and Style picker holds: any of openUF's, the
 // automatic one (light and dark), or the dark one.

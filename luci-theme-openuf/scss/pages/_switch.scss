@@ -3,6 +3,7 @@
 // VLAN) under a row of UniFi's port squares, which LuCI draws as the matrix's
 // second header row.
 @use '../abstracts' as *;
+@use '../abstracts/pages-b' as *;
 
 body[data-page="admin-network-switch"] {
 	// UniFi's port strip: a rounded tile with the jack cut out; the uplink

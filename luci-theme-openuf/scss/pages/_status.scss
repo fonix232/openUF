@@ -1,4 +1,5 @@
 @use '../abstracts' as *;
+@use '../abstracts/pages-a' as *;
 
 // Status pages: Overview, Routing, System and Kernel Log, Processes, Channel
 // Analysis and Realtime Graphs. Status > Firewall (nftables and the legacy

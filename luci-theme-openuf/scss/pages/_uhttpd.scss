@@ -4,6 +4,7 @@
 // settings pages, titles get a wider column and every control one width, so
 // the controls line up down the card.
 @use '../abstracts' as *;
+@use '../abstracts/pages-b' as *;
 
 body[data-page="admin-services-uhttpd"] {
 	// The certificate and key pickers' glyphs, in place of LuCI's Tango file
