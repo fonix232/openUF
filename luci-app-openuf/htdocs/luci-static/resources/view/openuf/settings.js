@@ -1,17 +1,10 @@
 'use strict';
 'require view';
 'require form';
-'require rpc';
 
 // openUF settings (luci-app-openuf): /etc/config/openuf, section `main`.
 // Saving restarts the daemon (procd's reload trigger on the openuf config).
 // Defaults mirror /usr/share/openuf/config.lua; USAGE.md documents each one.
-
-const callModelmaps = rpc.declare({
-	object: 'luci.openuf',
-	method: 'modelmaps',
-	expect: { modelmaps: [] }
-});
 
 // A checkbox that always writes 0/1: a default-on option removed from the
 // file would read as on again.
@@ -23,11 +16,7 @@ function flag(s, tab, name, title, description, def) {
 }
 
 return view.extend({
-	load: function() {
-		return L.resolveDefault(callModelmaps(), []);
-	},
-
-	render: function(modelmaps) {
+	render: function() {
 		const m = new form.Map('openuf', _('openUF settings'),
 			_('How this access point presents itself to a UniFi Network controller, and what it lets the controller manage. Saving restarts openUF, which takes a few seconds; settings that change what the controller provisions also have it send its configuration again.'));
 
@@ -46,11 +35,6 @@ return view.extend({
 		o.validate = function(section_id, value) {
 			return (!value || /^https?:\/\/\S+$/.test(value)) ? true : _('An http:// or https:// URL');
 		};
-
-		o = s.taboption('controller', form.ListValue, 'modelmap', _('Model map'),
-			_('Which ports, radios and LED openUF reports. "auto" derives them from the board, which suits most devices.'));
-		(modelmaps.length ? modelmaps : [ 'auto' ]).forEach(function(name) { o.value(name); });
-		o.default = 'auto';
 
 		flag(s, 'controller', 'l2_announce', _('L2 discovery broadcasts'),
 			_('Announce the AP on its subnet so the controller lists it for adoption. Off for adoption through the inform URL only.'), true);

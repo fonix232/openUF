@@ -9,6 +9,9 @@ if [ -f /etc/openuf/conf.lua.legacy ]; then
 	mv /etc/openuf/conf.lua.legacy /etc/openuf/conf.lua.migrated
 fi
 
+# Model maps are gone (the board describes itself): drop the option.
+uci -q delete openuf.main.modelmap && uci commit openuf
+
 # The SSH adoption account's shell moved with the code.
 sed -i 's#:/opt/openuf/hook/adopt-shell.sh$#:/usr/share/openuf/hook/adopt-shell.sh#' /etc/passwd
 

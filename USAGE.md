@@ -127,107 +127,75 @@ uci commit openuf        # the service restarts on its own
 
 Every option has a default (`/usr/share/openuf/config.lua`), so an empty section works.
 
-### Hardware model map (`option modelmap`)
+### Hardware description (automatic)
 
-`auto` (the default) derives the board's ports, uplink, identity MAC, LED and radios from
-`/etc/board.json` (§ 6, "Boards without a hand-written map"). Name a map to use a
-hand-written one instead:
+There is nothing to configure per board: `openwrt/board.lua` describes the device from the
+device itself, once, and keeps the result.
 
-```sh
-uci set openuf.main.modelmap=archer-c5-v1          # TP-Link Archer C5 v1 (dual-band)
-uci set openuf.main.modelmap=tl-wdr3500-v1         # TP-Link TL-WDR3500 v1 (dual-band)
-uci set openuf.main.modelmap=xiaomi-ax3000t        # Xiaomi Mi Router AX3000T (802.11ax, DSA)
-uci set openuf.main.modelmap=generic-dualband-ap   # any other dual-band OpenWrt AP
-uci set openuf.main.modelmap=tl-wr1043ndv2         # TP-Link WR1043ND v2 (single-band)
-uci commit openuf
+- **Sockets:** `/etc/board.json` (written by OpenWrt's own `board.d` scripts from the device
+  tree): `network.wan.device`, then `network.lan.ports` (or `lan.device` on a one-port
+  board).
+- **Uplink:** the socket the default gateway's MAC is learned on (`bridge fdb show`), else
+  board.json's WAN device.
+- **Identity MAC:** the MAC the network already knows the AP by, the bridge the uplink sits
+  in, else board.json's label MAC. Never a socket MAC: a Netgear WAX220's `eth0` gets a
+  random one on every boot.
+- **LED:** the first of `status`/`power`/`system`/`run` in `/sys/class/leds`, blue, white
+  or green preferred. It drives the controller's Locate action and **Manage → LED** toggle.
+- **Radios:** every `wifi-device` in `/etc/config/wireless`. openUF never touches a radio it
+  does not report.
+- **Port numbers:** the chosen UniFi model's own layout (below). A model with a built-in
+  switch takes its uplink on the last port ("PoE In + Data", port 5 on a U6-IW), a plain AP
+  on port 1; the other sockets follow in board.json order. The controller stores per-port
+  settings against these numbers.
+
+The layout is written to `/etc/openuf/modelmap-auto.json` once the uplink could actually be
+detected, and read back on every later start: numbering must not move under an adopted
+device because someone moved a cable. Delete the file to derive it again.
+
+DSA boards only: on a swconfig board (`which swconfig` finds a binary) the sockets are not
+netdevs, and openUF no longer supports those.
+
+To correct the description, set what is wrong in `/etc/openuf/local.lua`, which runs after it
+with `dev` in scope:
+
+```lua
+dev.conf.led = "green:status"        -- a LED name from `ls /sys/class/leds`
+dev.openuf.uap.hwassign = {"radio0"} -- report only this radio
 ```
 
-The maps are in `/usr/share/openuf/modelmap/`; a name without a matching file falls back
-to `auto`, with a line in the log.
+⚠️ **Check the LED is actually wired.** `/sys/class/leds` lists what the drivers registered,
+not what the case has. A radio LED (`mt76-phy0`) is registered on every board whether or not
+the pin goes anywhere, and a board whose LEDs are on GPIO needs `kmod-leds-gpio`, or its
+real LEDs never register at all (both true of a Xiaomi AX3000T). Confirm by writing to it
+and looking at the box:
 
-Prefer a board-specific map where one exists. A generic profile cannot know your
-board's LED name (so Locate and the LED toggle do nothing) or which of its ports
-is the uplink — and it gets the uplink wrong on an Archer C5 deployed as an AP,
-which uses `eth1` and never touches `eth0`.
+```sh
+echo none > /sys/class/leds/<led>/trigger; echo 1 > /sys/class/leds/<led>/brightness
+```
 
-**swconfig or DSA?** `which swconfig` on the device settles it. A board with no
-`swconfig` binary (anything on a modern target — mediatek/filogic, ath79's
-successors, ipq40xx…) is DSA, and its map looks different: each socket is
-already its own netdev, so the ports are listed by `ifname` and there is **no
-`dev.conf.vlan` at all**. Don't invent one — it is what makes openUF shell out
-to a `swconfig` that isn't there. `modelmap/xiaomi-ax3000t.lua` is the worked
-example.
+### Device identity
 
-The modelmap sets:
-- `dev.conf.net.lan_cpueth` — LAN CPU ethernet port (e.g. `eth1`); also the trunk port
-  used to create VLAN-tagged sub-interfaces (`eth1.<vlanid>`) for controller-pushed VLAN SSIDs
-- `dev.conf.vlan.mib_poll_ms` — how often the switch driver refreshes its per-port byte
-  counters, which is where the Ports view's Tx/Rx figures come from. openUF turns polling on
-  at startup (500 ms) when the driver ships it off, which an AR8327 does; set `false` to
-  leave the switch alone, at the cost of 0 B on every socket
-- `dev.conf.net.ports`      — the ports openUF reports to the controller, one entry per
-  **physical socket** on a board with a switch: `{idx = 1, swport = "lan1"}`, where `idx`
-  is the UniFi `port_idx` and `swport` names a key in `dev.conf.vlan.ports`. Pin each
-  `idx` to a socket and leave it alone — the controller keys per-port settings on it.
-  Do **not** flag one as `uplink`: openUF detects which socket the uplink cable is in
-  from the switch's ARL table, so the flag follows a replug and the other sockets report
-  their own link speed and their own wired clients. A board with no switch map instead
-  uses the netdev shape (`{idx = 1, ifname = "eth0", uplink = true}`), which on a switch
-  board can report only the CPU port's internal link. The two mix: a socket wired to its
-  own MAC/PHY instead of the switch (the TL-WDR3500's WAN socket, `eth1`) is listed with an
-  `ifname` and no `swport`, and sysfs then describes that socket correctly. Count the RJ45
-  sockets on the case — the list should have one entry each.
-  On a **DSA** board every socket takes the netdev shape and still gets no `uplink` flag:
-  there the uplink is detected from the bridge FDB (`bridge fdb show br br-lan`, which
-  names the port each MAC was learned on) instead of from a switch ARL table. Keep the
-  flag only for a board where neither source can answer
-- `dev.conf.net.wan_cpueth` — WAN-side CPU netdev (e.g. `eth0`). Only used as the uplink
-  entry of a fallback `port_table` for a board that declares no `dev.conf.net.ports`
-- `dev.conf.vlan.device`    — swconfig device name (e.g. `switch0`), as `swconfig list`
-  reports it. Boards that name it something else — `switch1` is common on ath79 and
-  ramips — must set this, or every `swconfig` call silently addresses the wrong device
-  and per-socket port reporting falls back to the CPU-port netdev. Not used on a DSA
-  board, which has no swconfig at all
-- `dev.conf.led`            — status LED, driven by the controller's Locate action and its
-  **Manage → LED** toggle. Accepts a full sysfs path (`/sys/class/leds/tp-link:green:wlan`)
-  or a bare LED name (`tp-link:green:wlan`). `nil` by default, since a generic profile can't
-  know the board's LED — LED control is a silent no-op until you set it. Find yours with
-  `ls /sys/class/leds`.
-  ⚠️ **Check the LED you name is actually wired.** `/sys/class/leds` lists what the drivers
-  registered, not what the case has. A radio LED (`mt76-phy0`, `phy0-led`) is registered by
-  the wireless driver on every board whether or not the pin goes anywhere — Locate will
-  report success and blink nothing. And a board whose LEDs are on GPIO needs the
-  `kmod-leds-gpio` module: without it the device tree's LEDs never register at all, the
-  GPIOs stay unclaimed at whatever the bootloader left, and only the radio LEDs show up.
-  Both were true of a Xiaomi AX3000T. Confirm by writing to it and looking at the box:
-  ```sh
-  echo none > /sys/class/leds/<led>/trigger; echo 1 > /sys/class/leds/<led>/brightness
-  ```
-- `dev.openuf.uap.ufmodel`  — Which ufmodel file to load (e.g. `"u6iw"`)
-- `dev.openuf.uap.hwassign` — UCI radio names to report to the controller
-  (e.g. `{"radio0", "radio1"}`). Every other `wifi-device` on the board is left out of
-  `radio_table`, so a radio the emulated model doesn't have (a third phy, a mesh- or
-  monitor-only one) is neither shown nor configurable in the UI. Omit it — or leave it
-  empty — to report every radio UCI knows about, which is what a modelmap without the
-  field means. openUF never touches an unreported radio: a config push naming one is
-  refused rather than applied
-
-### Device identity (`ufmodel/`)
-
-`dev.openuf.uap.ufmodel` names the identity: `"auto"` or a file in `ufmodel/`.
-
-**`auto`** (what `modelmap/auto.lua` sets) picks the UniFi access point closest to the
-board, once, and pins it in `/etc/openuf/ufmodel-auto.json` — an adopted device never
+openUF presents itself as the UniFi access point closest to the board, chosen once
+(`unifi/identity.lua`) and kept in `/etc/openuf/ufmodel-auto.json`: an adopted device never
 changes model under the controller. The facts come from `/etc/board.json` (bands, PHY
-generation, antenna count, maximum width, sockets); the candidates are
-`ufmodel/catalog.lua`, the controller's own model registry. Regenerate it after a
-controller upgrade:
+generation, antenna count, maximum width, sockets); the candidates are `unifi/catalog.lua`,
+the controller's own model registry. A board that describes nothing to match on presents as
+a U6-IW, the identity validated end to end.
+
+To pin a model yourself, write its code there before the first start (or re-adopt after):
+
+```sh
+echo '{"model":"UHDIW"}' > /etc/openuf/ufmodel-auto.json && /etc/init.d/openuf restart
+```
+
+Regenerate the catalogue after a controller upgrade:
 
 ```sh
 # uidb.json and bundles.json are in the Network application package:
 #   usr/lib/unifi/dl/uidb/uidb.json, usr/lib/unifi/dl/firmware/bundles.json
-python3 tools/uidb-catalog.py --uidb uidb.json --bundles bundles.json --fw \
-    > openuf/ufmodel/catalog.lua
+python3 openuf/tools/uidb-catalog.py --uidb uidb.json --bundles bundles.json --fw \
+    > openuf/src/unifi/catalog.lua
 ```
 
 `--fw` adds each model's current release version from fw-update.ui.com. It matters: the
@@ -235,29 +203,11 @@ controller calls a device "upgradable" whenever its version differs from the cat
 character for character. openUF also learns the version from the controller's own upgrade
 commands, so a stale one corrects itself after one upgrade round.
 
-**A fixed identity**, e.g. `ufmodel/u6iw.lua` (the one validated end to end):
-
-```lua
-uap = {
-    platform = "U6IW",
-    model    = "U6IW",
-    sysid    = 0xa652,              -- registry system id; resolved before `model`
-    fw = {
-        pre        = "U6IW.",
-        ver        = "6.8.2.15592", -- the catalogue's current release, bare M.m.p.build
-        buildtime  = "260211.2010",
-        factoryver = "6.5.28"
-    },
-    ...
-}
-```
-
 ### Options
 
 | Option | Default | What it does |
 |---|---|---|
 | `inform_url` | `http://unifi:8080/inform` | Where an unadopted device informs. Once adopted, the URL the controller assigned (in `state.json`) wins |
-| `modelmap` | `auto` | The hardware map (above) |
 | `l2_announce` | `1` | L2 discovery broadcasts (below) |
 | `ssh_adopt` | `0` | The temporary `ubnt/ubnt` SSH adoption account (§ 4) |
 | `stun`, `stun_local_port` | `1`, `3478` | Let the controller wake the device for an immediate inform |
@@ -290,7 +240,7 @@ tables are deleted and the controller's cron job is removed. The timezone and NT
 keep their last values.
 
 `/etc/openuf/local.lua`, if it exists, runs after UCI is read, with `config` (the options)
-and `dev` (the model map) as globals, and may change either. It is for what UCI cannot
+and `dev` (the board description) as globals, and may change either. It is for what UCI cannot
 express: the research-only table options `debug_caps` and `debug_payload_extra` (override
 `fw_caps`/`wifi_caps`/`wifi_caps2`, merge extra payload fields; logged loudly at every
 start), or a model-map tweak such as a radio policy:
@@ -836,12 +786,13 @@ running Network 10.6.
 
 Three things must line up or the port is skipped rather than guessed at:
 
-- `dev.conf.vlan` must exist in your modelmap (`cpu_lan` + a `ports` name→number map).
+- on a swconfig switch (a board openUF no longer supports), `dev.conf.vlan` must describe
+  it (`cpu_lan` + a `ports` name→number map).
   Without it openUF has no idea what the physical switch ports are, and guessing strands
   the device.
 - the port needs a `swport` in `dev.conf.net.ports`, naming its `dev.conf.vlan.ports` key.
 - the port must not be the uplink — reassigning the uplink's VLAN would cut the device off
-  the network, so that is refused outright. On a modelmap that declares sockets rather
+  the network, so that is refused outright. On a board described by sockets rather
   than netdevs, the uplink is whichever socket the default gateway is reached through
   (found in the switch's ARL table); if that cannot be determined, **every** port is
   refused rather than risking the wrong one.
@@ -1008,7 +959,7 @@ whose uplink is already in a vlan-filtering bridge). From the first provisioning
 
 | UCI section | What it is |
 |---|---|
-| `network.openuf_br` | the bridge (`bridge_name`, default `br-lan`) with every socket of the modelmap, `vlan_filtering 1`, the identity MAC pinned |
+| `network.openuf_br` | the bridge (`bridge_name`, default `br-lan`) with every socket of the board, `vlan_filtering 1`, the identity MAC pinned |
 | `network.openuf_bv<vid>` | one `bridge-vlan` per VLAN: the uplink carries VLAN 1 untagged and every other VLAN tagged; each downstream socket follows the `switch.*` matrix (native = `u*`, tagged = `t`, excluded = absent), or `port_default` while Port VLAN is off |
 | `network.<lan_name>` | management, on `br-lan.<vid>` -- `br-lan.1`, or the **Management VLAN** -- with the pushed DHCP/static addressing written as UCI (so it survives reboots) |
 | `network.openuf_v<vid>` | `proto none` on `br-lan.<vid>`, what a WLAN on that VLAN names as its network (VLAN 1 too, once management is tagged -- the controller's `br-trunk`) |
@@ -1053,17 +1004,6 @@ board, leaving openUF's own packages out of the ASU request (the package's boots
 reinstalls them on the new image); `option advertise_updates '1'` shows UniFi's "Upgrade available" badge while `owut check` finds
 a newer build. By default the controller's catalogue version is learned from its own
 upgrade commands and reported, so no stale version keeps the badge up.
-
-### Boards without a hand-written map
-
-`option modelmap 'auto'` (the default) derives the map from `/etc/board.json` on DSA boards:
-sockets, the uplink (from the bridge FDB, so `ip-bridge` must be installed), the identity
-(`ufmodel = "auto"`, § 3) and that model's port numbering (a model with a built-in switch
-has its uplink on its last port — port 5, "PoE In + Data", on a U6-IW — a plain AP on
-port 1), the identity MAC (the MAC the network already knows the AP by), the Locate LED
-and the radios. The result is pinned in `/etc/openuf/modelmap-auto.json` once the uplink
-could be detected, and the model in `/etc/openuf/ufmodel-auto.json`; delete both (and
-re-adopt) to re-derive.
 
 ### Client connection events
 
@@ -1188,10 +1128,10 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 | Controller shows device as "Disconnected" | `inform.lua` not running, or wrong `inform_url` |
 | Adoption fails with SSH error | SSH not reachable from controller, or root password not set — run `passwd root` on the device, or switch on the adoption account (`uci set openuf.main.ssh_adopt=1 && uci commit openuf`) |
 | Device stays stuck at "Adopting" forever | No AES-GCM backend — `lua-openssl` missing or built without AEAD support. The CLI `openssl-util` fallback is CBC-only and will not work (see § 1) |
-| Controller rejects device ("firmware incompatible") | Adjust `fw.ver` in `ufmodel/u6iw.lua` |
+| Controller rejects device ("firmware incompatible") | Regenerate `unifi/catalog.lua` with `--fw` (§ 3); openUF also learns the version from the controller's upgrade commands |
 | hostapd fails: "unknown configuration item 'bss_transition'" | A `wpad-basic-*` build is installed — replace it with `apk add wpad-wolfssl` |
 | Band Steering has no effect | `usteer` not installed or not running — `/etc/init.d/usteer status` |
-| Locate/LED does nothing | `dev.conf.led` is `nil` in your modelmap — set it to a path from `ls /sys/class/leds` |
+| Locate/LED does nothing | The board registered no usable LED — set `dev.conf.led` in `/etc/openuf/local.lua` to a name from `ls /sys/class/leds` (§ 3) |
 | JSON decode error in controller logs | AES key mismatch — try `syswrapper.sh reset-inform` |
 | `inform: parse error: ... inflate: truncated stream` | A compressed controller response arrived incomplete. One heartbeat is lost and the next retries, so an occasional line is harmless; a steady stream of them points at the link to the controller (an MTU or proxy problem), not at the device |
 | Adopted device goes Offline and the log fills with `HTTP 400` | The identity MAC changed underneath the adoption — usually `dev.conf.net.lan_cpueth` now naming a different interface. openUF says so once per streak, naming the MAC it informs as. Forget the device in the controller and re-adopt, or point `lan_cpueth` back at the interface it was adopted under |

@@ -4667,7 +4667,7 @@ if not OPENUF_TEST_MODE then
 		if type(config.inform_url) == "string" and config.inform_url ~= "" then
 			M._state.DEFAULT_INFORM_URL = config.inform_url
 		end
-		local ufhw = {uap = require("loader").run("unifi.ufmodel." .. dev.openuf.uap.ufmodel)}
+		local ufhw = {uap = dev.identity}
 		-- The options travel under dev.conf.config: every consumer reads
 		-- cfg.config.<option>.
 		dev.conf.config = config

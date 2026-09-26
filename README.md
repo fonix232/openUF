@@ -112,7 +112,7 @@ Most rows below marked ✅ were verified by driving the real controller UI again
 | Controller-owned bridge (`bridge_backend = "vlan_filtering"`) | ✅ **Verified on real netifd** (bench, 2026-09-25). The controller's whole L2 model — `bridge.*`/`vlan.*`/`netconf.*`/`dhcpc.*` and the `switch.*` port matrix — is realised as **one vlan-filtering bridge**: management on `br-lan.<vid>` including a **Management VLAN**, one interface per WLAN VLAN (the untagged network included once management is tagged), and full per-port membership (native + tagged + excluded, i.e. trunk ports). Any bridge already holding the sockets is **taken over and recreated**; interfaces that used it are re-pointed and keep their VLANs. Every change is **rolled back automatically** unless the controller is reached within `bridge_rollback_timeout` (180 s); a plan that stranded the AP is not re-applied. `auto` picks this whenever the uplink already sits in a vlan-filtering bridge. DSA only |
 | Controller system settings | ✅ The site's timezone, NTP servers and the nightly `syswrapper.sh 11k-scan` cron job are applied to UCI and the crontab, reversibly (`controller_system`; `{ntp = false}` keeps a local NTP server). `11k-scan` asks a client for an 802.11k beacon report — the AP itself never goes off-channel |
 | L2 hardening (`ebtables.*`) | ✅ The controller's BPDU and VLAN-tag drops for Wi-Fi clients, re-expressed as an nftables bridge table on the VAPs (`l2guard`; needs `kmod-nft-bridge`) |
-| Board radio policy | ✅ A modelmap can floor or cap the pushed channel width and keep ACS off DFS channels (`dev.conf.radio.<band>`), and `country_override` programs a different regulatory domain while still reporting the controller's — for drivers that cannot run DFS |
+| Board radio policy | ✅ `local.lua` can floor or cap the pushed channel width and keep ACS off DFS channels (`dev.conf.radio.<band>`), and `country_override` programs a different regulatory domain while still reporting the controller's — for drivers that cannot run DFS |
 | LuCI pages | ✅ **Services → openUF** (`luci-app-openuf`): **Status** (daemon and heartbeat, adoption and applied-config state, the identity presented — catalogue model, sysid, firmware — the port map, network ownership and upgrade survival), **Settings** (every option in `/etc/config/openuf`, a standard LuCI form with Save & Apply and rollback; a change restarts the daemon, a switched-off feature drops its nft table or cron job, and a setting that changes what the controller provisions has it send its configuration again) and **Unhandled messages** (the ledger). Served by a ucode rpcd backend that never returns the adoption key |
 | Packaging and updates | ✅ OpenWrt packages (`openuf`, `luci-app-openuf`, architecture-independent) for OpenWrt 25.12 and later, from a signed apk feed built by CI with the official SDK; updates arrive with `apk upgrade`; the package reinstalls itself after a firmware upgrade that keeps settings; `tools/deploy.sh` installs a local build on test APs |
 | Set Replacement Device / Load Configuration | ✅ Working — both are controller-side clones; no device-side protocol involved |
@@ -122,48 +122,39 @@ Most rows below marked ✅ were verified by driving the real controller UI again
 
 ## Supported hardware
 
-A dual-band OpenWrt device with **at least 16 MB flash**, and roughly **5 MB free on
-`/overlay`** after the stock image.  8 MB is not enough: the AES-GCM backend
-(`lua-openssl`) pulls in `libopenssl3` at ~4.35 MB, and adoption cannot complete without
-GCM — a stock 8 MB build leaves only ~1.6 MB of overlay, which no crypto backend fits in
-(`openssl-util` and `luaossl` depend on the same library).  Measured on a TL-WDR3500 v1,
-which is 3.2 MB short and therefore **cannot run openUF from a stock image** — it needs
-USB extroot or a custom build with the crypto baked into squashfs.  Known-working:
+A **DSA** board on **OpenWrt 25.12 or later**, dual-band, with **at least 16 MB flash** and
+roughly **5 MB free on `/overlay`** after the stock image. 8 MB is not enough: the AES-GCM
+backend (`lua-openssl`) pulls in `libopenssl3` at ~4.35 MB, and adoption cannot complete
+without GCM.
 
-- **TP-Link Archer C5 v1** (dual-band 802.11n/ac) — use `modelmap/archer-c5-v1.lua`.
-  **The reference device**: install, adoption, the WiFi config push, live clients and the
-  radios themselves are confirmed on this board (OpenWrt 25.12.5) against a real UniFi Cloud
-  Gateway Ultra — see [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md#the-first-real-hardware-run)
-- **TP-Link TL-WDR3500 v1** (dual-band 802.11n, 2x2) — use `modelmap/tl-wdr3500-v1.lua`.
-  Adoption, SSID provisioning, 802.11r/k/v, Band Steering, Minimum RSSI and WiFi Speed
-  Limit all confirmed on real hardware against a UCG Ultra.
-  ⚠️ **8 MB flash: does not fit a stock image** (see the space requirement above) — it needs
-  a custom build with the crypto in squashfs. Even then **`nftables` typically does not fit**
-  (~490 KB with its kernel modules), which leaves two features unavailable on this board:
-  **client Block/Unblock** and the **Multicast and Broadcast Blocker**. Its radio order is
-  also the reverse of the Archer C5's — `radio0` is 2.4 GHz here
-- **Xiaomi Mi Router AX3000T** (dual-band 802.11ax, 2x2) — use `modelmap/xiaomi-ax3000t.lua`.
-  The first **DSA** board here (mediatek/filogic, MT7981) and the first with real 802.11ax:
-  HE on both bands, 160 MHz on 5 GHz, nothing clamped except the 40 MHz ceiling 2.4 GHz has
-  anyway. Plenty of room — 128 MB RAM, ~56 MB free overlay, every optional feature fits.
-  Two board notes: its four sockets are the netdevs `wan`/`lan2`/`lan3`/`lan4` (there is no
-  `lan1` — DSA names ports from the device tree, not the case labels), and it exposes **no
-  status LED** (`/sys/class/leds` holds only the two mt76 radio LEDs), so Locate blinks
-  `blue:status` — **install `kmod-leds-gpio`** (9 KB) or the board has no drivable LED at
-  all: its case LED is a blue/yellow GPIO pair the stock filogic image ships no driver for,
-  leaving it stuck on whatever the bootloader set (a steady orange). Do not point `dev.conf.led` at `mt76-phy0` instead —
-  it exists and accepts writes, but is wired to nothing on this board
-- **TP-Link WR1043ND v2** (single-band 802.11n) — use `modelmap/tl-wr1043ndv2.lua`
-- **Linksys E8450 / Belkin RT3200, Netgear WAX220** (DSA, 802.11ax) — `modelmap/auto.lua`
-- **Any DSA board** — `modelmap/auto.lua` derives the sockets, the uplink (from the bridge
-  FDB), a stable identity MAC (the MAC the network already knows the AP by — not a socket
-  MAC, which is random per boot on e.g. a Netgear WAX220), the Locate LED and the radios
-  from `/etc/board.json`, picks the identity (below), numbers the ports the way that
-  model's registry entry does (a model with a built-in switch has its uplink on the last
-  port, "PoE In + Data"; a plain AP on port 1), and pins the result in
-  `/etc/openuf/modelmap-auto.json` and `/etc/openuf/ufmodel-auto.json`
+There is nothing to configure per board. openUF describes the device from the device
+itself (`openwrt/board.lua`): the sockets and LED from `/etc/board.json` (which OpenWrt's own
+`board.d` scripts write), the uplink from the socket the gateway's MAC is learned on, a
+stable identity MAC (the MAC the network already knows the AP by — not a socket MAC, which is
+random per boot on e.g. a Netgear WAX220), and the radios from `/etc/config/wireless`. It
+then presents itself as the closest UniFi access point in the controller's own model
+registry (`unifi/identity.lua`, against `unifi/catalog.lua`, generated by
+`tools/uidb-catalog.py`): a 5-socket WiFi 6 board is a U6-IW, a 1-socket one a U6-Pro, an
+802.11ac router a UAP-IW-HD. Ports are numbered the way that model's registry entry does (a
+model with a built-in switch has its uplink on the last port, "PoE In + Data"; a plain AP on
+port 1). Both choices are kept in `/etc/openuf/modelmap-auto.json` and
+`/etc/openuf/ufmodel-auto.json`, so nothing moves under an adopted device; `/etc/openuf/local.lua`
+can correct what the description got wrong.
 
-The *modelmap* describes your real hardware; the *ufmodel* picks the UniFi identity to present.  `ufmodel = "auto"` (what `modelmap/auto.lua` uses) scores every access point in `ufmodel/catalog.lua` — generated from the controller's own registry by `tools/uidb-catalog.py`, with each model's current firmware version — against the board's bands, PHY generation, spatial streams, channel width and socket count, and keeps the closest. `ufmodel/u6iw.lua` (U6-InWall) is the identity validated end to end; `uapg1`, `uapg1-lr` and `uapg2-ac-lr` are provided but untested.
+Known-working:
+
+- **Linksys E8450 / Belkin RT3200** and **Netgear WAX220** (mediatek/filogic, 802.11ax):
+  adopted by a UCG Fiber on Network 10.6, with the controller owning the bridge, VLANs and
+  WLANs
+- **Xiaomi Mi Router AX3000T** (MT7981, 802.11ax): HE on both bands, 160 MHz on 5 GHz. Its
+  four sockets are the netdevs `wan`/`lan2`/`lan3`/`lan4` (DSA names ports from the device
+  tree, not the case labels), and it exposes **no status LED** (`/sys/class/leds` holds only
+  the two mt76 radio LEDs) — **install `kmod-leds-gpio`** (9 KB) or Locate has nothing to
+  blink
+
+swconfig boards (the TP-Link Archer C5 v1, TL-WDR3500 v1 and WR1043ND v2 upstream openUF
+had hand-written maps for) are no longer supported: their sockets are not netdevs, and all
+three are 8 MB-flash devices that cannot run it from a stock 25.12 image anyway.
 
 ## Quick start
 
@@ -228,7 +219,7 @@ See [USAGE.md](USAGE.md) for every setting, dependency details and troubleshooti
 
 | Path | What |
 |---|---|
-| `openuf/` | The `openuf` package: `Makefile`, `src/` (the daemon, installed to `/usr/share/openuf`), `files/` (init scripts, default UCI config, keep-list, feed key), `tests/`, `tools/`, `contrib/asu/` |
+| `openuf/` | The `openuf` package: `Makefile`, `src/` (the daemon, installed to `/usr/share/openuf`: `unifi/` is the controller's side — packets, crypto, identity, events — and `openwrt/` the device's — reading it and applying what the controller pushes), `files/` (init scripts, default UCI config, keep-list, feed key), `tests/`, `tools/`, `contrib/asu/` |
 | `luci-app-openuf/` | The `luci-app-openuf` package: the LuCI views and their rpcd backend |
 | `.github/` | CI: tests, the package feed (`feed.yml`, published to GitHub Pages), releases |
 | `docs/`, `USAGE.md`, `PROTOCOL-VALIDATION.md` | Documentation |
@@ -260,8 +251,8 @@ sh tools/simulate.sh --adopt
 # Or drive it manually:
 pip install pycryptodome
 python3 tools/test_controller.py --adopt --verbose
-# In another terminal, from src/ (the scripts load the model map and their
-# siblings with cwd-relative paths):
+# In another terminal, from src/ (modules load by name from the working
+# directory):
 cd src && lua inform.lua
 ```
 

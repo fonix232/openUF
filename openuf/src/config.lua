@@ -8,13 +8,15 @@
 	all a change takes. USAGE.md documents each option.
 
 	Returns the two tables the daemon has always worked from:
-	  dev     the model map (modelmap/<name>.lua): ports, radios, identity
+	  dev     the device description (openwrt/board.lua): ports, radios, LED,
+	          and the UniFi identity presented (dev.identity)
 	  config  the options, typed
 
 	/etc/openuf/local.lua, when present, runs after UCI is read, with `dev`
 	and `config` as globals, and may change either. It is for what UCI does
 	not express well -- the research-only table options (debug_caps,
-	debug_payload_extra) or a model-map tweak -- not for everyday settings.
+	debug_payload_extra), a radio policy, or a correction to what the board
+	description got wrong -- not for everyday settings.
 ]]--
 
 local M = {}
@@ -82,8 +84,7 @@ M._exists = function(path)
 end
 
 M._dofile = dofile
-M._run = function(name) return require("loader").run(name) end
-M._exists_map = function(name) return require("loader").path("openwrt.modelmap." .. name) ~= nil end
+M._describe = function() return require("openwrt.board").describe() end
 
 -- One raw UCI value as its option's type; the default for anything unset or
 -- unreadable (a typo must not take a feature away silently, so it is logged).
@@ -147,22 +148,12 @@ function M.options(s)
 	return config
 end
 
--- The model map's name: `auto` unless UCI names one that exists.
-function M.modelmap_name(raw)
-	if raw == nil or raw == "" then return "auto" end
-	if not tostring(raw):match("^[%w_-]+$") or not M._exists_map(raw) then
-		M._warn(("modelmap: no modelmap/%s.lua, using auto"):format(tostring(raw)))
-		return "auto"
-	end
-	return raw
-end
-
--- dev, config. Run from the install directory: model maps load their
--- siblings by relative path.
+-- dev, config: the device description (openwrt/board.lua, derived from the
+-- board itself) and the options.
 function M.load(cursor)
 	local s = M.section(cursor)
 	local config = M.options(s)
-	local dev = M._run("openwrt.modelmap." .. M.modelmap_name(s.modelmap))
+	local dev = M._describe()
 	if M._exists(M.LOCAL_FILE) then
 		local prev_dev, prev_config = rawget(_G, "dev"), rawget(_G, "config")
 		_G.dev, _G.config = dev, config

@@ -11,7 +11,7 @@
 
 	The facts come from OpenWrt's own /etc/board.json (board.d writes the
 	Ethernet layout and, per radio, the antenna masks, bands, PHY generations
-	and maximum width). The candidates are ufmodel/catalog.lua, generated from
+	and maximum width). The candidates are catalog.lua, generated from
 	the controller's own model registry (tools/uidb-catalog.py). Scoring, in
 	order of weight:
 

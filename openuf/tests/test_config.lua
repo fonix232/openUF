@@ -81,29 +81,13 @@ return {
 		end
 	},
 	{
-		name = "config: the model map is auto unless UCI names one that exists",
+		name = "config: load returns the board description and the options, and local.lua may change either",
 		fn = function()
-			local orig = config._exists_map
-			config._exists_map = function(name) return name == "bench" end
-			local warned = quietly(function()
-				assert_eq(config.modelmap_name(nil), "auto", "unset")
-				assert_eq(config.modelmap_name("bench"), "bench", "present")
-				assert_eq(config.modelmap_name("missing"), "auto", "absent")
-				assert_eq(config.modelmap_name("../../etc/passwd"), "auto", "not a name")
-			end)
-			config._exists_map = orig
-			assert_eq(#warned, 2, "both bad names reported")
-		end
-	},
-	{
-		name = "config: load returns the model map and the options, and local.lua may change either",
-		fn = function()
-			local orig = {config._exists, config._dofile, config._exists_map, config._run}
+			local orig = {config._exists, config._dofile, config._describe}
 			local loaded = {}
 			config._exists = function(p) return p == config.LOCAL_FILE end
-			config._exists_map = function(name) return name == "bench" end
-			config._run = function(name)
-				loaded[#loaded + 1] = name
+			config._describe = function()
+				loaded[#loaded + 1] = "board"
 				return {conf = {net = {}}, openuf = {uap = {ufmodel = "auto"}}}
 			end
 			config._dofile = function(p)
@@ -112,9 +96,9 @@ return {
 				_G.dev.tweaked = true
 			end
 			local before = rawget(_G, "config")
-			local dev, c = config.load(cursor({modelmap = "bench", l2guard = "0"}))
-			config._exists, config._dofile, config._exists_map, config._run = orig[1], orig[2], orig[3], orig[4]
-			assert_eq(loaded[1], "openwrt.modelmap.bench", "model map first")
+			local dev, c = config.load(cursor({l2guard = "0"}))
+			config._exists, config._dofile, config._describe = orig[1], orig[2], orig[3]
+			assert_eq(loaded[1], "board", "the board first")
 			assert_eq(loaded[2], config.LOCAL_FILE, "then local.lua")
 			assert_eq(c.l2guard, false, "UCI applied")
 			assert_eq(c.debug_caps.fw_caps, 1, "local.lua set a research table")

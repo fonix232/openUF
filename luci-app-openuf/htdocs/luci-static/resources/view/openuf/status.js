@@ -117,7 +117,6 @@ return view.extend({
 			]),
 
 			section(_('Hardware'), [
-				[ _('Model map'), value(hw.modelmap) ],
 				[ _('Uplink socket'), value(hw.uplink) ],
 				[ _('Ports'), ports.length ? E('span', {}, ports.map(function(p) { return E('div', {}, T(p)); })) : E('em', {}, _('none')) ],
 				[ _('Radios'), (hw.radios || []).length ? T(hw.radios.join(', ')) : E('em', {}, _('none')) ],

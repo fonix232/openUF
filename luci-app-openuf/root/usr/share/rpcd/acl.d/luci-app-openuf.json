@@ -3,7 +3,7 @@
 		"description": "Grant access to the openUF status and settings pages",
 		"read": {
 			"ubus": {
-				"luci.openuf": [ "status", "unhandled", "modelmaps" ]
+				"luci.openuf": [ "status", "unhandled" ]
 			},
 			"uci": [ "openuf" ]
 		},

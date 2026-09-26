@@ -52,7 +52,6 @@ function conf_options() {
 	const s = cursor().get_all('openuf', 'main') ?? {};
 	const on = (v, def) => (v == null || v == '') ? def : (v in [ '1', 'true', 'yes', 'on', 'enabled' ]);
 	return {
-		modelmap: s.modelmap || 'auto',
 		inform_url: s.inform_url || null,
 		own_config: on(s.own_config, true),
 		bridge_backend: s.bridge_backend || 'auto',
@@ -62,17 +61,6 @@ function conf_options() {
 		country_override: s.country_override || null,
 		debug_dump_file: s.debug_dump_file || null
 	};
-}
-
-// The model maps this build ships, for the settings page's list.
-function modelmaps() {
-	const out = [];
-	for (let f in lsdir(`${OPENUF}/openwrt/modelmap`) ?? []) {
-		const m = match(f, /^(.+)\.lua$/);
-		if (m)
-			push(out, m[1]);
-	}
-	return sort(out);
 }
 
 // Catalogue entry for a model code: its product name, SKU, system id and
@@ -128,12 +116,6 @@ function unhandled() {
 }
 
 const methods = {
-	modelmaps: {
-		call: function() {
-			return { modelmaps: modelmaps() };
-		}
-	},
-
 	unhandled: {
 		call: function() {
 			return unhandled();
@@ -183,7 +165,6 @@ const methods = {
 					hostname: st.hostname || null
 				},
 				hardware: {
-					modelmap: conf.modelmap,
 					uplink: map?.uplink,
 					ports: map?.ports ?? [],
 					radios: map?.radios ?? [],

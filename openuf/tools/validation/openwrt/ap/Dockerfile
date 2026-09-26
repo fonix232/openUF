@@ -12,11 +12,11 @@ RUN mkdir -p /var/lock /var/run \
 COPY src/ /usr/share/openuf/
 COPY files/openuf.init /etc/init.d/openuf
 COPY files/openuf.config /etc/config/openuf
-COPY tools/validation/openwrt/ap/bench-modelmap.lua /usr/share/openuf/openwrt/modelmap/bench.lua
+COPY tools/validation/openwrt/ap/bench-modelmap.lua /etc/openuf/bench-map.lua
 COPY tools/validation/openwrt/ap/network.bifrost /etc/config/network.bench
 COPY tools/validation/openwrt/ap/prepare.sh /usr/local/sbin/bench-prepare
 RUN chmod +x /usr/local/sbin/bench-prepare /etc/init.d/openuf /usr/share/openuf/hook/*.sh \
     && ln -sf /usr/share/openuf/hook/syswrapper.sh /usr/bin/syswrapper.sh \
     && mkdir -p /etc/openuf \
-    && uci set openuf.main.modelmap=bench && uci commit openuf
+    && printf '%s\n' 'local id = dev.identity' 'dev = dofile("/etc/openuf/bench-map.lua")' 'dev.identity = id' > /etc/openuf/local.lua
 CMD ["/sbin/init"]

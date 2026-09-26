@@ -42,7 +42,7 @@ return {
 	{
 		name = "package: every option the LuCI settings page writes is one the daemon reads",
 		fn = function()
-			local known = {modelmap = true}
+			local known = {}
 			for _, o in ipairs(config.OPTIONS) do known[o[1]] = true end
 			local js = read("../luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js")
 			local n = 0
@@ -62,7 +62,7 @@ return {
 		fn = function()
 			local s = {}
 			for k, v in read("files/openuf.config"):gmatch("option ([%w_]+) '([^']*)'") do s[k] = v end
-			assert_eq(s.modelmap, "auto", "auto model map")
+			assert_nil(s.modelmap, "no model map option")
 			local c = config.options(s)
 			assert_eq(c.inform_url, "http://unifi:8080/inform", "default inform URL")
 		end

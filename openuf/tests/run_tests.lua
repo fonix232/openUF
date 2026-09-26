@@ -169,7 +169,7 @@ local test_files = {
 	"tests/test_l2guard.lua",
 	"tests/test_staevents.lua",
 	"tests/test_modelmatch.lua",
-	"tests/test_modelmap.lua",
+	"tests/test_board.lua",
 }
 
 for _, filepath in ipairs(test_files) do

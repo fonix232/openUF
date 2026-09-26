@@ -53,7 +53,7 @@ local inform = dofile("inform.lua")
 if type(config.state_file) == "string" and config.state_file ~= "" then
 	inform._state._state_file = config.state_file
 end
-local ufhw = {uap = require("loader").run("unifi.ufmodel." .. dev.openuf.uap.ufmodel)}
+local ufhw = {uap = dev.identity}
 dev.conf.config = config
 dev.conf.uap    = dev.openuf and dev.openuf.uap
 local st = inform._state.load()

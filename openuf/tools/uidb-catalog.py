@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Generate src/unifi/ufmodel/catalog.lua from the UniFi Network application's
+"""Generate src/unifi/catalog.lua from the UniFi Network application's
 own model registry.
 
     python3 tools/uidb-catalog.py --uidb uidb.json --bundles bundles.json [--fw] \
-        > src/unifi/ufmodel/catalog.lua
+        > src/unifi/catalog.lua
 
 uidb.json and bundles.json ship inside the Network application package
 (unifi_sysvinit_all.deb: usr/lib/unifi/dl/uidb/uidb.json and
@@ -14,7 +14,7 @@ identity without it shows a permanent Upgrade badge until the first upgrade
 round teaches openUF the right one (upgrade.lua).
 
 Only access points (unifi.network.type == "uap") that the controller adopts
-are kept, reduced to what unifi/ufmodel/auto.lua matches on and what an identity
+are kept, reduced to what unifi/identity.lua matches on and what an identity
 needs.
 """
 

@@ -37,8 +37,8 @@ once the network is up. Both come from two files:
 2. **Bootstrap.** Once there is a route and DNS, the service runs `apk add openuf`,
    plus `luci-app-openuf` when LuCI is installed. The
    package verifies against the feed's signature, starts openUF and takes over from
-   there. `MODELMAP=auto` derives the ports, uplink, identity MAC and LED from
-   `/etc/board.json`, and picks the closest UniFi model from the controller's own
+   there. openUF describes the board from `/etc/board.json` (ports, uplink,
+   identity MAC, LED) and picks the closest UniFi model from the controller's own
    registry: a 5-socket WiFi 6 board is a U6-IW, a 1-socket one a U6-Pro, an
    802.11ac router a UAP-IW-HD.
 3. **Every later image.** An `owut upgrade`, or a `sysupgrade` that keeps settings,
@@ -73,8 +73,7 @@ again, and the controller sees a new, pending device.
 
 ## Requirements
 
-- OpenWrt 25.12 or later (apk) and a DSA or swconfig board. `MODELMAP=auto`
-  covers DSA boards; swconfig boards need a map from `src/modelmap/`.
+- OpenWrt 25.12 or later (apk) and a DSA board (swconfig boards are not supported).
 - Roughly 5 MB free on the overlay, or build the packages into the image as above.
   `lua-openssl` pulls in `libopenssl3`.
 - The controller must be reachable from the AP's management network.

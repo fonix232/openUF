@@ -107,7 +107,6 @@ def main():
     ap.add_argument("--script", type=pathlib.Path, default=HERE / "openuf-firstboot.sh")
     ap.add_argument("--feed", help="FEED: the openUF package feed's base URL")
     ap.add_argument("--inform-url", help="INFORM_URL")
-    ap.add_argument("--modelmap", help="MODELMAP")
     ap.add_argument("--bridge-backend", choices=["auto", "vlan_filtering", "bridges"])
     ap.add_argument("--l2-announce", choices=["0", "1"])
     ap.add_argument("--ssh-adopt", choices=["0", "1"],
@@ -126,7 +125,7 @@ def main():
         ap.error("need --target, --profile and --version (or --from-device)")
 
     script = firstboot(a.script, {
-        "FEED": a.feed, "INFORM_URL": a.inform_url, "MODELMAP": a.modelmap,
+        "FEED": a.feed, "INFORM_URL": a.inform_url,
         "BRIDGE_BACKEND": a.bridge_backend, "L2_ANNOUNCE": a.l2_announce,
         "AP_MODE": a.ap_mode, "SSH_ADOPT": a.ssh_adopt,
     })
