@@ -13,11 +13,6 @@
 	@return ':is(#{$items})';
 }
 
-@mixin mask-image($value) {
-	-webkit-mask-image: $value;
-	mask-image: $value;
-}
-
 // LuCI's italic notes and unset values ("none", "any"): grey and upright,
 // as UniFi's "-" is.
 @mixin muted {
@@ -32,7 +27,7 @@
 }
 
 // A state dot; @content places it.
-@mixin dot($color) {
+@mixin list-dot($color) {
 	width: 8px;
 	height: 8px;
 	@content;

@@ -10,13 +10,3 @@
 	border-radius: var(--uf-radius);
 }
 
-@mixin size($width, $height: $width) {
-	width: $width;
-	height: $height;
-}
-
-// Both spellings, as `mask` does for the shorthand.
-@mixin mask-image($value) {
-	-webkit-mask-image: $value;
-	mask-image: $value;
-}

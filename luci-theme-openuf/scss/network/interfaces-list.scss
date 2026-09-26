@@ -167,7 +167,7 @@ $off: '.tr:is([data-uf-state="down"], [data-uf-state="disabled"])';
 			&::before {
 				content: "";
 				grid-area: 1 / 1 / 3 / 2;
-				@include dot(var(--uf-network-state, var(--uf-text-4)));
+				@include list-dot(var(--uf-network-state, var(--uf-text-4)));
 			}
 
 			// The zone's tile. LuCI gives the colour inline, on the head.
@@ -540,7 +540,7 @@ $off: '.tr:is([data-uf-state="down"], [data-uf-state="disabled"])';
 			&::before {
 				content: "";
 				flex: 0 0 auto;
-				@include dot(var(--uf-green));
+				@include list-dot(var(--uf-green));
 			}
 
 			&:has(img[src*="_disabled."])::before { background: var(--uf-text-4); }

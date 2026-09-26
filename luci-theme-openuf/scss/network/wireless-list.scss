@@ -384,7 +384,7 @@ $ssid: ':not(:has(.cbi-button-add))';
 				flex: none;
 				align-self: center;
 				order: 0;
-				@include dot(var(--uf-network-state, var(--uf-green))) { margin: 0 10px 0 -18px; }
+				@include list-dot(var(--uf-network-state, var(--uf-green))) { margin: 0 10px 0 -18px; }
 			}
 		}
 

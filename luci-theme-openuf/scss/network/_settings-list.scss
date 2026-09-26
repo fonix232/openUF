@@ -4,18 +4,6 @@
 // own order, on its own selectors.
 @use '../abstracts' as *;
 
-@mixin size($width, $height: $width) {
-	width: $width;
-	height: $height;
-}
-
-// The base's button colours.
-@mixin btn($fg, $bg: null, $line: null) {
-	--uf-btn-fg: #{$fg};
-	@if $bg { --uf-btn-bg: #{$bg}; }
-	@if $line { --uf-btn-line: #{$line}; }
-}
-
 // LuCI's <em>, an unset value ("none", "unspecified", "any") or a note: grey,
 // as UniFi's "-" is, not italic.
 @mixin grey-em {
