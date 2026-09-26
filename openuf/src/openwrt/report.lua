@@ -80,6 +80,9 @@ function M.build(ctx, st, cfg, ufhw)
 	-- mac -> {vap, signal, uptime, idle}: what staevents.lua diffs between
 	-- heartbeats into the controller's connection events.
 	local sta_snapshot = {}
+	-- hostapd interface -> vap_table name: connection failures arrive from
+	-- hostapd by interface, and the controller knows the VAP by name.
+	local vap_by_ifname = {}
 	-- Device-level satisfaction accumulator, filled by the per-VAP station
 	-- loop further down and consumed at payload assembly.
 	local sat_sum_all, sat_count_all = 0, 0
@@ -501,6 +504,7 @@ function M.build(ctx, st, cfg, ufhw)
 				vap.radio_name, vap.essid)
 			local stas = {}
 			if ok_if and ifname then
+				vap_by_ifname[ifname] = vap.name
 				local ok_sta, rv2 = pcall(ctx._sysinfo.sta_table, ifname)
 				if ok_sta then stas = rv2 end
 			end
@@ -1117,6 +1121,7 @@ function M.build(ctx, st, cfg, ufhw)
 	-- Kept for staevents: this heartbeat's stations, and the identity fields a
 	-- notification inform repeats.
 	ctx._last_sta_snapshot = sta_snapshot
+	ctx._last_vap_by_ifname = vap_by_ifname
 	ctx._last_identity = {}
 	for _, k in ipairs(ctx._staevents.IDENTITY_FIELDS) do ctx._last_identity[k] = payload[k] end
 

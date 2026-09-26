@@ -956,6 +956,27 @@ sends up to eight events after each successful inform. A client that joins is an
 leaves is a `sta_leave`, with `last_seen` in device uptime. Events queue while the
 controller is unreachable (200 at most). `sta_events = false` turns them off.
 
+The `success` carries the connection's timing, which is what fills the WiFi Connectivity
+view (Association, Authentication, DHCP, DNS and their latencies). The controller takes
+cumulative microseconds from the client's first Authentication frame: `assoc_delta` to
+association, `wpa_auth_delta` to the end of the key handshake, `ip_delta` to the DHCP ACK
+and `traffic_delta` to the first DNS answer, and for an AP on firmware 6.2.1 or later it
+counts a connection only when `traffic_delta` and `dns_responses` are there. openUF
+measures them on the AP:
+
+- the 802.11 steps from hostapd's ubus notifications (`auth`, `assoc`, `sta-authorized`,
+  `key-mismatch`), stamped by a small ucode collector the service runs next to the daemon
+  (`/usr/share/openuf/openwrt/staphase.uc`, writing `/tmp/openuf-phases.json`). It answers
+  every notification with success at once: with usteer running, hostapd waits for each
+  subscriber's answer to an `auth` or `assoc` and rejects the client on a non-zero one;
+- the first DHCP ACK and DNS answer forwarded to each client from nftables (`table bridge
+  openuf_ev`), whose timed sets date the packet by what remains of the timeout.
+
+A connection with no DNS answer within a minute is not reported: the controller would drop
+an unverified success anyway. A wrong passphrase is a `failure` (`auth_failures` when SAE
+rejected it before association, `wpa_auth_failures` when the 4-way handshake did), one event
+per client per minute with the count.
+
 ### Config pushes that fail to apply
 
 Every push is judged once all of its steps have run. If one raised an error (the WiFi
