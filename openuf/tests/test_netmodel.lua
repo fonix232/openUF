@@ -436,4 +436,120 @@ return {
 			end
 		end
 	},
+	{
+		name = "netmodel: no rollback copy, no change -- the plan is not committed",
+		fn = function()
+			local u = bifrost_uci()
+			local fs = new_fs()
+			netmodel._uci = u.mock
+			stub_io(fs)
+			netmodel._write_file = function(p, c)
+				if p == netmodel.ROLLBACK_FILE then return false end
+				fs.files[p] = c
+				return true
+			end
+			local sys = fixture("system_cfg_10_6_mgmt_vlan.txt")
+			local st = {}
+			local commits = u.commits.network
+			local changed, plan, outcome = netmodel.converge(netmodel.parse(sys),
+				inform_switch_parse(sys), e8450_cfg(), st, {})
+			netmodel._uci = nil
+			assert_false(changed, "nothing applied")
+			assert_nil(plan, "no plan for the WiFi pass")
+			assert_eq(outcome, "failed", "outcome")
+			assert_eq(u.commits.network, commits, "UCI not committed")
+			assert_nil(st.netmodel_pending, "no rollback armed")
+			assert_eq(#fs.cmds, 0, "network not reloaded")
+		end
+	},
+	{
+		name = "netmodel: a failed commit is a failed plan, and its rollback copy goes",
+		fn = function()
+			local u = bifrost_uci()
+			local fs = new_fs()
+			netmodel._uci = u.mock
+			stub_io(fs)
+			u.cursor.commit = function() return false end
+			local sys = fixture("system_cfg_10_6_mgmt_vlan.txt")
+			local st = {}
+			local changed, plan, outcome = netmodel.converge(netmodel.parse(sys),
+				inform_switch_parse(sys), e8450_cfg(), st, {})
+			netmodel._uci = nil
+			assert_false(changed, "nothing applied")
+			assert_eq(outcome, "failed", "outcome")
+			assert_nil(plan, "no plan")
+			assert_nil(fs.files[netmodel.ROLLBACK_FILE], "no stale rollback copy")
+			assert_nil(st.netmodel_pending, "no rollback armed")
+		end
+	},
+	{
+		name = "netmodel: a rollback that cannot write keeps its copy and tries again",
+		fn = function()
+			local fs = new_fs()
+			stub_io(fs)
+			fs.files[netmodel.ROLLBACK_FILE] = "the old network"
+			local st = {netmodel_pending = {fp = "abc", since = fs.now, timeout = 10}}
+			fs.now = fs.now + 11
+			local writes_fail = true
+			netmodel._write_file = function(p, c)
+				if writes_fail then return false end
+				fs.files[p] = c
+				return true
+			end
+			assert_eq(netmodel.check(st, false), "rollback_failed", "reported")
+			assert_eq(fs.files[netmodel.ROLLBACK_FILE], "the old network", "copy kept")
+			assert_not_nil(st.netmodel_pending, "still pending")
+			assert_eq(#fs.cmds, 0, "no reload of a network that was not restored")
+			writes_fail = false
+			assert_eq(netmodel.check(st, false), "rolled_back", "the next try restores")
+			assert_eq(fs.files["/etc/config/network"], "the old network", "restored")
+			assert_nil(fs.files[netmodel.ROLLBACK_FILE], "copy spent")
+			assert_eq(st.netmodel_failed, "abc", "the plan is remembered as failed")
+		end
+	},
+	{
+		name = "netmodel: a plan that was rolled back comes back rejected, with no plan",
+		fn = function()
+			local u = bifrost_uci()
+			local fs = new_fs()
+			netmodel._uci = u.mock
+			stub_io(fs)
+			local sys = fixture("system_cfg_10_6_mgmt_vlan.txt")
+			local m, sw = netmodel.parse(sys), inform_switch_parse(sys)
+			local st = {}
+			local _, plan = netmodel.converge(m, sw, e8450_cfg(), st, {})
+			st.netmodel_failed = netmodel.fingerprint(plan)
+			local changed, again, outcome = netmodel.converge(m, sw, e8450_cfg(), st, {})
+			netmodel._uci = nil
+			assert_false(changed, "not applied")
+			assert_nil(again, "the refused plan is not handed on")
+			assert_eq(outcome, "rejected", "outcome")
+		end
+	},
+	{
+		name = "netmodel: a controller network tagged with VLAN 1 is refused, not merged into the untagged one",
+		fn = function()
+			local u = bifrost_uci()
+			local fs = new_fs()
+			netmodel._uci = u.mock
+			stub_io(fs)
+			local sys = table.concat({
+				"vlan.1.devname=eth0", "vlan.1.id=1",
+				"bridge.1.devname=br0", "bridge.1.port.1.devname=eth0", "bridge.1.port.2.devname=ath0",
+				"bridge.2.devname=br0.1", "bridge.2.port.1.devname=eth0.1", "bridge.2.port.2.devname=ath1",
+				"dhcpc.1.status=enabled", "dhcpc.1.devname=br0",
+			}, "\n") .. "\n"
+			local m = netmodel.parse(sys)
+			local commits = u.commits.network
+			local plan, why = netmodel.plan(m, nil, e8450_cfg(), {})
+			assert_nil(plan, "no plan")
+			assert_true(tostring(why):find("VLAN 1", 1, true) ~= nil, "says why")
+			local changed, p2, outcome = netmodel.converge(m, nil, e8450_cfg(), {}, {})
+			netmodel._uci = nil
+			assert_false(changed, "nothing written")
+			assert_nil(p2, "no plan")
+			assert_eq(outcome, "rejected", "rejected")
+			assert_eq(u.commits.network, commits, "not committed")
+		end
+	},
 }

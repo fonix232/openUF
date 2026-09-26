@@ -3829,4 +3829,85 @@ return {
 			inform._state.save = orig
 		end
 	},
+	{
+		name = "inform: a network plan netmodel refuses stops the WiFi pass and is not reported applied",
+		fn = function()
+			local f = assert(io.open("tests/fixtures/system_cfg_10_6_vlans.txt", "r"))
+			local sys = f:read("*a")
+			f:close()
+			local orig = {nm = inform._netmodel, uci = inform._ucihelper, stderr = io.stderr}
+			io.stderr = {write = function() end}
+			local wifi = 0
+			inform._netmodel = {
+				backend = function() return "vlan_filtering" end,
+				parse = function() return {vids = {}, bridge_vid = {}} end,
+				converge = function() return false, nil, "rejected" end,
+			}
+			inform._ucihelper = setmetatable({apply_config = function() wifi = wifi + 1 end},
+				{__index = orig.uci})
+			local st = sample_state({adopted = true, cfgversion = "good", cfgversion_effective = "good"})
+			inform.handle_response(cjson.encode({_type = "setparam",
+				mgmt_cfg = "cfgversion=bad\n", system_cfg = sys}), st, {config = {}})
+			inform._netmodel, inform._ucihelper, io.stderr = orig.nm, orig.uci, orig.stderr
+			assert_eq(wifi, 0, "no WiFi attached to networks that were not built")
+			assert_eq(st.cfgversion_effective, "good", "the refused push is not reported applied")
+		end
+	},
+	{
+		name = "inform: an exception in the per-port VLAN pass is a failed push",
+		fn = function()
+			local f = assert(io.open("tests/fixtures/system_cfg_10_6_vlans.txt", "r"))
+			local sys = f:read("*a")
+			f:close()
+			local orig = {nm = inform._netmodel, sv = inform._switchvlan, uci = inform._ucihelper,
+				stderr = io.stderr}
+			io.stderr = {write = function() end}
+			inform._netmodel = {backend = function() return "bridges" end}
+			inform._ucihelper = setmetatable({apply_config = function() end}, {__index = orig.uci})
+			inform._switchvlan = setmetatable({
+				apply = function() error("switch exploded") end,
+				restore = function() error("switch exploded") end,
+				dsa_members = function() return {} end,
+			}, {__index = orig.sv})
+			local st = sample_state({adopted = true, cfgversion = "good", cfgversion_effective = "good"})
+			inform.handle_response(cjson.encode({_type = "setparam",
+				mgmt_cfg = "cfgversion=next\n", system_cfg = sys}), st, {config = {}})
+			inform._netmodel, inform._switchvlan, inform._ucihelper, io.stderr =
+				orig.nm, orig.sv, orig.uci, orig.stderr
+			assert_eq(st.cfgversion_effective, "good", "not reported applied")
+		end
+	},
+	{
+		name = "inform: an undecryptable answer does not hold a network rollback off",
+		fn = function()
+			local orig = {
+				build_json = inform.build_json, build_packet = inform.build_packet,
+				http_post = inform.http_post, parse_packet = inform.parse_packet,
+				reload = inform._reload_if_changed, rrm = inform._rrm_tick,
+				nm = inform._netmodel, stderr = io.stderr,
+			}
+			io.stderr = {write = function() end}
+			local seen = {}
+			inform._netmodel = {check = function(_, ok) seen[#seen + 1] = ok return nil end}
+			inform._reload_if_changed = function(_, _, last) return last end
+			inform._rrm_tick = function() return false end
+			inform.build_json = function() return "{}" end
+			inform.build_packet = function() return "pkt" end
+			inform.http_post = function() return "garbage" end
+			inform.parse_packet = function() error("bad magic") end
+			local ctx = {interval = 10, backoff = 10}
+			local st = sample_state({adopted = true, netmodel_pending = {fp = "x"}})
+			inform._tick(st, {}, nil, ctx)
+			inform.build_packet = function() error("no key") end
+			inform._tick(st, {}, nil, ctx)
+			io.stderr = orig.stderr
+			inform.build_json, inform.build_packet, inform.http_post, inform.parse_packet,
+				inform._reload_if_changed, inform._rrm_tick, inform._netmodel =
+				orig.build_json, orig.build_packet, orig.http_post, orig.parse_packet,
+				orig.reload, orig.rrm, orig.nm
+			assert_eq(#seen, 2, "the window is judged on both ticks")
+			assert_eq(seen[1], false, "a 200 with an unreadable body is not the controller answering")
+			assert_eq(seen[2], false, "nor is an inform that could not be built")
+		end
+	},
 }

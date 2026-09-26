@@ -3134,6 +3134,11 @@ function M.handle_response(json_str, st, cfg)
 			-- the legacy IP-settings, per-VLAN-bridge and switchvlan passes below
 			-- stand aside: they describe a different layout of the same ports.
 			local netplan = nil
+			-- Set when the controller's network could not be applied: every
+			-- pass below that assumes a layout (addressing, the WiFi pass that
+			-- attaches VAPs, per-port VLANs) stays out of it, and the push is
+			-- not reported as applied.
+			local net_blocked = false
 			local nm = M._netmodel
 			if nm and nm.backend(cfg) == "vlan_filtering" then
 				local model = nm.parse(sys_raw)
@@ -3152,12 +3157,14 @@ function M.handle_response(json_str, st, cfg)
 						local ok_up, u = pcall(M._sysinfo.uplink_bridge_port, br)
 						if ok_up then up = u end
 					end
-					local ok_nm, changed, plan = pcall(nm.converge, model,
+					local ok_nm, changed, plan, outcome = pcall(nm.converge, model,
 						M._parse_switch_system_cfg(sys_raw), cfg, st,
 						{uplink_ifname = up, identity_mac = st.mac, current_ip = st.ip})
 					if not ok_nm then
 						io.stderr:write("inform: netmodel: " .. tostring(changed) .. "\n")
-						apply_ok = false
+						apply_ok, net_blocked = false, true
+					elseif outcome == "rejected" or outcome == "failed" then
+						apply_ok, net_blocked = false, true
 					elseif plan then
 						netplan = plan
 						-- The per-VLAN-bridge ledgers describe a layout that no
@@ -3177,6 +3184,12 @@ function M.handle_response(json_str, st, cfg)
 						end
 					end
 				end
+			end
+
+			if net_blocked then
+				io.stderr:write("inform: the controller's network was not applied; its"
+					.. " addressing, WiFi and port settings wait for the next push\n")
+				ip = nil
 			end
 
 			if ip then
@@ -3246,7 +3259,7 @@ function M.handle_response(json_str, st, cfg)
 			-- only: on swconfig a port VLAN is a switch table entry, not a
 			-- bridge. Safe when nothing is pushed (an empty set).
 			local port_vlans = {}
-			if not netplan and M._switchvlan and M._switchvlan.dsa_members
+			if not netplan and not net_blocked and M._switchvlan and M._switchvlan.dsa_members
 				and not (cfg and cfg.vlan and cfg.vlan.ports) then
 				local br = M._sysinfo.bridge_of(cfg and cfg.net and cfg.net.lan_cpueth)
 				local up = br and M._sysinfo.uplink_bridge_port(br) or nil
@@ -3258,7 +3271,7 @@ function M.handle_response(json_str, st, cfg)
 			end
 
 			local ufuci = M._ucihelper
-			if ufuci and ufuci.apply_config then
+			if ufuci and ufuci.apply_config and not net_blocked then
 				if #radio_table > 0 or #vap_table > 0 then
 					-- Band Steering (wireless.<n>.no2ghz_oui) is confirmed
 					-- live to be a per-WLAN wire field, not a per-device
@@ -3287,8 +3300,8 @@ function M.handle_response(json_str, st, cfg)
 			-- Per-port VLAN, after the WiFi pass so that any VLAN interface
 			-- ensure_vlan_network() creates for a tagged SSID already exists
 			-- before a switch port is put on the same VLAN.
-			if M._switchvlan and not netplan then
-				pcall(function()
+			if M._switchvlan and not netplan and not net_blocked then
+				local ok_sv, err_sv = pcall(function()
 					-- Every VLAN a tagged SSID lands on. The switch drops
 					-- frames for a VID it has no entry for, so these need
 					-- trunking whether or not per-port VLAN is in use.
@@ -3376,6 +3389,10 @@ function M.handle_response(json_str, st, cfg)
 					-- cannot notice on its own.
 					M._sysinfo.forget_uplink_cache()
 				end)
+				if not ok_sv then
+					io.stderr:write("inform: per-port VLAN failed: " .. tostring(err_sv) .. "\n")
+					apply_ok = false
+				end
 			end
 
 			-- Controller-managed system settings: timezone, NTP servers and
@@ -3383,10 +3400,14 @@ function M.handle_response(json_str, st, cfg)
 			-- gated by the system_timezone / system_ntp / system_cron options.
 			local gate = cfg and cfg.config and cfg.config.controller_system
 			if M._sysconf and gate ~= false then
-				pcall(function()
+				local ok_sc, err_sc = pcall(function()
 					local sc = M._sysconf.parse(sys_raw)
 					if sc then M._sysconf.apply(sc, gate) end
 				end)
+				if not ok_sc then
+					io.stderr:write("inform: system settings failed: " .. tostring(err_sc) .. "\n")
+					apply_ok = false
+				end
 			end
 
 			-- The ebtables.* hardening block (l2guard.lua): BPDU and VLAN-tag
@@ -3394,7 +3415,7 @@ function M.handle_response(json_str, st, cfg)
 			-- names go to state.json for the startup rebuild. After the WiFi
 			-- pass on purpose: a VAP the push just added has its netdev by now.
 			if M._l2guard and not (cfg and cfg.config and cfg.config.l2guard == false) then
-				pcall(function()
+				local ok_l2, err_l2 = pcall(function()
 					local eb = M._l2guard.parse(sys_raw)
 					if not eb then return end
 					for _, u in ipairs(eb.unknown or {}) do
@@ -3415,6 +3436,10 @@ function M.handle_response(json_str, st, cfg)
 					-- next push, which may be days away.
 					M._l2guard_retry = (#names == 0) and (spec.bpdu or spec.tagdrop) or nil
 				end)
+				if not ok_l2 then
+					io.stderr:write("inform: L2 hardening failed: " .. tostring(err_l2) .. "\n")
+					apply_ok = false
+				end
 			end
 		end
 
@@ -4258,6 +4283,9 @@ function M._tick(st, cfg, ufhw, ctx)
 	local ok_p, pkt = pcall(M.build_packet, json_str, st)  -- use_gcm read from st.use_gcm
 	if not ok_p then
 		io.stderr:write("inform: build_packet failed: " .. tostring(pkt) .. "\n")
+		-- No inform went out: the controller was not reached, and a network
+		-- plan's rollback window is judged on this tick like any other.
+		if M._netmodel_check(st, cfg, false) == "rolled_back" then return 5 end
 		return ctx.interval
 	end
 
@@ -4308,6 +4336,9 @@ function M._tick(st, cfg, ufhw, ctx)
 	local parse_ok, json_body = pcall(M.parse_packet, body, st)
 	if not parse_ok then
 		io.stderr:write("inform: parse error: " .. tostring(json_body) .. "\n")
+		-- An answer this device cannot decrypt does not prove the management
+		-- path, so it must not hold a network plan's rollback off forever.
+		if M._netmodel_check(st, cfg, false) == "rolled_back" then return 5 end
 		return ctx.interval
 	end
 	-- The controller answered with something this device can decrypt: the

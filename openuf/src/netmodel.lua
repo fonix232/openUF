@@ -336,6 +336,18 @@ function M.plan(model, sw, cfg, opts)
 	local NATIVE = M.NATIVE_VID
 	local function internal(vid) return (vid == nil or vid == 0) and NATIVE or vid end
 
+	-- VLAN 1 is the untagged VLAN inside the bridge. A controller network
+	-- TAGGED with VID 1 would land on it too and leave the uplink untagged,
+	-- merging the two networks; the controller reserves VLAN 1 for its
+	-- untagged Default network, so this is refused rather than remapped.
+	local tagged_native = (model.vids or {})[NATIVE] or model.mgmt_vid == NATIVE
+	for _, v in pairs(model.bridge_vid or {}) do
+		if v == NATIVE then tagged_native = true end
+	end
+	if tagged_native then
+		return nil, "VLAN " .. NATIVE .. " arrives tagged, but it is the untagged VLAN inside the bridge"
+	end
+
 	local sockets = socket_list(cfg)
 	local uplink = opts.uplink_ifname or net.lan_cpueth or (sockets[1] and sockets[1].ifname)
 
@@ -672,12 +684,27 @@ end
 
 -- Make UCI match the controller's model: plan, take over foreign bridges when
 -- allowed (config.bridge_takeover ~= false), write, reload, and arm the
--- rollback. Returns changed, plan -- the plan is returned even when nothing
--- changed, because the WiFi pass needs it to attach VAPs.
+-- rollback. Returns changed, plan, outcome:
+--   "applied"    written and committed; rollback armed      (true,  plan)
+--   "unchanged"  UCI already matched                         (false, plan)
+--   "declined"   bridge takeover is off and a foreign bridge
+--                holds the sockets: the caller keeps its own
+--                layout                                      (false, nil)
+--   "rejected"   this plan once lost the controller, or it
+--                cannot be built                              (false, nil)
+--   "failed"     it could not be committed with a rollback
+--                copy in place                                (false, nil)
+-- The plan comes back only when it is what the network now is: the WiFi pass
+-- attaches VAPs to its interfaces, and anything else would name interfaces
+-- that do not exist.
 --   opts.uplink_ifname / opts.identity_mac: see M.plan
 function M.converge(model, sw, cfg, st, opts)
 	opts = opts or {}
-	local plan = M.plan(model, sw, cfg, opts)
+	local plan, why = M.plan(model, sw, cfg, opts)
+	if not plan then
+		M._log("NOT applying the controller's network: " .. tostring(why))
+		return false, nil, "rejected"
+	end
 	local before = M._read_file(M.NETWORK_FILE)
 	local cursor = get_uci().cursor()
 	local takeover = not (cfg and cfg.config and cfg.config.bridge_takeover == false)
@@ -688,7 +715,7 @@ function M.converge(model, sw, cfg, st, opts)
 			M._log("bridge takeover is off (config.bridge_takeover = false) and "
 				.. table.concat(claimed, ", ") .. " already holds this board's sockets;"
 				.. " leaving the network alone")
-			return false, nil
+			return false, nil, "declined"
 		end
 	end
 	if takeover then
@@ -702,7 +729,7 @@ function M.converge(model, sw, cfg, st, opts)
 				local o = {}
 				for k, v in pairs(opts) do o[k] = v end
 				o.keep_vids = keep
-				plan = M.plan(model, sw, cfg, o)
+				plan = assert(M.plan(model, sw, cfg, o))
 				break
 			end
 		end
@@ -717,13 +744,13 @@ function M.converge(model, sw, cfg, st, opts)
 				.. " `syswrapper.sh netmodel-retry`, to try again.")
 			st.netmodel_failed_logged = fp
 		end
-		return false, plan
+		return false, nil, "rejected"
 	end
 
 	changed = M.write(cursor, plan) or changed
 	if not changed then
 		st.netmodel_applied = fp
-		return false, plan
+		return false, plan, "unchanged"
 	end
 
 	-- The network is about to reload: a DHCP management interface asks for
@@ -738,11 +765,25 @@ function M.converge(model, sw, cfg, st, opts)
 		pcall(M._stop_releasing_dhcp_client, plan.mgmt.iface)
 	end
 
-	if before and not M._read_file(M.PRISTINE_FILE) then
-		M._write_file(M.PRISTINE_FILE, before)
+	-- The rollback copy is what makes this change safe to try: no copy, no
+	-- change. (The pristine copy only serves an uninstall; losing it is
+	-- logged, not fatal.)
+	if before and not M._read_file(M.PRISTINE_FILE)
+			and not M._write_file(M.PRISTINE_FILE, before) then
+		M._log("could not save " .. M.PRISTINE_FILE .. " (the network before openUF)")
 	end
-	if before then M._write_file(M.ROLLBACK_FILE, before) end
-	cursor:commit("network")
+	if not (before and M._write_file(M.ROLLBACK_FILE, before)) then
+		cursor:revert("network")
+		M._log("NOT applying network plan " .. fp .. ": no rollback copy of "
+			.. M.NETWORK_FILE .. " could be kept")
+		return false, nil, "failed"
+	end
+	if cursor:commit("network") == false then
+		cursor:revert("network")
+		M._remove_file(M.ROLLBACK_FILE)
+		M._log("NOT applying network plan " .. fp .. ": committing " .. M.NETWORK_FILE .. " failed")
+		return false, nil, "failed"
+	end
 	st.netmodel_pending = {fp = fp, since = M._uptime(),
 		timeout = tonumber(cfg and cfg.config and cfg.config.bridge_rollback_timeout)
 			or M.ROLLBACK_TIMEOUT}
@@ -752,13 +793,14 @@ function M.converge(model, sw, cfg, st, opts)
 		:format(fp, plan.bridge.name, #sorted_keys(plan.vlans), plan.mgmt.device,
 			tostring(plan.mgmt.proto or "unchanged"), st.netmodel_pending.timeout))
 	M._run_cmd("/etc/init.d/network reload")
-	return true, plan
+	return true, plan, "applied"
 end
 
 -- ─── Rollback ────────────────────────────────────────────────────────────────
 
 -- Called after every inform. `ok` is whether the controller answered.
--- Returns "confirmed", "rolled_back" or nil.
+-- Returns "confirmed", "rolled_back", "rollback_failed" (the copy could not
+-- be written back: kept, and tried again next time) or nil.
 function M.check(st, ok)
 	local p = st and st.netmodel_pending
 	if not p then return nil end
@@ -770,15 +812,22 @@ function M.check(st, ok)
 	end
 	if M._uptime() - (p.since or 0) < (p.timeout or M.ROLLBACK_TIMEOUT) then return nil end
 	local saved = M._read_file(M.ROLLBACK_FILE)
-	st.netmodel_pending = nil
-	st.netmodel_failed = p.fp
-	st.netmodel_applied = nil
 	if not saved then
+		st.netmodel_pending = nil
+		st.netmodel_failed = p.fp
+		st.netmodel_applied = nil
 		M._log("network plan " .. tostring(p.fp) .. " lost the controller and there is"
 			.. " no rollback copy to restore")
 		return nil
 	end
-	M._write_file(M.NETWORK_FILE, saved)
+	if not M._write_file(M.NETWORK_FILE, saved) then
+		M._log("network plan " .. tostring(p.fp) .. " lost the controller, and writing the"
+			.. " rollback copy back failed; keeping it and trying again")
+		return "rollback_failed"
+	end
+	st.netmodel_pending = nil
+	st.netmodel_failed = p.fp
+	st.netmodel_applied = nil
 	M._remove_file(M.ROLLBACK_FILE)
 	M._log("network plan " .. tostring(p.fp) .. " lost the controller for "
 		.. tostring(p.timeout) .. "s -- restored the previous /etc/config/network")
