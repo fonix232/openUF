@@ -23,6 +23,7 @@
 #   UF_OUT         screenshot directory       (test/out)
 #   UF_APK         a built luci-theme-unifi .apk to install instead of this
 #                  checkout's files (what the feed publishes)
+#   UF_COMPAT      0 skips the fallback pass  (1, test/compat.cjs)
 
 set -eu
 
@@ -101,3 +102,8 @@ fi
 
 mkdir -p "$out"
 NODE_PATH=${NODE_PATH:-$(npm root -g)} node "$here/smoke.cjs" "http://127.0.0.1:$port" "$password" "$out"
+
+# Again as Firefox and Safari see it, without the CSS only Chromium has.
+if [ "${UF_COMPAT:-1}" != 0 ]; then
+	NODE_PATH=${NODE_PATH:-$(npm root -g)} node "$here/compat.cjs" "http://127.0.0.1:$port" "$password" "$out/compat"
+fi

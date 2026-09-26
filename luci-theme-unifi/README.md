@@ -98,7 +98,11 @@ feed's CI tests exactly what it publishes. Then it drives LuCI in headless
 Chromium: it signs in, visits every page the menu offers, and fails on any
 script error, failed asset, page that never finishes loading, or layout wider
 than the window. Screenshots of the main views, in light, dark and at phone
-width, land in `test/out/`.
+width, land in `test/out/`. It then walks the menu again with the CSS that only
+Chromium ships (`field-sizing`, `scroll-initial-target`, scroll-driven
+animations, `scrollbar-color`) taken out of `cascade.css`, as Firefox and Safari
+see it, so the fallbacks for them are checked too (`test/compat.cjs`;
+`UF_COMPAT=0` skips it).
 
 `sh test/run.sh --setup` leaves the container running instead, and
 `test/shoot.cjs` takes full-page screenshots of any pages you name, which is

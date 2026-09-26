@@ -8314,6 +8314,15 @@ body[data-page="admin-system-system"] #localtime {
 	cursor: default;
 }
 
+/* Fallback: without field-sizing (Firefox ESR, Safari before 26.2) the
+ * field keeps its 20 characters and cuts the clock off; give it the row,
+ * the buttons wrap under it. */
+@supports not (field-sizing: content) {
+	body[data-page="admin-system-system"] #localtime {
+		width: 100%;
+	}
+}
+
 body[data-page="admin-system-system"] .cbi-value[data-name="_systime"] .cbi-button {
 	height: 28px;
 	padding: 0 12px;
@@ -8491,6 +8500,15 @@ body[data-page="admin-system-admin-repokeys"] .table textarea[readonly] {
 	font-size: 11px;
 	line-height: 17px;
 	resize: none;
+}
+
+/* Fallback: without field-sizing (Firefox ESR, Safari before 26.2) the
+ * box keeps LuCI's five rows and a longer key scrolls inside it; let it
+ * be pulled taller. */
+@supports not (field-sizing: content) {
+	body[data-page="admin-system-admin-repokeys"] .table textarea[readonly] {
+		resize: vertical;
+	}
 }
 
 body[data-page="admin-system-admin-repokeys"] .cbi-value[data-name="_newkey"] > output {
