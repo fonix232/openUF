@@ -18,7 +18,8 @@
 #   OPENWRT_IMAGE  image to test against      (openwrt/rootfs:x86-64-25.12.5)
 #   LUCI_BRANCH    LuCI branch for extras     (openwrt-25.12)
 #   LUCI_PACKAGES  extras, paths in LuCI      (modules/luci-mod-dashboard
-#                                              applications/luci-app-usteer)
+#                                              applications/luci-app-usteer
+#                                              applications/luci-app-uhttpd)
 #   UF_NAME        container name             (luci-theme-unifi-test)
 #   UF_PORT        host port for LuCI         (8080)
 #   UF_OUT         screenshot directory       (test/out)
@@ -33,7 +34,7 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 image=${OPENWRT_IMAGE:-openwrt/rootfs:x86-64-25.12.5}
 branch=${LUCI_BRANCH:-openwrt-25.12}
-packages=${LUCI_PACKAGES:-modules/luci-mod-dashboard applications/luci-app-usteer}
+packages=${LUCI_PACKAGES:-modules/luci-mod-dashboard applications/luci-app-usteer applications/luci-app-uhttpd}
 name=${UF_NAME:-luci-theme-unifi-test}
 port=${UF_PORT:-8080}
 out=${UF_OUT:-$here/out}

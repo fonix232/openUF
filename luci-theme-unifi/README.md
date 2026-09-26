@@ -21,8 +21,9 @@ The layout copies UniFi Network's:
 | White cards on a pale canvas, label/value rows | Every LuCI section, the status tables |
 | Outlined blue secondary buttons, solid blue primary, toggles | LuCI's button classes; on/off settings (LuCI *Flags*) are drawn as switches |
 
-It covers the core LuCI pages and **luci-mod-dashboard**, in light and dark,
-down to phone width, where the rail and the secondary column become a drawer.
+It covers the core LuCI pages, **luci-mod-dashboard** and **luci-app-uhttpd**,
+in light and dark, down to phone width, where the rail and the secondary
+column become a drawer.
 
 Three entries appear under *System → System → Language and Style*:
 
@@ -90,19 +91,20 @@ sh luci-theme-unifi/test/run.sh
 ```
 
 It boots the official `openwrt/rootfs` image (which ships LuCI, uhttpd and
-rpcd, so nothing comes from the package feeds), adds luci-mod-dashboard from
-LuCI's sources and a two-radio wireless config so the Wireless pages have
-something to show, and installs the theme: this checkout via `install.sh`, or,
-with `UF_APK` naming a built `.apk`, the package via `apk`, which is how the
-feed's CI tests exactly what it publishes. Then it drives LuCI in headless
-Chromium: it signs in, visits every page the menu offers, and fails on any
-script error, failed asset, page that never finishes loading, or layout wider
-than the window. Screenshots of the main views, in light, dark and at phone
-width, land in `test/out/`. It then walks the menu again with the CSS that only
-Chromium ships (`field-sizing`, `scroll-initial-target`, scroll-driven
-animations, `scrollbar-color`) taken out of `cascade.css`, as Firefox and Safari
-see it, so the fallbacks for them are checked too (`test/compat.cjs`;
-`UF_COMPAT=0` skips it).
+rpcd, so nothing comes from the package feeds), adds luci-mod-dashboard,
+luci-app-uhttpd and luci-app-usteer from LuCI's sources (with a fake usteer
+daemon, `test/fixtures/usteer.uc`) and a two-radio wireless config so the
+Wireless pages have something to show, and installs the theme: this checkout
+via `install.sh`, or, with `UF_APK` naming a built `.apk`, the package via
+`apk`, which is how the feed's CI tests exactly what it publishes. Then it
+drives LuCI in headless Chromium: it signs in, visits every page the menu
+offers, and fails on any script error, failed asset, page that never finishes
+loading, or layout wider than the window. Screenshots of the main views, in
+light, dark and at phone width, land in `test/out/`. It then walks the menu
+again with the CSS that only Chromium ships (`field-sizing`,
+`scroll-initial-target`, scroll-driven animations, `scrollbar-color`) taken out
+of `cascade.css`, as Firefox and Safari see it, so the fallbacks for them are
+checked too (`test/compat.cjs`; `UF_COMPAT=0` skips it).
 
 `sh test/run.sh --setup` leaves the container running instead, and
 `test/shoot.cjs` takes full-page screenshots of any pages you name, which is
