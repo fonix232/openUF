@@ -42,7 +42,8 @@ local MODE = ...
 -- broadcast loop, which _populate_net_info would otherwise start).
 OPENUF_TEST_MODE = true
 pcall(dofile, "lib/lib.lua")
-local ok_conf, dev, config = pcall(function() return dofile("config.lua").load() end)
+package.path = "./?.lua;" .. package.path
+local ok_conf, dev, config = pcall(function() return require("config").load() end)
 if not ok_conf then
 	io.stderr:write("probe: cannot load the settings -- run with cwd = the install "
 		.. "dir (e.g. `cd /usr/share/openuf`): " .. tostring(dev) .. "\n")

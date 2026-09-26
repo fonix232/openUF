@@ -83,37 +83,38 @@ return {
 	{
 		name = "config: the model map is auto unless UCI names one that exists",
 		fn = function()
-			local orig = config._exists
-			config._exists = function(p) return p == "modelmap/bench.lua" end
+			local orig = config._exists_map
+			config._exists_map = function(name) return name == "bench" end
 			local warned = quietly(function()
 				assert_eq(config.modelmap_name(nil), "auto", "unset")
 				assert_eq(config.modelmap_name("bench"), "bench", "present")
 				assert_eq(config.modelmap_name("missing"), "auto", "absent")
 				assert_eq(config.modelmap_name("../../etc/passwd"), "auto", "not a name")
 			end)
-			config._exists = orig
+			config._exists_map = orig
 			assert_eq(#warned, 2, "both bad names reported")
 		end
 	},
 	{
 		name = "config: load returns the model map and the options, and local.lua may change either",
 		fn = function()
-			local orig_exists, orig_dofile = config._exists, config._dofile
+			local orig = {config._exists, config._dofile, config._exists_map, config._run}
 			local loaded = {}
-			config._exists = function(p) return p == config.LOCAL_FILE or p == "modelmap/bench.lua" end
+			config._exists = function(p) return p == config.LOCAL_FILE end
+			config._exists_map = function(name) return name == "bench" end
+			config._run = function(name)
+				loaded[#loaded + 1] = name
+				return {conf = {net = {}}, openuf = {uap = {ufmodel = "auto"}}}
+			end
 			config._dofile = function(p)
 				loaded[#loaded + 1] = p
-				if p == config.LOCAL_FILE then
-					_G.config.debug_caps = {fw_caps = 1}
-					_G.dev.tweaked = true
-					return
-				end
-				return {conf = {net = {}}, openuf = {uap = {ufmodel = "auto"}}}
+				_G.config.debug_caps = {fw_caps = 1}
+				_G.dev.tweaked = true
 			end
 			local before = rawget(_G, "config")
 			local dev, c = config.load(cursor({modelmap = "bench", l2guard = "0"}))
-			config._exists, config._dofile = orig_exists, orig_dofile
-			assert_eq(loaded[1], "modelmap/bench.lua", "model map first")
+			config._exists, config._dofile, config._exists_map, config._run = orig[1], orig[2], orig[3], orig[4]
+			assert_eq(loaded[1], "modelmap.bench", "model map first")
 			assert_eq(loaded[2], config.LOCAL_FILE, "then local.lua")
 			assert_eq(c.l2guard, false, "UCI applied")
 			assert_eq(c.debug_caps.fw_caps, 1, "local.lua set a research table")

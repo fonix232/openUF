@@ -82,6 +82,8 @@ M._exists = function(path)
 end
 
 M._dofile = dofile
+M._run = function(name) return require("loader").run(name) end
+M._exists_map = function(name) return require("loader").path("modelmap." .. name) ~= nil end
 
 -- One raw UCI value as its option's type; the default for anything unset or
 -- unreadable (a typo must not take a feature away silently, so it is logged).
@@ -148,7 +150,7 @@ end
 -- The model map's name: `auto` unless UCI names one that exists.
 function M.modelmap_name(raw)
 	if raw == nil or raw == "" then return "auto" end
-	if not tostring(raw):match("^[%w_.-]+$") or not M._exists("modelmap/" .. raw .. ".lua") then
+	if not tostring(raw):match("^[%w_-]+$") or not M._exists_map(raw) then
 		M._warn(("modelmap: no modelmap/%s.lua, using auto"):format(tostring(raw)))
 		return "auto"
 	end
@@ -160,7 +162,7 @@ end
 function M.load(cursor)
 	local s = M.section(cursor)
 	local config = M.options(s)
-	local dev = M._dofile("modelmap/" .. M.modelmap_name(s.modelmap) .. ".lua")
+	local dev = M._run("modelmap." .. M.modelmap_name(s.modelmap))
 	if M._exists(M.LOCAL_FILE) then
 		local prev_dev, prev_config = rawget(_G, "dev"), rawget(_G, "config")
 		_G.dev, _G.config = dev, config

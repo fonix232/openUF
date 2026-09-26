@@ -22,6 +22,21 @@ end
 local passed = 0
 local failed = 0
 
+-- openUF's modules load each other by name (require). The suite runs from the
+-- package directory, so src/ goes in front of the path.
+package.path = "src/?.lua;" .. package.path
+
+-- A module one test file loaded (and possibly stubbed) must not leak into the
+-- next: everything loaded after this point is forgotten between files, so
+-- each file starts from fresh modules.
+local baseline = {}
+for k in pairs(package.loaded) do baseline[k] = true end
+local function forget_modules()
+	for k in pairs(package.loaded) do
+		if not baseline[k] then package.loaded[k] = nil end
+	end
+end
+
 -- Global assert helpers available to all test files
 
 function assert_eq(got, expected, label)
@@ -158,6 +173,7 @@ local test_files = {
 }
 
 for _, filepath in ipairs(test_files) do
+	forget_modules()
 	local fn, err = loadfile(filepath)
 	if not fn then
 		-- Missing file during incremental development — skip silently

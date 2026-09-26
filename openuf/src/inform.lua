@@ -40,36 +40,25 @@ end)()
 -- in test environments that do not have luasocket installed.
 local cjson  = require("cjson")
 
--- Load sibling modules (relative paths: run from the install directory, or
--- from the package directory in the test suite)
-local function _require_sibling(name)
-	local paths = {name .. ".lua", "src/" .. name .. ".lua"}
-	for _, p in ipairs(paths) do
-		local f = io.open(p, "r")
-		if f then f:close(); return dofile(p) end
-	end
-	error("cannot find module: " .. name)
-end
-
-local crypto    = _require_sibling("crypto")
-local state     = _require_sibling("state")
-local sysinfo   = _require_sibling("sysinfo")
-local lldp      = _require_sibling("lldp")
-local ucihelper = _require_sibling("ucihelper")
-local led       = _require_sibling("led")
-local netconfig = _require_sibling("netconfig")
-local firewall  = _require_sibling("firewall")
-local usteer    = _require_sibling("usteer")
-local switchvlan = _require_sibling("switchvlan")
-local rrmscan   = _require_sibling("rrmscan")
-local netmodel  = _require_sibling("netmodel")
-local stun      = _require_sibling("stun")
-local upgrade   = _require_sibling("upgrade")
-local unhandled = _require_sibling("unhandled")
-local sysconf   = _require_sibling("sysconf")
-local l2guard   = _require_sibling("l2guard")
-local staevents = _require_sibling("staevents")
-local dnswatch  = _require_sibling("dnswatch")
+local crypto    = require("crypto")
+local state     = require("state")
+local sysinfo   = require("sysinfo")
+local lldp      = require("lldp")
+local ucihelper = require("ucihelper")
+local led       = require("led")
+local netconfig = require("netconfig")
+local firewall  = require("firewall")
+local usteer    = require("usteer")
+local switchvlan = require("switchvlan")
+local rrmscan   = require("rrmscan")
+local netmodel  = require("netmodel")
+local stun      = require("stun")
+local upgrade   = require("upgrade")
+local unhandled = require("unhandled")
+local sysconf   = require("sysconf")
+local l2guard   = require("l2guard")
+local staevents = require("staevents")
+local dnswatch  = require("dnswatch")
 
 local M = {}
 
@@ -436,7 +425,7 @@ function M.parse_packet(raw, st)
 		-- ...otherwise fall back to the in-tree pure-Lua inflater (OpenWrt 25.12
 		-- ships no Lua zlib binding, so this is the normal path there).
 		if not done then
-			local inflate = _require_sibling("inflate")
+			local inflate = require("inflate")
 			payload = inflate.zlib_decompress(payload)
 		end
 	end
@@ -3792,19 +3781,17 @@ end
 
 -- Populate st.mac / st.ip using announce.lua's get_mac/get_ip helpers.
 --
--- _require_sibling dofile()s announce.lua fresh every call (dofile, unlike
--- require, never caches), which re-runs its self-executing "script entry
--- point" block at the bottom -- that block is guarded by
--- `if not OPENUF_TEST_MODE`, so outside of tests (where it's already true)
--- this would spawn announce.lua's own *infinite* L2 broadcast loop nested
+-- announce.lua is also a script: loading it runs its "script entry point"
+-- block at the bottom, guarded by `if not OPENUF_TEST_MODE`. Outside of tests
+-- that would spawn announce.lua's own *infinite* L2 broadcast loop nested
 -- inside inform.lua's own M.run, or -- if the broadcast send errors, as it
 -- does e.g. on a docker bridge network that disallows UDP broadcast -- call
 -- os.exit(1) and kill the whole inform process before the actual inform loop
--- ever runs. Suppress it for the duration of just this reuse-only dofile.
+-- ever runs. Suppress it for the load (require caches, so there is only one).
 function M._populate_net_info(st, cfg)
 	local prev_test_mode = OPENUF_TEST_MODE
 	OPENUF_TEST_MODE = true
-	local ok_ann, announce = pcall(_require_sibling, "announce")
+	local ok_ann, announce = pcall(require, "announce")
 	OPENUF_TEST_MODE = prev_test_mode
 	if not ok_ann then return end
 
@@ -4667,13 +4654,10 @@ end
 
 if not OPENUF_TEST_MODE then
 	local ok, err = pcall(function()
-		if not ufpkt then
-			local ok2 = pcall(dofile, "lib/lib.lua")
-			if not ok2 then dofile("src/lib/lib.lua") end
-		end
+		if not ufpkt then require("loader").run("lib.lib") end
 		-- Settings come from UCI (/etc/config/openuf; config.lua), with the
 		-- model map it names.
-		local dev, config = _require_sibling("config").load()
+		local dev, config = require("config").load()
 		-- state_file and inform_url: the paths every entry point agrees on.
 		-- inform_url is only the DEFAULT: an adopted device keeps whatever the
 		-- controller assigned it in state.json.
@@ -4683,7 +4667,7 @@ if not OPENUF_TEST_MODE then
 		if type(config.inform_url) == "string" and config.inform_url ~= "" then
 			M._state.DEFAULT_INFORM_URL = config.inform_url
 		end
-		local ufhw = {uap = dofile("ufmodel/" .. dev.openuf.uap.ufmodel .. ".lua")}
+		local ufhw = {uap = require("loader").run("ufmodel." .. dev.openuf.uap.ufmodel)}
 		-- The options travel under dev.conf.config: every consumer reads
 		-- cfg.config.<option>.
 		dev.conf.config = config

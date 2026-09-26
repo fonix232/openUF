@@ -15,37 +15,34 @@
 	Exit codes: 0 = success, 1 = invalid arguments.
 ]]--
 
+-- Run from wherever the controller's SSH session lands: put the install
+-- directory (this file's parent) on package.path so openUF's modules load
+-- by name.
+do
+	local dir = (debug.getinfo(1, "S").source:match("^@(.*/)") or "./"):gsub("hook/$", "")
+	if dir == "" then dir = "./" end
+	package.path = dir .. "?.lua;" .. package.path
+end
+
 local state
 
 -- The state_file option (UCI openuf.main.state_file), so that this hook,
 -- inform.lua and announce.lua agree on where state.json is. Read on its own:
 -- config.load() would run the model map, which is not needed here.
-local function conf_state_file(dir)
-	local f = io.open(dir .. "config.lua", "r")
-	if not f then return nil end
-	f:close()
-	local ok, conf = pcall(dofile, dir .. "config.lua")
+local function conf_state_file()
+	local ok, conf = pcall(require, "config")
 	if not ok then return nil end
 	local v = conf.get("state_file")
 	return (type(v) == "string" and v ~= "") and v or nil
 end
 
--- Allow the state module path to be injected for testing
+-- Allow the state module to be injected for testing
 local function load_state()
 	if state then return state end
-	-- Try relative paths: called from src/ dir or from an absolute install path
-	local paths = {"state.lua", "src/state.lua", "/usr/share/openuf/state.lua"}
-	for _, p in ipairs(paths) do
-		local f = io.open(p, "r")
-		if f then
-			f:close()
-			state = dofile(p)
-			local sf = conf_state_file(p:match("^(.*/)") or "")
-			if sf then state._state_file = sf end
-			return state
-		end
-	end
-	error("syswrapper: cannot find state.lua")
+	state = require("state")
+	local sf = conf_state_file()
+	if sf then state._state_file = sf end
+	return state
 end
 
 local function usage()
@@ -153,8 +150,7 @@ local function restore_wireless()
 end
 
 local function cmd_netmodel_restore()
-	local ok, nm = pcall(dofile, "/usr/share/openuf/netmodel.lua")
-	if not ok then ok, nm = pcall(dofile, "netmodel.lua") end
+	local ok, nm = pcall(require, "netmodel")
 	if not ok then
 		io.stderr:write("syswrapper: netmodel.lua not found\n")
 		return false

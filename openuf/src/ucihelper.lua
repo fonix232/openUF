@@ -78,22 +78,13 @@ local function pass_memo(key, fn)
 	return value
 end
 
--- Load an enforcement sibling by path, mirroring inform.lua's _require_sibling:
--- openUF's modules are not on package.path, and the working directory differs
--- between running from src/ and from an install root. Returns nil rather
--- than erroring if it cannot be found, so a missing module degrades to "not
+-- An enforcement module, unless a test injected one. nil rather than an
+-- error when it cannot be loaded, so a missing module degrades to "not
 -- enforced" instead of taking the whole config apply down with it.
 local function get_sibling(name, override)
 	if override then return override end
-	for _, p in ipairs({name .. ".lua", "src/" .. name .. ".lua"}) do
-		local f = io.open(p, "r")
-		if f then
-			f:close()
-			local ok, mod = pcall(dofile, p)
-			if ok and type(mod) == "table" then return mod end
-		end
-	end
-	return nil
+	local ok, mod = pcall(require, name)
+	return (ok and type(mod) == "table") and mod or nil
 end
 
 local function get_bcfilter() return get_sibling("bcfilter", M._bcfilter) end

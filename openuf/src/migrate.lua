@@ -12,14 +12,7 @@
 
 local M = {}
 
-local function sibling(name)
-	for _, p in ipairs({name .. ".lua", "src/" .. name .. ".lua"}) do
-		local f = io.open(p, "r")
-		if f then f:close(); return dofile(p) end
-	end
-	error("migrate: cannot find " .. name .. ".lua")
-end
-local config = sibling("config")
+local config = require("config")
 M._config = config
 
 -- The legacy options that were off when the line was missing: the old daemon

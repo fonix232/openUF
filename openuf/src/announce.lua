@@ -297,21 +297,15 @@ function M.get_hostname()
 		or clean(M._popen("hostname"))
 end
 
--- Lazily loaded state module (injectable), for the adopted flag below. The
--- same sibling lookup inform.lua uses; nil when state.lua cannot be found.
+-- Lazily loaded state module (injectable), for the adopted flag below; nil
+-- when state.lua cannot be loaded.
 M._state = nil
 local function state_module()
 	if M._state then return M._state end
-	for _, p in ipairs({"state.lua", "src/state.lua"}) do
-		local f = io.open(p, "r")
-		if f then
-			f:close()
-			local ok, mod = pcall(dofile, p)
-			if ok and type(mod) == "table" then
-				M._state = mod
-				return mod
-			end
-		end
+	local ok, mod = pcall(require, "state")
+	if ok and type(mod) == "table" then
+		M._state = mod
+		return mod
 	end
 	return nil
 end
@@ -409,11 +403,11 @@ end
 
 if not OPENUF_TEST_MODE then
 	local ok, err = pcall(function()
-		if not ufpkt then dofile("lib/lib.lua") end
-		local dev, config = dofile("config.lua").load()
+		if not ufpkt then require("loader").run("lib.lib") end
+		local dev, config = require("config").load()
 
 		local ufhw = {}
-		ufhw.uap = dofile("ufmodel/" .. dev.openuf.uap.ufmodel .. ".lua")
+		ufhw.uap = require("loader").run("ufmodel." .. dev.openuf.uap.ufmodel)
 
 		local iface = dev.conf.net.lan_cpueth or "eth1"
 		-- A map may pin the identity (modelmap/auto.lua does, for boards whose

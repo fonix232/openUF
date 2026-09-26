@@ -15,12 +15,10 @@
 
 local STATE_FILE = "/etc/openuf/ufmodel-auto.json"
 
+-- A sibling script by its path under the install directory ("ufmodel/auto.lua"),
+-- run fresh: see loader.lua.
 local function sibling(rel)
-	for _, p in ipairs({rel, "src/" .. rel, "/usr/share/openuf/" .. rel}) do
-		local f = io.open(p, "r")
-		if f then f:close(); return dofile(p) end
-	end
-	error("cannot find " .. rel)
+	return require("loader").run((rel:gsub("%.lua$", ""):gsub("/", ".")))
 end
 
 local function read(path)
