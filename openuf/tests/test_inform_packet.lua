@@ -4184,6 +4184,22 @@ return {
 			assert_eq(st.cfgversion, "", "cfgversion forgotten")
 			local pending = {adopted = false, cfgversion = "", provision_sig = "old"}
 			assert_false(inform._reprovision_on_settings_change(pending, cfg), "not adopted: nothing to ask for")
+
+			-- An upgrade that changes what a push writes asks again too: from a
+			-- signature recorded before generations existed...
+			local old = {}
+			for _, k in ipairs(inform.PROVISION_OPTIONS) do old[#old + 1] = k .. "=" .. tostring(cfg.config[k]) end
+			local upgraded = {adopted = true, cfgversion = "abc", provision_sig = table.concat(old, ";")}
+			assert_true(inform._reprovision_on_settings_change(upgraded, cfg), "a release before generations")
+			assert_eq(upgraded.cfgversion, "", "cfgversion forgotten")
+			-- ...and from an older generation.
+			local gen = inform.PROVISION_GENERATION
+			local older = {adopted = true, cfgversion = "abc"}
+			inform.PROVISION_GENERATION = gen - 1
+			inform._reprovision_on_settings_change(older, cfg)
+			inform.PROVISION_GENERATION = gen
+			assert_true(inform._reprovision_on_settings_change(older, cfg), "a new provisioning generation")
+			assert_eq(older.cfgversion, "", "cfgversion forgotten")
 			inform._state.save = orig
 		end
 	},

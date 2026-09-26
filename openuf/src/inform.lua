@@ -1081,9 +1081,15 @@ end
 M.PROVISION_OPTIONS = {"use_only_unifi_wlan", "own_config", "bridge_backend", "bridge_takeover",
 	"bridge_name", "port_default", "country_override", "l2guard",
 	"system_timezone", "system_ntp", "system_cron"}
+-- The same for this code: a release that changes what a push writes bumps it,
+-- so an adopted device upgraded to that release has the controller send its
+-- configuration again, rather than keeping the old output until an unrelated
+-- change in the controller. A signature recorded before it existed differs too.
+--   2: vendor_elements (the sibling-AP element) on every VAP
+M.PROVISION_GENERATION = 2
 function M._provision_signature(cfg)
 	local c = cfg and cfg.config or {}
-	local parts = {}
+	local parts = {"generation=" .. M.PROVISION_GENERATION}
 	for _, k in ipairs(M.PROVISION_OPTIONS) do parts[#parts + 1] = k .. "=" .. tostring(c[k]) end
 	return table.concat(parts, ";")
 end
@@ -1093,7 +1099,7 @@ function M._reprovision_on_settings_change(st, cfg)
 	local changed = st.provision_sig ~= nil and st.adopted
 	if changed then
 		st.cfgversion = ""
-		io.stderr:write("openuf: settings changed; asking the controller for its configuration again\n")
+		io.stderr:write("openuf: settings or provisioning changed; asking the controller for its configuration again\n")
 	end
 	st.provision_sig = sig
 	M._state.save(st)

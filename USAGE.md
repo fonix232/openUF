@@ -234,7 +234,9 @@ back to the default and says so in the log.
 A setting that changes what a controller push does (`use_only_unifi_wlan`, `own_config`,
 the `bridge_*` options, `port_default`, `country_override`, `l2guard` and the three
 `system_*` options) also makes the daemon forget the cfgversion at its next start, so the
-controller sends its whole configuration again and the change lands straight away. A
+controller sends its whole configuration again and the change lands straight away. An
+upgrade to a release that changes what a push writes does the same once, so the existing
+WLANs get it without waiting for a change in the controller. A
 feature switched off takes its state with it at the next start: the L2 and DNS-answer nft
 tables are deleted and the controller's cron job is removed. The timezone and NTP servers
 keep their last values.
