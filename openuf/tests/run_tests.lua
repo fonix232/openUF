@@ -145,6 +145,7 @@ local test_files = {
 	"tests/test_config.lua",
 	"tests/test_migrate.lua",
 	"tests/test_package.lua",
+	"tests/test_architecture.lua",
 	"tests/test_crypto.lua",
 	"tests/test_inflate.lua",
 	"tests/test_inform_packet.lua",
