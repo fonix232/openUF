@@ -2065,19 +2065,33 @@ end
 -- No state.json persistence either, unlike blocked_stas -- there's nothing
 -- to reconcile on restart since this is fully re-derived every inform cycle
 -- from live UCI config + sta_table.
--- Every VAP netdev netifd reports, across all radios, sorted.
-function M.all_vap_ifnames()
+-- Every VAP netdev netifd reports, across all radios, sorted. ap_only leaves
+-- out station and mesh interfaces (see ap_ifnames).
+function M.all_vap_ifnames(ap_only)
 	local status = wireless_status()
 	local out = {}
 	for _, dev in pairs(status or {}) do
 		if type(dev) == "table" and type(dev.interfaces) == "table" then
 			for _, iface in ipairs(dev.interfaces) do
-				if type(iface) == "table" and iface.ifname then out[#out + 1] = iface.ifname end
+				local mode = type(iface) == "table" and type(iface.config) == "table"
+					and iface.config.mode or nil
+				if type(iface) == "table" and type(iface.ifname) == "string" and iface.ifname ~= ""
+						and not (ap_only and mode ~= nil and mode ~= "ap") then
+					out[#out + 1] = iface.ifname
+				end
 			end
 		end
 	end
 	table.sort(out)
 	return out
+end
+
+-- The live netdev of every AP-mode VAP. A station or mesh interface -- a
+-- wireless backhaul -- is not a VAP: l2guard's tag drop on an uplink would
+-- cut the AP off. Empty when wireless is not up or ubus cannot be asked;
+-- callers treat that as "nothing to protect yet", never as "no VAPs".
+function M.ap_ifnames()
+	return M.all_vap_ifnames(true)
 end
 
 -- Disconnect a station from whichever VAP it is on, through hostapd's own ubus

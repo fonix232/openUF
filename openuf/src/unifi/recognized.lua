@@ -55,7 +55,8 @@ M.RECOGNIZED_SYSTEM_CFG = {
 	"^cron%.status$",
 	"^cron%.%d+%.status$",
 	"^cron%.%d+%.job%.%d+%.",
-	-- The ebtables hardening block (l2guard.lua).
+	-- The ebtables hardening block (l2guard.lua). ebtables.add_vlan.status
+	-- is not read and stays in the report.
 	"^ebtables%.status$",
 	"^ebtables%.%d+%.cmd$",
 }

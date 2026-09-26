@@ -789,18 +789,8 @@ function M._tick(st, cfg, ufhw, ctx)
 			if ok_r and fixed then pcall(M._sysinfo.forget_uplink_cache) end
 		end
 	end
-	-- The L2 hardening a push could not apply because the VAPs were not up yet.
-	if M._l2guard_retry and type(st.l2guard) == "table" then
-		pcall(function()
-			local names = M._ucihelper.all_vap_ifnames()
-			if #names > 0 then
-				st.l2guard.ifnames = names
-				M._l2guard.reconcile(st.l2guard, names)
-				M._state.save(st)
-				M._l2guard_retry = nil
-			end
-		end)
-	end
+	-- The L2 hardening follows the VAPs as they come and go.
+	pcall(M._l2guard_resync, st, cfg)
 	-- The controller's nightly `syswrapper.sh 11k-scan` (its cron job, see
 	-- sysconf.lua): make the next 802.11k beacon request due now.
 	if M._scan_requested() then
@@ -1002,6 +992,45 @@ function M._netmodel_check(st, cfg, ok)
 	return res
 end
 
+-- The AP-mode VAP netdevs l2guard protects; empty when wireless is not
+-- answering.
+function M._l2guard_live_ifnames()
+	local ufuci = M._ucihelper
+	if not (ufuci and ufuci.ap_ifnames) then return {} end
+	local ok, names = pcall(ufuci.ap_ifnames)
+	return (ok and type(names) == "table") and names or {}
+end
+
+local function same_names(a, b)
+	if type(a) ~= "table" or type(b) ~= "table" or #a ~= #b then return false end
+	for i = 1, #a do if a[i] ~= b[i] then return false end end
+	return true
+end
+
+-- Once a minute: if the live VAP list no longer matches the one the l2guard
+-- table was built for (an SSID added by a push whose `wifi reload` had not
+-- finished, or wireless coming up after the daemon at boot), rebuild. An
+-- empty live list is "not answering", never "no VAPs": it leaves the table
+-- alone. Returns true when it rebuilt.
+M.L2GUARD_RESYNC_INTERVAL = 60
+M._l2guard_next = 0
+function M._l2guard_resync(st, cfg)
+	local g = st and st.l2guard
+	if not (M._l2guard and type(g) == "table" and (g.bpdu or g.tagdrop)) then return false end
+	if cfg and cfg.config and cfg.config.l2guard == false then return false end
+	local now = M._time()
+	if now < M._l2guard_next then return false end
+	M._l2guard_next = now + M.L2GUARD_RESYNC_INTERVAL
+	local names = M._l2guard_live_ifnames()
+	if #names == 0 or same_names(names, g.ifnames) then return false end
+	io.stderr:write("l2guard: AP interfaces changed (" .. table.concat(names, " ")
+		.. ") -- rebuilding\n")
+	g.ifnames = names
+	M._state.save(st)
+	M._l2guard.reconcile(g, names)
+	return true
+end
+
 -- A feature switched off in the config (a change reloads the daemon) takes its nft table or cron job with it at startup, instead
 -- of leaving the last run's state in place until a reboot. The timezone and
 -- NTP servers are the board's own settings and keep their last values.
@@ -1169,11 +1198,14 @@ function M.run(cfg, ufhw)
 	if M._switchvlan then pcall(M._switchvlan.reconcile_mac_taps) end
 	-- Features switched off in the config drop what they installed.
 	M._release_disabled(cfg)
-	-- The controller's ebtables hardening (l2guard) is nft state as well.
+	-- The controller's ebtables hardening (l2guard) is nft state as well:
+	-- rebuilt on the live VAPs, or on the names recorded at the last push
+	-- while wireless is not answering yet; _l2guard_resync corrects the list
+	-- once it is.
 	if M._l2guard and type(st.l2guard) == "table"
 		and not (cfg and cfg.config and cfg.config.l2guard == false) then
 		pcall(function()
-			local names = M._ucihelper.all_vap_ifnames()
+			local names = M._l2guard_live_ifnames()
 			if #names == 0 and type(st.l2guard.ifnames) == "table" then names = st.l2guard.ifnames end
 			M._l2guard.reconcile(st.l2guard, names)
 		end)

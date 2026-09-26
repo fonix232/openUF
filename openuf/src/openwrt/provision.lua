@@ -459,7 +459,9 @@ function M.handle(ctx, json_str, st, cfg)
 			-- The ebtables.* hardening block (l2guard.lua): BPDU and VLAN-tag
 			-- drop on every AP VAP. Kernel state, so the intent and the VAP
 			-- names go to state.json for the startup rebuild. After the WiFi
-			-- pass on purpose: a VAP the push just added has its netdev by now.
+			-- pass on purpose, so a VAP this push added has its netdev by now
+			-- if netifd was quick; ctx._l2guard_resync picks it up if not.
+			-- A push without the block (a partial one) leaves it all alone.
 			if ctx._l2guard and not (cfg and cfg.config and cfg.config.l2guard == false) then
 				local ok_l2, err_l2 = pcall(function()
 					local eb = ctx._l2guard.parse(sys_raw)
@@ -469,18 +471,13 @@ function M.handle(ctx, json_str, st, cfg)
 							.. ("%q"):format(u) .. "\n")
 					end
 					local spec = ctx._l2guard.spec_from(eb)
-					local names = (ctx._ucihelper and ctx._ucihelper.all_vap_ifnames)
-						and ctx._ucihelper.all_vap_ifnames() or {}
+					local names = ctx._l2guard_live_ifnames()
 					if #names == 0 and st.l2guard and type(st.l2guard.ifnames) == "table" then
 						names = st.l2guard.ifnames   -- wireless not answering yet: last known
 					end
 					spec.ifnames = names
 					st.l2guard = spec
 					ctx._l2guard.reconcile(spec, names)
-					-- A push lands mid `wifi reload`, before the VAPs exist: try
-					-- again on a later heartbeat instead of waiting for the
-					-- next push, which may be days away.
-					ctx._l2guard_retry = (#names == 0) and (spec.bpdu or spec.tagdrop) or nil
 				end)
 				if not ok_l2 then
 					io.stderr:write("inform: L2 hardening failed: " .. tostring(err_l2) .. "\n")
@@ -512,6 +509,8 @@ function M.handle(ctx, json_str, st, cfg)
 		st.mac, st.ip, st.hostname = mac, ip, hostname
 		ctx._sync_bootstrap_account(false, cfg and cfg.config and cfg.config.bootstrap_adopt_user)
 		ctx._firewall.reconcile(st.blocked_stas)
+		-- st.l2guard went with the reset; the kernel table must follow.
+		if ctx._l2guard then pcall(ctx._l2guard.reconcile, nil, {}) end
 		return false
 	end
 

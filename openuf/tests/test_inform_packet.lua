@@ -20,6 +20,9 @@ inform._firewall = {
 	reconcile = function() end,
 	deauth = function() end,
 }
+-- Likewise l2guard's table, which a factory reset tears down: the parser
+-- stays real, the rebuild does nothing.
+inform._l2guard = setmetatable({reconcile = function() return 0 end}, {__index = inform._l2guard})
 
 -- Deterministic IV for the TEST FILE's own crypto instance -- affects only
 -- tests that call crypto.* directly (e.g. the zlib round-trip). inform's
@@ -3922,6 +3925,121 @@ return {
 			inform._release_disabled(nil)
 			assert_eq(table.concat(calls, ","), "", "no config at all: nothing released")
 			inform._l2guard, inform._dnswatch, inform._sysconf = orig.l2, orig.dw, orig.sc
+		end
+	},
+	{
+		name = "inform: an ebtables push builds l2guard on the live AP VAPs and records it; a push without the block changes nothing",
+		fn = function()
+			local orig = {l2 = inform._l2guard, uci = inform._ucihelper, stderr = io.stderr}
+			io.stderr = {write = function() end}
+			local reconciled = {}
+			inform._l2guard = setmetatable({
+				reconcile = function(spec, names) reconciled[#reconciled + 1] = {spec = spec, names = names}; return 3 end,
+			}, {__index = orig.l2})
+			local live = {"phy0-ap0", "phy1-ap0"}
+			inform._ucihelper = setmetatable({ap_ifnames = function() return live end}, {__index = orig.uci})
+			local function push(sys_raw, st, conf)
+				return pcall(inform.handle_response,
+					cjson.encode({_type = "setparam", system_cfg = sys_raw}), st, {config = conf or {}})
+			end
+			local sys_raw = "ebtables.status=enabled\n"
+				.. "ebtables.1.cmd=-t nat -A PREROUTING --in-interface ath0 -d BGA -j DROP\n"
+				.. "ebtables.2.cmd=-t broute -A BROUTING --vlan-id 10 -p 802_1Q -j DROP\n"
+			local st = sample_state({adopted = true})
+			local ok1, err1 = push(sys_raw, st)
+			local first = st.l2guard
+			live = {}   -- wireless not answering: the recorded names are used
+			local ok2, err2 = push(sys_raw, st)
+			local ok3, err3 = push("qos.if.1.devname=eth0\n", st)
+			local ok4, err4 = push(sys_raw, sample_state({adopted = true}), {l2guard = false})
+			inform._l2guard, inform._ucihelper, io.stderr = orig.l2, orig.uci, orig.stderr
+
+			for i, r in ipairs({{ok1, err1}, {ok2, err2}, {ok3, err3}, {ok4, err4}}) do
+				assert_true(r[1], "push " .. i .. ": " .. tostring(r[2]))
+			end
+			assert_true(first.bpdu and first.tagdrop, "both ideas recorded")
+			assert_eq(table.concat(first.ifnames, ","), "phy0-ap0,phy1-ap0", "live names recorded")
+			assert_eq(table.concat(reconciled[1].names, ","), "phy0-ap0,phy1-ap0", "and enforced")
+			assert_eq(table.concat(reconciled[2].names, ","), "phy0-ap0,phy1-ap0",
+				"an unanswering wireless falls back to the recorded names")
+			assert_eq(#reconciled, 2, "a push without the block, or with l2guard off, does not touch the table")
+			assert_true(st.l2guard.bpdu, "and leaves the record alone")
+		end
+	},
+	{
+		name = "inform: _l2guard_resync rebuilds once a minute when the VAP list changed, never on an empty answer",
+		fn = function()
+			local orig = {l2 = inform._l2guard, uci = inform._ucihelper, time = inform._time,
+				save = inform._state.save, stderr = io.stderr}
+			io.stderr = {write = function() end}
+			local rebuilt, saves = {}, 0
+			inform._l2guard = {reconcile = function(_, names) rebuilt[#rebuilt + 1] = table.concat(names, ",") end}
+			inform._state.save = function() saves = saves + 1 end
+			local live = {"phy0-ap0"}
+			inform._ucihelper = {ap_ifnames = function() return live end}
+			local now = 5000
+			inform._time = function() return now end
+			inform._l2guard_next = 0
+			local st = {l2guard = {bpdu = true, tagdrop = true, ifnames = {"phy0-ap0"}}}
+
+			local same = inform._l2guard_resync(st, {})
+			live = {"phy0-ap0", "phy0-ap1"}
+			now = now + 10
+			local too_soon = inform._l2guard_resync(st, {})
+			now = now + 60
+			local gated = inform._l2guard_resync(st, {config = {l2guard = false}})
+			local changed = inform._l2guard_resync(st, {})
+			live = {}
+			now = now + 60
+			local empty = inform._l2guard_resync(st, {})
+			local off = inform._l2guard_resync({l2guard = {bpdu = false, tagdrop = false, ifnames = {}}}, {})
+
+			inform._l2guard, inform._ucihelper, inform._time, inform._state.save, io.stderr =
+				orig.l2, orig.uci, orig.time, orig.save, orig.stderr
+			inform._l2guard_next = 0
+
+			assert_false(same, "unchanged list: nothing")
+			assert_false(too_soon, "rate-limited")
+			assert_false(gated, "l2guard switched off: nothing")
+			assert_true(changed, "a new VAP rebuilds")
+			assert_eq(rebuilt[1], "phy0-ap0,phy0-ap1", "on the new list")
+			assert_eq(table.concat(st.l2guard.ifnames, ","), "phy0-ap0,phy0-ap1", "which is recorded")
+			assert_eq(saves, 1, "and saved")
+			assert_false(empty, "an empty answer is 'not up', not 'no VAPs'")
+			assert_eq(#rebuilt, 1, "so the table is left alone")
+			assert_false(off, "nothing enforced, nothing to resync")
+		end
+	},
+	{
+		name = "inform: a factory reset tears the l2guard table down",
+		fn = function()
+			local orig = inform._l2guard
+			local calls = {}
+			inform._l2guard = {reconcile = function(spec, names) calls[#calls + 1] = {spec = spec, n = #names} end}
+			local ok, err = pcall(inform.handle_response, '{"_type":"setdefault"}',
+				sample_state({adopted = true, l2guard = {bpdu = true, tagdrop = true, ifnames = {"x"}}}),
+				{config = {}})
+			inform._l2guard = orig
+			assert_true(ok, tostring(err))
+			assert_eq(#calls, 1, "reconciled once")
+			assert_nil(calls[1].spec, "with nothing to enforce, which only deletes the table")
+		end
+	},
+	{
+		name = "inform: the ebtables block is recognised, bar add_vlan.status",
+		fn = function()
+			local orig = inform._unhandled
+			local u = dofile("src/unifi/unhandled.lua")
+			u._reset(false)
+			inform._unhandled = u
+			inform._report_dropped_keys("system_cfg",
+				"ebtables.status=enabled\nebtables.add_vlan.status=disabled\n"
+					.. "ebtables.1.cmd=-t nat -A PREROUTING --in-interface ath0 -d BGA -j DROP\n",
+				require("unifi.recognized").RECOGNIZED_SYSTEM_CFG)
+			inform._unhandled = orig
+			assert_nil(u.entry("system_cfg", "ebtables.status"), "the gate is read")
+			assert_nil(u.entry("system_cfg", "ebtables.<n>.cmd"), "the rules are read")
+			assert_not_nil(u.entry("system_cfg", "ebtables.add_vlan.status"), "add_vlan.status is not")
 		end
 	},
 	{
