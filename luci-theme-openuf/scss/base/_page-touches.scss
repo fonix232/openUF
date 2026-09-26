@@ -1,66 +1,49 @@
-/* Page-specific touches
- * --------------------- */
+@use '../abstracts' as *;
+
+// Page-specific touches.
 
 #syslog {
 	width: 100%;
 	min-height: 60vh;
 	margin-bottom: 16px;
 	padding: 12px;
-	background: var(--uf-surface);
-	border: 1px solid var(--uf-border);
-	border-radius: var(--uf-radius);
+	@include panel;
 	color: var(--uf-text-1);
 	font-family: var(--uf-mono);
 }
 
-.assoclist .ifacebadge {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	white-space: normal;
-	text-align: center;
+.assoclist {
+	.ifacebadge {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		white-space: normal;
+		text-align: center;
+		> img { margin: .2em; }
+	}
+	.td:nth-of-type(3), .td:nth-of-type(5) { width: 25%; }
+	.td:nth-of-type(6) button { word-break: normal; }
 }
 
-.assoclist .ifacebadge > img {
-	margin: .2em;
-}
+[data-page="admin-system-admin-sshkeys"] .cbi-dynlist { max-width: none; }
+[data-darkmode="true"] [data-page="admin-statistics-graphs"] [data-plugin] img { filter: invert(100%) hue-rotate(180deg); }
 
-.assoclist .td:nth-of-type(3),
-.assoclist .td:nth-of-type(5) {
-	width: 25%;
-}
-
-.assoclist .td:nth-of-type(6) button {
-	word-break: normal;
-}
-
-[data-page="admin-system-admin-sshkeys"] .cbi-dynlist {
-	max-width: none;
-}
-
-[data-darkmode="true"] [data-page="admin-statistics-graphs"] [data-plugin] img {
-	filter: invert(100%) hue-rotate(180deg);
-}
-
-/* Realtime graphs draw their own SVG, in a box framed in black on white,
- * with white labels on a black shadow, all inline. */
-#view div[style*="border:1px solid #000"] {
-	background: var(--uf-surface) !important; /* over the inline white */
-	border-color: var(--uf-border) !important; /* over the inline black */
-	border-radius: var(--uf-radius);
-}
-
-#view div[style] > svg {
-	background-color: var(--uf-surface) !important;
-	border-radius: var(--uf-radius-sm);
-}
-
-#view div[style] > svg line[style] {
-	stroke: var(--uf-border-strong) !important;
-}
-
-#view div[style] > svg text {
-	fill: var(--uf-text-3) !important; /* over the inline #eee */
-	font-family: var(--uf-font) !important;
-	text-shadow: none !important;
+// Realtime graphs draw their own SVG, in a box framed in black on white,
+// with white labels on a black shadow, all inline.
+#view {
+	div[style*="border:1px solid #000"] {
+		background: var(--uf-surface) !important; // over the inline white
+		border-color: var(--uf-border) !important; // over the inline black
+		border-radius: var(--uf-radius);
+	}
+	div[style] > svg {
+		background-color: var(--uf-surface) !important;
+		border-radius: var(--uf-radius-sm);
+		line[style] { stroke: var(--uf-border-strong) !important; }
+		text {
+			fill: var(--uf-text-3) !important; // over the inline #eee
+			font-family: var(--uf-font) !important;
+			text-shadow: none !important;
+		}
+	}
 }

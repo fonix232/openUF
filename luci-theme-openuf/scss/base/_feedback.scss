@@ -1,5 +1,13 @@
-/* Feedback: alerts, labels, tooltips, progress
- * ------------------------------------------- */
+@use '../abstracts' as *;
+
+// Alerts, labels, tooltips, progress.
+
+// An alert's tint, its outline and the colour of its icon.
+@mixin tone($background, $line, $icon) {
+	background: $background;
+	border-color: $line;
+	&::before { background: $icon; }
+}
 
 .alert-message {
 	position: relative;
@@ -10,114 +18,48 @@
 	border-radius: var(--uf-radius);
 	color: var(--uf-text-1);
 	white-space: unset;
+	&::before {
+		content: "";
+		position: absolute;
+		top: 12px;
+		left: 16px;
+		@include icon(var(--uf-i-info), 18px, var(--uf-orange));
+	}
+	&.danger, &.error { @include tone(rgba(var(--uf-red-rgb), .08), rgba(var(--uf-red-rgb), .35), var(--uf-red)); }
+	&.success { @include tone(rgba(var(--uf-green-rgb), .1), rgba(var(--uf-green-rgb), .4), var(--uf-green)); }
+	&.info, &.notice { @include tone(var(--uf-blue-soft), rgba(var(--uf-blue-rgb), .3), var(--uf-blue)); }
+	h4, h5, pre, ul, li, p {
+		margin: 0 0 4px;
+		padding: 0;
+		border: 0;
+		background: transparent;
+		color: inherit;
+		line-height: 20px;
+	}
+	h4 { font-size: 13px; }
+	p:last-child, pre:last-child { margin-bottom: 0; }
+	.right { margin-top: 8px; }
+	button, .btn { margin: 4px 0 0; }
 }
 
-.alert-message::before {
-	content: "";
-	position: absolute;
-	top: 12px;
-	left: 16px;
-	width: 18px;
-	height: 18px;
-	background: var(--uf-orange);
-	-webkit-mask: var(--uf-i-info) center / contain no-repeat;
-	mask: var(--uf-i-info) center / contain no-repeat;
-}
-
-.alert-message.danger,
-.alert-message.error {
-	background: rgba(var(--uf-red-rgb), .08);
-	border-color: rgba(var(--uf-red-rgb), .35);
-}
-
-.alert-message.danger::before,
-.alert-message.error::before {
-	background: var(--uf-red);
-}
-
-.alert-message.success {
-	background: rgba(var(--uf-green-rgb), .1);
-	border-color: rgba(var(--uf-green-rgb), .4);
-}
-
-.alert-message.success::before {
-	background: var(--uf-green);
-}
-
-.alert-message.info,
-.alert-message.notice {
-	background: var(--uf-blue-soft);
-	border-color: rgba(var(--uf-blue-rgb), .3);
-}
-
-.alert-message.info::before,
-.alert-message.notice::before {
-	background: var(--uf-blue);
-}
-
-.alert-message h4,
-.alert-message h5,
-.alert-message pre,
-.alert-message ul,
-.alert-message li,
-.alert-message p {
-	margin: 0 0 4px;
-	padding: 0;
-	border: 0;
-	background: transparent;
-	color: inherit;
-	line-height: 20px;
-}
-
-.alert-message h4 {
-	font-size: 13px;
-}
-
-.alert-message p:last-child,
-.alert-message pre:last-child {
-	margin-bottom: 0;
-}
-
-.alert-message .right {
-	margin-top: 8px;
-}
-
-.alert-message button,
-.alert-message .btn {
-	margin: 4px 0 0;
-}
-
-/* Status dialogs ("Applying configuration changes…") are a plain dialog
- * with the alert's icon, or a spinner while something is in progress. */
+// Status dialogs ("Applying configuration changes…") are a plain dialog
+// with the alert's icon, or a spinner while something is in progress.
 .modal.alert-message {
 	padding-left: 56px;
 	color: var(--uf-text-1);
-}
-
-.modal.alert-message::before {
-	top: 22px;
-	left: 24px;
-	width: 20px;
-	height: 20px;
-}
-
-.modal.alert-message.spinning {
-	padding-left: 56px !important; /* over .spinning's own */
-}
-
-.modal.alert-message.spinning::before {
-	top: 22px;
-	left: 24px;
-	width: 20px;
-	height: 20px;
-	background: var(--uf-blue);
-	-webkit-mask-image: var(--uf-i-spinner);
-	mask-image: var(--uf-i-spinner);
+	&::before { top: 22px; left: 24px; @include size(20px); }
+	&.spinning { padding-left: 56px !important; } // over .spinning's own
+	&.spinning::before {
+		top: 22px;
+		left: 24px;
+		@include size(20px);
+		background: var(--uf-blue);
+		@include mask-image(var(--uf-i-spinner));
+	}
 }
 
 .label {
-	display: inline-flex;
-	align-items: center;
+	@include row($display: inline-flex);
 	height: 20px;
 	margin: 1px 0 1px 4px;
 	padding: 0 8px;
@@ -130,40 +72,17 @@
 	vertical-align: middle;
 }
 
-a.label:link,
-a.label:visited {
-	color: var(--uf-blue);
+a.label:link, a.label:visited { color: var(--uf-blue); }
+a.label:hover { text-decoration: none; }
+
+.label {
+	&.important, &.notice { background: var(--uf-blue-soft); color: var(--uf-blue); }
+	&.warning { background: rgba(var(--uf-orange-rgb), .16); color: var(--uf-orange-text); }
+	&.success { background: rgba(var(--uf-green-rgb), .16); color: var(--uf-green-text); }
+	&.danger, &.error { background: rgba(var(--uf-red-rgb), .12); color: var(--uf-red-text); }
 }
 
-a.label:hover {
-	text-decoration: none;
-}
-
-.label.important,
-.label.notice {
-	background: var(--uf-blue-soft);
-	color: var(--uf-blue);
-}
-
-.label.warning {
-	background: rgba(var(--uf-orange-rgb), .16);
-	color: var(--uf-orange-text);
-}
-
-.label.success {
-	background: rgba(var(--uf-green-rgb), .16);
-	color: var(--uf-green-text);
-}
-
-.label.danger,
-.label.error {
-	background: rgba(var(--uf-red-rgb), .12);
-	color: var(--uf-red-text);
-}
-
-.cbi-tooltip-container {
-	cursor: help;
-}
+.cbi-tooltip-container { cursor: help; }
 
 .cbi-tooltip {
 	position: absolute;
@@ -175,40 +94,23 @@ a.label:hover {
 	color: var(--uf-tip-fg);
 	border-radius: var(--uf-radius-sm);
 	box-shadow: var(--uf-shadow);
-	font-size: 12px;
-	line-height: 17px;
+	@include text(12px, 17px);
 	white-space: pre;
 	opacity: 0;
 	transition: opacity .15s ease-in;
+	.cbi-tooltip-container:hover &:not(:empty) { left: auto; opacity: 1; }
+	&.error { background: var(--uf-red-fill); color: var(--uf-on-accent); }
+	&.info { background: var(--uf-blue-fill); color: var(--uf-on-accent); }
+	// White on UniFi's green is unreadable; keep the tip dark and mark it.
+	&.success { box-shadow: inset 3px 0 0 var(--uf-green), var(--uf-shadow); }
+	&.notice {
+		background: var(--uf-raised);
+		color: var(--uf-text-1);
+		border: 1px solid var(--uf-border);
+	}
 }
 
-.cbi-tooltip-container:hover .cbi-tooltip:not(:empty) {
-	left: auto;
-	opacity: 1;
-}
-
-.cbi-tooltip.error {
-	background: var(--uf-red-fill);
-	color: var(--uf-on-accent);
-}
-
-.cbi-tooltip.info {
-	background: var(--uf-blue-fill);
-	color: var(--uf-on-accent);
-}
-
-/* White on UniFi's green is unreadable; keep the tip dark and mark it. */
-.cbi-tooltip.success {
-	box-shadow: inset 3px 0 0 var(--uf-green), var(--uf-shadow);
-}
-
-.cbi-tooltip.notice {
-	background: var(--uf-raised);
-	color: var(--uf-text-1);
-	border: 1px solid var(--uf-border);
-}
-
-/* UniFi draws usage as a slim bar under its label ("TX Retries  Low"). */
+// UniFi draws usage as a slim bar under its label ("TX Retries  Low").
 .cbi-progressbar {
 	position: relative;
 	min-width: 170px;
@@ -216,27 +118,23 @@ a.label:hover {
 	margin: 22px 0 6px;
 	border-radius: 3px;
 	background: var(--uf-border);
-}
-
-.cbi-progressbar > div {
-	width: 0%;
-	height: 100%;
-	border-radius: 3px;
-	background: var(--uf-blue);
-	transition: width .25s ease-in;
-}
-
-.cbi-progressbar::before {
-	content: attr(title);
-	position: absolute;
-	top: -20px;
-	left: 0;
-	right: 0;
-	color: var(--uf-text-2);
-	font-size: 12px;
-	line-height: 16px;
-	white-space: pre;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	font-variant-numeric: tabular-nums;
+	> div {
+		width: 0%;
+		height: 100%;
+		border-radius: 3px;
+		background: var(--uf-blue);
+		transition: width .25s ease-in;
+	}
+	&::before {
+		content: attr(title);
+		position: absolute;
+		top: -20px;
+		left: 0;
+		right: 0;
+		@include text(12px, 16px, var(--uf-text-2));
+		white-space: pre;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		font-variant-numeric: tabular-nums;
+	}
 }

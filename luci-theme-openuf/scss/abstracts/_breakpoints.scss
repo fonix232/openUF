@@ -1,5 +1,6 @@
-// The two widths the theme's layout turns on: phones (up to 640px) and
-// everything wider. Other queries are rare and stay written out.
+// The widths the theme's layout turns on: phones (up to 640px) and
+// everything wider; and below 961px, where the navigation columns become a
+// drawer. Other queries are rare and stay written out.
 
 @mixin phone {
 	@media screen and (max-width: 640px) {
@@ -9,6 +10,18 @@
 
 @mixin desktop {
 	@media screen and (min-width: 641px) {
+		@content;
+	}
+}
+
+@mixin drawer {
+	@media screen and (max-width: 960px) {
+		@content;
+	}
+}
+
+@mixin docked {
+	@media screen and (min-width: 961px) {
 		@content;
 	}
 }

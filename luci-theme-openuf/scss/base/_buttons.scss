@@ -1,21 +1,14 @@
-/* Buttons
- * ------- */
+@use '../abstracts' as *;
 
-.btn,
-.cbi-button,
-button,
-input[type="button"],
-input[type="reset"],
-input[type="submit"] {
-	--uf-btn-fg: var(--uf-text-1);
-	--uf-btn-bg: var(--uf-surface);
-	--uf-btn-line: var(--uf-border-strong);
+// A white label on a solid fill.
+@mixin solid($fill) {
+	@include btn(var(--uf-on-accent), $fill, $fill);
+}
+
+.btn, .cbi-button, button, input[type="button"], input[type="reset"], input[type="submit"] {
+	@include btn(var(--uf-text-1), var(--uf-surface), var(--uf-border-strong));
 	--on-color: var(--uf-btn-fg);
-
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	gap: 6px;
+	@include row(6px, center, inline-flex);
 	width: auto;
 	height: var(--uf-control-h);
 	min-width: 0;
@@ -32,177 +25,81 @@ input[type="submit"] {
 	vertical-align: middle;
 	cursor: pointer;
 	transition: background-color .15s, border-color .15s, color .15s;
+	&:hover {
+		--uf-btn-bg: var(--uf-hover);
+		color: var(--uf-btn-fg);
+		text-decoration: none;
+	}
 }
 
-.btn:hover,
-.cbi-button:hover,
-button:hover,
-input[type="button"]:hover,
-input[type="reset"]:hover,
-input[type="submit"]:hover {
-	--uf-btn-bg: var(--uf-hover);
-	color: var(--uf-btn-fg);
-	text-decoration: none;
+.btn, .cbi-button {
+	&:focus-visible { @include focus-ring; }
+	&:active { transform: translateY(.5px); }
 }
 
-.btn:focus-visible,
-.cbi-button:focus-visible {
-	outline: 2px solid rgba(var(--uf-blue-rgb), .45);
-	outline-offset: 1px;
-}
-
-.btn:active,
-.cbi-button:active {
-	transform: translateY(.5px);
-}
-
-.btn.disabled,
-.btn[disabled],
-.cbi-button[disabled] {
+.btn.disabled, .btn[disabled], .cbi-button[disabled] {
 	opacity: var(--uf-disabled-opacity);
 	cursor: default;
 }
 
-/* Secondary actions: UniFi's outlined blue ("Port Manager"). */
-.btn.primary,
-.cbi-button-action,
-.cbi-button-apply,
-.cbi-button-reload,
-.cbi-button-edit,
-.cbi-button-positive,
-.cbi-button-fieldadd,
-.cbi-button-add,
-.cbi-button-save {
-	--uf-btn-fg: var(--uf-blue);
-	--uf-btn-line: var(--uf-blue-line);
+// Secondary actions: UniFi's outlined blue ("Port Manager").
+.btn.primary, .cbi-button-action, .cbi-button-apply, .cbi-button-reload, .cbi-button-edit,
+.cbi-button-positive, .cbi-button-fieldadd, .cbi-button-add, .cbi-button-save {
+	@include btn(var(--uf-blue), $line: var(--uf-blue-line));
+	&:hover { @include btn($bg: var(--uf-blue-soft), $line: var(--uf-blue)); }
 }
 
-.btn.primary:hover,
-.cbi-button-action:hover,
-.cbi-button-apply:hover,
-.cbi-button-reload:hover,
-.cbi-button-edit:hover,
-.cbi-button-positive:hover,
-.cbi-button-fieldadd:hover,
-.cbi-button-add:hover,
-.cbi-button-save:hover {
-	--uf-btn-bg: var(--uf-blue-soft);
-	--uf-btn-line: var(--uf-blue);
+.cbi-button-neutral, .cbi-button-download, .cbi-button-find, .cbi-button-link, .cbi-button-up, .cbi-button-down {
+	@include btn(var(--uf-text-1), $line: var(--uf-border-strong));
 }
 
-.cbi-button-neutral,
-.cbi-button-download,
-.cbi-button-find,
-.cbi-button-link,
-.cbi-button-up,
-.cbi-button-down {
-	--uf-btn-fg: var(--uf-text-1);
-	--uf-btn-line: var(--uf-border-strong);
+.cbi-button-negative, .cbi-section-remove .cbi-button, .cbi-button-reset, .cbi-button-remove {
+	@include btn(var(--uf-red-text), $line: rgba(var(--uf-red-rgb), .45));
+	&:hover { @include btn($bg: rgba(var(--uf-red-rgb), .08), $line: var(--uf-red)); }
 }
 
-.cbi-button-negative,
-.cbi-section-remove .cbi-button,
-.cbi-button-reset,
-.cbi-button-remove {
-	--uf-btn-fg: var(--uf-red-text);
-	--uf-btn-line: rgba(var(--uf-red-rgb), .45);
-}
-
-.cbi-button-negative:hover,
-.cbi-section-remove .cbi-button:hover,
-.cbi-button-reset:hover,
-.cbi-button-remove:hover {
-	--uf-btn-bg: rgba(var(--uf-red-rgb), .08);
-	--uf-btn-line: var(--uf-red);
-}
-
-/* Primary actions: solid UniFi blue, one per view or dialog. Row actions
- * in a table ("Edit" on every zone) stay outlined, or a long table turns
- * into a column of blue. */
-.btn.primary,
-.btn.info,
-.cbi-button-action.important,
-.cbi-button-positive.important,
+// Primary actions: solid UniFi blue, one per view or dialog. Row actions
+// in a table ("Edit" on every zone) stay outlined, or a long table turns
+// into a column of blue.
+.btn.primary, .btn.info, .cbi-button-action.important, .cbi-button-positive.important,
 .cbi-page-actions .cbi-button-apply {
-	--uf-btn-fg: var(--uf-on-accent);
-	--uf-btn-bg: var(--uf-blue-fill);
-	--uf-btn-line: var(--uf-blue-fill);
+	@include solid(var(--uf-blue-fill));
+	&:hover { @include solid(var(--uf-blue-fill-hover)); }
 }
 
-.btn.primary:hover,
-.btn.info:hover,
-.cbi-button-action.important:hover,
-.cbi-button-positive.important:hover,
-.cbi-page-actions .cbi-button-apply:hover {
-	--uf-btn-fg: var(--uf-on-accent);
-	--uf-btn-bg: var(--uf-blue-fill-hover);
-	--uf-btn-line: var(--uf-blue-fill-hover);
-}
-
-/* Destructive and confirmed: solid red ("Apply unchecked", "Erase"). */
-.cbi-button-negative.important,
-.btn.danger,
-.btn.error {
-	--uf-btn-fg: var(--uf-on-accent);
-	--uf-btn-bg: var(--uf-red-fill);
-	--uf-btn-line: var(--uf-red-fill);
-}
-
-/* Darken rather than lighten, so the white label keeps its contrast. */
-.cbi-button-negative.important:hover,
-.btn.danger:hover,
-.btn.error:hover {
-	--uf-btn-fg: var(--uf-on-accent);
-	--uf-btn-bg: var(--uf-red-fill);
-	--uf-btn-line: var(--uf-red-fill);
-	background-image: linear-gradient(rgba(0, 0, 0, .12), rgba(0, 0, 0, .12));
+// Destructive and confirmed: solid red ("Apply unchecked", "Erase").
+.cbi-button-negative.important, .btn.danger, .btn.error {
+	@include solid(var(--uf-red-fill));
+	// Darken rather than lighten, so the white label keeps its contrast.
+	&:hover {
+		@include solid(var(--uf-red-fill));
+		background-image: linear-gradient(rgba(0, 0, 0, .12), rgba(0, 0, 0, .12));
+	}
 }
 
 .btn.success {
-	--uf-btn-fg: var(--uf-green-text);
-	--uf-btn-line: rgba(var(--uf-green-rgb), .5);
+	@include btn(var(--uf-green-text), $line: rgba(var(--uf-green-rgb), .5));
+	&:hover { @include btn($bg: rgba(var(--uf-green-rgb), .1), $line: var(--uf-green)); }
 }
 
-.btn.success:hover {
-	--uf-btn-bg: rgba(var(--uf-green-rgb), .1);
-	--uf-btn-line: var(--uf-green);
-}
-
-/* LuCI's row grip ("☰") in sortable tables: a quiet handle, not a button. */
+// LuCI's row grip ("☰") in sortable tables: a quiet handle, not a button.
 .cbi-button.drag-handle {
-	--uf-btn-fg: var(--uf-text-3);
-	--uf-btn-bg: transparent;
-	--uf-btn-line: transparent;
+	@include btn(var(--uf-text-3), transparent, transparent);
 	width: 28px;
 	padding: 0;
 	font-size: 15px;
 	cursor: move;
+	&:hover { @include btn(var(--uf-text-1), var(--uf-hover)); }
 }
 
-.cbi-button.drag-handle:hover {
-	--uf-btn-fg: var(--uf-text-1);
-	--uf-btn-bg: var(--uf-hover);
-}
-
-/* "Save" beside "Save & Apply" is the secondary of the pair. */
+// "Save" beside "Save & Apply" is the secondary of the pair.
 .cbi-page-actions .cbi-button-apply + .cbi-button-save,
 .cbi-page-actions .cbi-button-negative + .cbi-button-save {
-	--uf-btn-fg: var(--uf-blue);
-	--uf-btn-bg: var(--uf-surface);
-	--uf-btn-line: var(--uf-blue-line);
+	@include btn(var(--uf-blue), var(--uf-surface), var(--uf-blue-line));
 }
 
-.btn.large {
-	height: 40px;
-	padding: 0 20px;
-	font-size: 14px;
-}
-
-.btn.small {
-	height: 26px;
-	padding: 0 10px;
-	font-size: 12px;
-}
+.btn.large { height: 40px; padding: 0 20px; font-size: 14px; }
+.btn.small { height: 26px; padding: 0 10px; font-size: 12px; }
 
 .close {
 	float: right;
@@ -211,14 +108,7 @@ input[type="submit"]:hover {
 	font-weight: 400;
 	line-height: 14px;
 	opacity: .8;
+	&:hover { color: var(--uf-text-1); text-decoration: none; }
 }
 
-.close:hover {
-	color: var(--uf-text-1);
-	text-decoration: none;
-}
-
-.btn .close, .alert-message .close {
-	font-family: var(--uf-font);
-	line-height: 18px;
-}
+.btn .close, .alert-message .close { font-family: var(--uf-font); line-height: 18px; }

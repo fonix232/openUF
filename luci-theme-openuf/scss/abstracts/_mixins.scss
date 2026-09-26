@@ -1,10 +1,23 @@
 @use 'sass:selector';
 
-// An icon drawn as a mask over currentColor or a background: both the
-// prefixed and the standard property, same value.
+// Declaration groups the theme repeats. An argument left null leaves its
+// declaration out; the others come out in the order written here.
+
+// The prefixed and the standard property, same value. An icon is a mask
+// over currentColor or a background.
 @mixin mask($value) {
 	-webkit-mask: $value;
 	mask: $value;
+}
+
+@mixin mask-image($value) {
+	-webkit-mask-image: $value;
+	mask-image: $value;
+}
+
+@mixin appearance($value) {
+	-webkit-appearance: $value;
+	appearance: $value;
 }
 
 // The dark scheme's overrides for the rule it is used in.
@@ -12,4 +25,105 @@
 	@at-root #{selector.nest(':root[data-darkmode="true"]', &)} {
 		@content;
 	}
+}
+
+@mixin focus-ring($offset: 1px) {
+	outline: 2px solid rgba(var(--uf-blue-rgb), .45);
+	outline-offset: $offset;
+}
+
+@mixin size($width, $height: $width) {
+	width: $width;
+	height: $height;
+}
+
+@mixin dot($size, $color: null) {
+	@include size($size);
+	border-radius: 50%;
+	background: $color;
+}
+
+// A line icon ($icon, as a mask) filled with $color, in a box of $size.
+@mixin icon($icon, $size: null, $color: currentColor, $fit: contain) {
+	@include size($size);
+	background: $color;
+	@include mask($icon center / $fit no-repeat);
+}
+
+// A flex row, its items centred across it.
+@mixin row($gap: null, $justify: null, $display: flex) {
+	display: $display;
+	align-items: center;
+	justify-content: $justify;
+	gap: $gap;
+}
+
+@mixin center($display: flex) {
+	@include row($justify: center, $display: $display);
+}
+
+@mixin ellipsis($white-space: nowrap) {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: $white-space;
+}
+
+@mixin text($size, $line-height: null, $color: null) {
+	color: $color;
+	font-size: $size;
+	line-height: $line-height;
+}
+
+// A card: a hairline box on its own background.
+@mixin panel($background: var(--uf-surface), $shadow: null, $radius: var(--uf-radius)) {
+	background: $background;
+	border: 1px solid var(--uf-border);
+	border-radius: $radius;
+	box-shadow: $shadow;
+}
+
+// A menu, a flyout or a dialog, raised over the page.
+@mixin popover($radius: var(--uf-radius)) {
+	@include panel(var(--uf-raised), var(--uf-shadow), $radius);
+}
+
+// A link in a menu or a navigation column.
+@mixin menu-item($padding, $color) {
+	display: block;
+	padding: $padding;
+	border-radius: var(--uf-radius-sm);
+	color: $color;
+}
+
+// No box at all: part of whatever holds it.
+@mixin unboxed {
+	padding: 0;
+	background: none;
+	border: 0;
+}
+
+// A button's colours (_buttons): label, fill and outline. A custom property
+// is written even when null, so an unset one is skipped here.
+@mixin btn($fg: null, $bg: null, $line: null) {
+	@if $fg { --uf-btn-fg: #{$fg}; }
+	@if $bg { --uf-btn-bg: #{$bg}; }
+	@if $line { --uf-btn-line: #{$line}; }
+}
+
+// An SVG as a data URL on a $size grid, for masks and backgrounds; $attrs
+// for the <svg>, if any, start with a space.
+@function svg($shapes, $attrs: '', $size: 24) {
+	@return url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 #{$size} #{$size}'#{$attrs}>#{$shapes}</svg>");
+}
+
+// A line drawing: strokes $width wide, with round ends and/or corners as
+// $round lists them (cap, join, both in either order, or none).
+@function stroked($round, $shapes, $width: 1.5, $color: black) {
+	$attrs: " fill='none' stroke='#{$color}' stroke-width='#{$width}'";
+	@each $end in $round {
+		@if $end != none {
+			$attrs: "#{$attrs} stroke-line#{$end}='round'";
+		}
+	}
+	@return svg($shapes, $attrs);
 }

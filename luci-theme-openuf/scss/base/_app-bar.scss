@@ -1,5 +1,4 @@
-/* App bar
- * ------- */
+@use '../abstracts' as *;
 
 .uf-topbar {
 	position: fixed;
@@ -22,72 +21,44 @@
 }
 
 .uf-console {
-	display: flex;
-	align-items: center;
-	gap: 10px;
+	@include row(10px);
 	min-width: 0;
 	padding: 0 18px 0 20px;
 	color: var(--uf-text-2);
 	white-space: nowrap;
+	&:hover { color: var(--uf-text-1); }
 }
 
-.uf-console:hover {
-	color: var(--uf-text-1);
-}
-
-.uf-console-dot {
-	flex: 0 0 auto;
-	width: 6px;
-	height: 6px;
-	border-radius: 50%;
-	background: var(--uf-green);
-}
-
-.uf-console-name {
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
+.uf-console-dot { flex: 0 0 auto; @include dot(6px, var(--uf-green)); }
+.uf-console-name { overflow: hidden; text-overflow: ellipsis; }
 
 .uf-apptabs {
 	display: flex;
 	margin: 0;
 	list-style: none;
+	> li > a {
+		@include row(8px);
+		height: 100%;
+		padding: 0 16px;
+		color: var(--uf-text-2);
+		white-space: nowrap;
+		&:hover { color: var(--uf-text-1); }
+	}
+	> li.active > a {
+		background: var(--uf-surface);
+		color: var(--uf-blue);
+		box-shadow: inset 1px 0 0 var(--uf-border), inset -1px 0 0 var(--uf-border);
+	}
 }
 
-.uf-apptabs > li > a {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	height: 100%;
-	padding: 0 16px;
-	color: var(--uf-text-2);
-	white-space: nowrap;
-}
-
-.uf-apptabs > li > a:hover {
-	color: var(--uf-text-1);
-}
-
-.uf-apptabs > li.active > a {
-	background: var(--uf-surface);
-	color: var(--uf-blue);
-	box-shadow: inset 1px 0 0 var(--uf-border), inset -1px 0 0 var(--uf-border);
-}
-
-/* The Network app's mark: a filled disc with a ring cut out of it. */
+// The Network app's mark: a filled disc with a ring cut out of it.
 .uf-appicon {
 	flex: 0 0 auto;
-	width: 18px;
-	height: 18px;
-	border-radius: 50%;
-	background: radial-gradient(circle, var(--uf-blue) 0 3px, transparent 3.5px 5px, var(--uf-blue) 5.5px);
+	@include dot(18px, radial-gradient(circle, var(--uf-blue) 0 3px, transparent 3.5px 5px, var(--uf-blue) 5.5px));
 	opacity: .5;
 }
 
-.uf-apptabs > li.active .uf-appicon,
-.uf-login .uf-appicon {
-	opacity: 1;
-}
+.uf-apptabs > li.active .uf-appicon, .uf-login .uf-appicon { opacity: 1; }
 
 .uf-wordmark {
 	flex: 0 0 auto;
@@ -101,30 +72,22 @@
 
 .uf-tools {
 	flex: 1 1 0;
-	display: flex;
-	align-items: center;
-	justify-content: flex-end;
-	gap: 6px;
+	@include row(6px, flex-end);
 	min-width: 0;
 	padding: 0 14px 0 8px;
 }
 
 #indicators {
-	display: flex;
-	align-items: center;
-	gap: 6px;
+	@include row(6px);
 	min-width: 0;
-	padding: 3px; /* room for the changes chip's halo */
+	padding: 3px; // room for the changes chip's halo
 	overflow: hidden;
 }
 
 .uf-iconbtn {
 	flex: 0 0 auto;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 32px;
-	height: 32px;
+	@include center(inline-flex);
+	@include size(32px);
 	padding: 0;
 	border: 0;
 	border-radius: 50%;
@@ -132,20 +95,8 @@
 	color: var(--uf-text-3);
 	cursor: pointer;
 	transition: background-color .15s, color .15s;
-}
-
-.uf-iconbtn::before {
-	content: "";
-	width: 20px;
-	height: 20px;
-	background: currentColor;
-	-webkit-mask: var(--uf-icon) center / contain no-repeat;
-	mask: var(--uf-icon) center / contain no-repeat;
-}
-
-.uf-iconbtn:hover {
-	background: var(--uf-hover);
-	color: var(--uf-text-1);
+	&::before { content: ""; @include icon(var(--uf-icon), 20px); }
+	&:hover { background: var(--uf-hover); color: var(--uf-text-1); }
 }
 
 .uf-burger {
@@ -158,17 +109,11 @@
 .uf-scheme { --uf-icon: var(--uf-i-auto); }
 [data-scheme="light"] .uf-scheme { --uf-icon: var(--uf-i-sun); }
 [data-scheme="dark"] .uf-scheme { --uf-icon: var(--uf-i-moon); }
-
-.uf-user {
-	position: relative;
-}
+.uf-user { position: relative; }
 
 .uf-avatar {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	width: 28px;
-	height: 28px;
+	@include center;
+	@include size(28px);
 	margin-left: 4px;
 	padding: 0;
 	border: 0;
@@ -179,8 +124,7 @@
 	cursor: pointer;
 }
 
-.uf-avatar:hover,
-.uf-user.open .uf-avatar {
+.uf-avatar:hover, .uf-user.open .uf-avatar {
 	box-shadow: 0 0 0 3px var(--uf-hover);
 	color: var(--uf-text-1);
 }
@@ -191,110 +135,66 @@
 	right: 0;
 	min-width: 200px;
 	padding: 6px;
-	background: var(--uf-raised);
-	border: 1px solid var(--uf-border);
-	border-radius: var(--uf-radius);
-	box-shadow: var(--uf-shadow);
+	@include popover;
 	opacity: 0;
 	visibility: hidden;
 	transform: translateY(-4px);
 	transition: opacity .12s, transform .12s, visibility 0s .12s;
+	.uf-user.open & {
+		opacity: 1;
+		visibility: visible;
+		transform: none;
+		transition: opacity .12s, transform .12s;
+	}
 }
 
-.uf-user.open .uf-user-menu {
-	opacity: 1;
-	visibility: visible;
-	transform: none;
-	transition: opacity .12s, transform .12s;
-}
-
-.uf-user-name {
-	padding: 6px 10px 0;
-	font-weight: 600;
-}
+.uf-user-name { padding: 6px 10px 0; font-weight: 600; }
 
 .uf-user-host {
 	padding: 0 10px 8px;
 	margin-bottom: 6px;
 	border-bottom: 1px solid var(--uf-border);
-	color: var(--uf-text-3);
-	font-size: 12px;
+	@include text(12px, $color: var(--uf-text-3));
 }
 
 .uf-user-menu a {
-	display: block;
-	padding: 7px 10px;
-	border-radius: var(--uf-radius-sm);
-	color: var(--uf-text-1);
+	@include menu-item(7px 10px, var(--uf-text-1));
+	&:hover { background: var(--uf-hover); }
+	&.uf-signout { color: var(--uf-red-text); }
 }
 
-.uf-user-menu a:hover {
-	background: var(--uf-hover);
-}
-
-.uf-user-menu a.uf-signout {
-	color: var(--uf-red-text);
-}
-
-/* Indicators. Background polling ("Refreshing", "Paused") is status, not
- * news, so it is a quiet line of grey text behind a small dot; pending
- * changes are the one call to action up here, a solid blue chip. */
-.uf-topbar [data-indicator] {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	height: 26px;
-	padding: 0 8px;
-	border-radius: 13px;
-	color: var(--uf-text-3);
-	font-size: 12px;
-	font-weight: 400;
-	white-space: nowrap;
-	text-transform: none;
-	transition: background-color .15s, color .15s;
-}
-
-.uf-topbar [data-indicator]::before {
-	content: "";
-	flex: 0 0 auto;
-	width: 6px;
-	height: 6px;
-	border-radius: 50%;
-	background: var(--uf-text-4);
-}
-
-.uf-topbar [data-indicator][data-style="active"]::before {
-	background: var(--uf-green);
-}
-
-.uf-topbar [data-indicator][data-clickable] {
-	cursor: pointer;
-}
-
-.uf-topbar [data-indicator][data-clickable]:hover {
-	background: var(--uf-hover);
-	color: var(--uf-text-1);
-}
-
-.uf-topbar [data-indicator="uci-changes"] {
-	gap: 7px;
-	height: 28px;
-	padding: 0 12px 0 10px;
-	border-radius: 14px;
-	background: var(--uf-blue-fill);
-	color: var(--uf-on-accent);
-	font-weight: 600;
-	box-shadow: 0 0 0 3px rgba(var(--uf-blue-rgb), .18);
-}
-
-/* The dot turns white on the blue: saved, but not yet applied. */
-.uf-topbar [data-indicator="uci-changes"][data-style]::before {
-	width: 7px;
-	height: 7px;
-	background: var(--uf-on-accent);
-}
-
-.uf-topbar [data-indicator="uci-changes"]:hover {
-	background: var(--uf-blue-fill-hover);
-	color: var(--uf-on-accent);
+// Indicators. Background polling ("Refreshing", "Paused") is status, not
+// news, so it is a quiet line of grey text behind a small dot; pending
+// changes are the one call to action up here, a solid blue chip.
+.uf-topbar {
+	[data-indicator] {
+		@include row(6px, $display: inline-flex);
+		height: 26px;
+		padding: 0 8px;
+		border-radius: 13px;
+		@include text(12px, $color: var(--uf-text-3));
+		font-weight: 400;
+		white-space: nowrap;
+		text-transform: none;
+		transition: background-color .15s, color .15s;
+		&::before { content: ""; flex: 0 0 auto; @include dot(6px, var(--uf-text-4)); }
+		&[data-style="active"]::before { background: var(--uf-green); }
+		&[data-clickable] {
+			cursor: pointer;
+			&:hover { background: var(--uf-hover); color: var(--uf-text-1); }
+		}
+	}
+	[data-indicator="uci-changes"] {
+		gap: 7px;
+		height: 28px;
+		padding: 0 12px 0 10px;
+		border-radius: 14px;
+		background: var(--uf-blue-fill);
+		color: var(--uf-on-accent);
+		font-weight: 600;
+		box-shadow: 0 0 0 3px rgba(var(--uf-blue-rgb), .18);
+		// The dot turns white on the blue: saved, but not yet applied.
+		&[data-style]::before { @include size(7px); background: var(--uf-on-accent); }
+		&:hover { background: var(--uf-blue-fill-hover); color: var(--uf-on-accent); }
+	}
 }

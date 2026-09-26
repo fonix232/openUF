@@ -1,30 +1,17 @@
-/* Narrow screens
- * --------------
- * Below 960px the rail and the secondary column become a drawer behind the
- * menu button; below 640px tables stack their cells, as bootstrap's
- * mobile.css does, since LuCI's views assume a theme will. */
+@use '../abstracts' as *;
 
-@media screen and (max-width: 960px) {
-	.uf-burger {
-		display: inline-flex;
-	}
+// Narrow screens. Below 960px the rail and the secondary column become a
+// drawer behind the menu button; below 640px tables stack their cells, as
+// bootstrap's mobile.css does, since LuCI's views assume a theme will.
 
-	.uf-wordmark,
-	.uf-apptabs {
-		display: none !important;
-	}
+@include drawer {
+	.uf-burger { display: inline-flex; }
+	.uf-wordmark, .uf-apptabs { display: none !important; }
+	.uf-console { padding-left: 8px; }
+	// The columns are a drawer here, so there are none to paint.
+	.uf-shell { background: none; }
 
-	.uf-console {
-		padding-left: 8px;
-	}
-
-	/* The columns are a drawer here, so there are none to paint. */
-	.uf-shell {
-		background: none;
-	}
-
-	.uf-rail,
-	.uf-subnav {
+	.uf-rail, .uf-subnav {
 		position: fixed;
 		top: var(--uf-topbar-h);
 		bottom: 0;
@@ -34,11 +21,7 @@
 		transition: transform .2s ease, visibility 0s .2s;
 	}
 
-	.uf-rail {
-		left: 0;
-		width: var(--uf-rail-w-open);
-		z-index: 760;
-	}
+	.uf-rail { left: 0; width: var(--uf-rail-w-open); z-index: 760; }
 
 	.uf-subnav {
 		left: var(--uf-rail-w-open);
@@ -47,113 +30,60 @@
 		box-shadow: inset 1px 0 0 var(--uf-border), inset -1px 0 0 var(--uf-border);
 	}
 
-	.uf-rail-label {
-		opacity: 1;
+	.uf-rail-label { opacity: 1; }
+	.uf-rail-item.active > a { background: var(--uf-blue-soft); }
+	.uf-flyout, .uf-rail-toggle, .uf-subnav-collapse, .uf-subnav-expand { display: none !important; }
+	.uf-subnav-collapsed .uf-subnav { display: block !important; }
+	.uf-subnav-collapsed.uf-has-subnav .uf-page, .uf-subnav-collapsed.uf-has-subnav .uf-footer { padding-left: 16px; }
+
+	.uf-nav-open {
+		.uf-rail, .uf-subnav {
+			transform: none;
+			visibility: visible;
+			transition: transform .2s ease;
+		}
+		.uf-scrim {
+			display: block;
+			position: fixed;
+			inset: var(--uf-topbar-h) 0 0 0;
+			z-index: 740;
+			background: var(--uf-scrim);
+		}
 	}
 
-	.uf-rail-item.active > a {
-		background: var(--uf-blue-soft);
-	}
-
-	.uf-flyout,
-	.uf-rail-toggle,
-	.uf-subnav-collapse,
-	.uf-subnav-expand {
-		display: none !important;
-	}
-
-	.uf-subnav-collapsed .uf-subnav {
-		display: block !important;
-	}
-
-	.uf-subnav-collapsed.uf-has-subnav .uf-page,
-	.uf-subnav-collapsed.uf-has-subnav .uf-footer {
-		padding-left: 16px;
-	}
-
-	.uf-nav-open .uf-rail,
-	.uf-nav-open .uf-subnav {
-		transform: none;
-		visibility: visible;
-		transition: transform .2s ease;
-	}
-
-	.uf-nav-open .uf-scrim {
-		display: block;
-		position: fixed;
-		inset: var(--uf-topbar-h) 0 0 0;
-		z-index: 740;
-		background: var(--uf-scrim);
-	}
-
-	.uf-page {
-		padding: 16px 16px 8px;
-	}
-
-	.uf-main > .alert-message {
-		width: calc(100% - 32px);
-		margin: 12px 16px 0;
-	}
-
-	.uf-footer {
-		padding: 12px 16px 20px;
-	}
-
-	.cbi-value label.cbi-value-title {
-		flex-basis: 180px;
-	}
+	.uf-page { padding: 16px 16px 8px; }
+	.uf-main > .alert-message { width: calc(100% - 32px); margin: 12px 16px 0; }
+	.uf-footer { padding: 12px 16px 20px; }
+	.cbi-value label.cbi-value-title { flex-basis: 180px; }
 }
 
-@media screen and (max-width: 640px) {
-	body {
-		font-size: 14px;
+@include phone {
+	body { font-size: 14px; }
+	.uf-tools { padding-right: 8px; }
+
+	// The hostname gives way to the tools, and polling shrinks to its dot
+	// (or goes, while changes are pending), so "Unsaved Changes" fits.
+	// Both may shrink, the hostname first, rather than push the page
+	// sideways when a view's own CSS widens the tools.
+	.uf-apps { flex: 0 100 auto; overflow: hidden; }
+	.uf-tools { flex: 1 1 auto; gap: 4px; }
+	.uf-console { padding-right: 6px; }
+
+	.uf-topbar {
+		[data-indicator]:not([data-indicator="uci-changes"]) {
+			gap: 0;
+			padding: 0 6px;
+			font-size: 0;
+		}
+		&:has([data-indicator="uci-changes"]) [data-indicator]:not([data-indicator="uci-changes"]) { display: none; }
+		[data-indicator="uci-changes"] { padding: 0 10px 0 8px; }
 	}
 
-	.uf-tools {
-		padding-right: 8px;
-	}
-
-	/* The hostname gives way to the tools, and polling shrinks to its dot
-	 * (or goes, while changes are pending), so "Unsaved Changes" fits.
-	 * Both may shrink, the hostname first, rather than push the page
-	 * sideways when a view's own CSS widens the tools. */
-	.uf-apps {
-		flex: 0 100 auto;
-		overflow: hidden;
-	}
-
-	.uf-tools {
-		flex: 1 1 auto;
-		gap: 4px;
-	}
-
-	.uf-console {
-		padding-right: 6px;
-	}
-
-	.uf-topbar [data-indicator]:not([data-indicator="uci-changes"]) {
-		gap: 0;
-		padding: 0 6px;
-		font-size: 0;
-	}
-
-	.uf-topbar:has([data-indicator="uci-changes"]) [data-indicator]:not([data-indicator="uci-changes"]) {
-		display: none;
-	}
-
-	.uf-topbar [data-indicator="uci-changes"] {
-		padding: 0 10px 0 8px;
-	}
-
-	/* No room for two columns: the drawer is one, the categories on top and
-	 * the open category's pages under them. menu-openuf.js measures the
-	 * category list into --uf-drawer-rail-h, so the pages start right
-	 * where it ends. */
-	.uf-rail,
-	.uf-subnav {
-		left: 0;
-		width: min(280px, 85vw);
-	}
+	// No room for two columns: the drawer is one, the categories on top and
+	// the open category's pages under them. menu-openuf.js measures the
+	// category list into --uf-drawer-rail-h, so the pages start right where
+	// it ends.
+	.uf-rail, .uf-subnav { left: 0; width: min(280px, 85vw); }
 
 	.uf-rail {
 		bottom: auto;
@@ -169,95 +99,62 @@
 		box-shadow: inset 0 1px 0 var(--uf-border);
 	}
 
-	.cbi-section,
-	.cbi-page-actions {
-		padding: 14px;
-	}
+	.cbi-section, .cbi-page-actions { padding: 14px; }
 
-	/* One row of whole tab titles that scrolls sideways, as UniFi's app
-	 * does, rather than titles squeezed into ellipses. */
+	// One row of whole tab titles that scrolls sideways, as UniFi's app
+	// does, rather than titles squeezed into ellipses.
 	.tabs, .cbi-tabmenu {
 		flex-wrap: nowrap;
 		overflow-x: auto;
 		gap: 0 18px;
 		scrollbar-width: none;
+		> li { flex: 0 0 auto; }
 	}
 
-	.tabs > li,
-	.cbi-tabmenu > li {
-		flex: 0 0 auto;
-	}
-
-	/* The strip starts scrolled to the open tab, which LuCI restores on a
-	 * reload (and the Dashboard rebuilds its strip on every refresh): one
-	 * near the end would otherwise open out of view. Only here is the
-	 * strip its own scroller; wider, the page would jump. */
-	.tabs > li.active,
-	.cbi-tabmenu > li.cbi-tab {
-		scroll-initial-target: nearest;
-	}
+	// The strip starts scrolled to the open tab, which LuCI restores on a
+	// reload (and the Dashboard rebuilds its strip on every refresh): one
+	// near the end would otherwise open out of view. Only here is the
+	// strip its own scroller; wider, the page would jump.
+	.tabs > li.active, .cbi-tabmenu > li.cbi-tab { scroll-initial-target: nearest; }
 
 	.cbi-value {
 		display: block;
 		padding: 10px 0;
+		label.cbi-value-title { display: block; padding: 0 0 6px; font-weight: 600; }
 	}
 
-	.cbi-value label.cbi-value-title {
-		display: block;
-		padding: 0 0 6px;
-		font-weight: 600;
-	}
-
-	.cbi-value-field,
-	.cbi-select,
-	.cbi-dynlist,
-	.cbi-dropdown:not(.btn):not(.cbi-button) {
+	.cbi-value-field, .cbi-select, .cbi-dynlist, .cbi-dropdown:not(.btn):not(.cbi-button) {
 		width: 100%;
 		margin: 0;
 	}
 
-	/* A list's "add" field keeps its + beside it (NTP servers, DNS
-	 * servers) instead of wrapping it under a full-width field. */
+	// A list's "add" field keeps its + beside it (NTP servers, DNS
+	// servers) instead of wrapping it under a full-width field.
 	.cbi-dynlist > .add-item {
 		flex-wrap: nowrap;
+		> input { min-width: 0; }
 	}
 
-	.cbi-dynlist > .add-item > input {
-		min-width: 0;
-	}
-
-	/* 16px keeps iOS from zooming into a focused field; buttons that are
-	 * dropdowns ("Save & Apply") are not fields, and a read-only console
-	 * (Diagnostics' output, the system log) is never edited. LuCI's own
-	 * fields match: a dropdown (not a chosen item's chip) and the entries
-	 * of a list, which sit over its "add" field. */
-	input:not([type="button"]):not([type="submit"]):not([type="reset"]),
-	textarea:not([readonly]), select,
-	.cbi-dropdown:not(.btn, .cbi-button, [multiple]) > ul > li,
-	.cbi-dropdown[multiple][open] > ul > li,
+	// 16px keeps iOS from zooming into a focused field; buttons that are
+	// dropdowns ("Save & Apply") are not fields, and a read-only console
+	// (Diagnostics' output, the system log) is never edited. LuCI's own
+	// fields match: a dropdown (not a chosen item's chip) and the entries
+	// of a list, which sit over its "add" field.
+	input:not([type="button"]):not([type="submit"]):not([type="reset"]), textarea:not([readonly]), select,
+	.cbi-dropdown:not(.btn, .cbi-button, [multiple]) > ul > li, .cbi-dropdown[multiple][open] > ul > li,
 	.cbi-dropdown[multiple]:not([open]) > ul > li:not([display]) {
 		font-size: 16px !important;
 	}
 
-	.cbi-dynlist > .item > span {
-		font-size: 16px;
-	}
+	.cbi-dynlist > .item > span { font-size: 16px; }
 
-	select, input[type="text"], input[type="password"],
-	.cbi-dropdown > ul > li input[type="text"],
+	select, input[type="text"], input[type="password"], .cbi-dropdown > ul > li input[type="text"],
 	.cbi-value-field .control-group {
 		width: 100%;
 	}
 
-	.table {
-		display: flex;
-		flex-direction: column;
-		width: 100%;
-	}
-
-	.thead, .tbody, .tfoot {
-		display: contents;
-	}
+	.table { display: flex; flex-direction: column; width: 100%; }
+	.thead, .tbody, .tfoot { display: contents; }
 
 	.tr {
 		display: flex;
@@ -268,87 +165,43 @@
 		border-top: 1px solid var(--uf-divider);
 	}
 
-	.table .tr:first-child,
-	.table .tr.table-titles + .tr,
-	.table .tr.cbi-section-table-titles + .tr {
-		border-top: 0;
+	.table {
+		.tr:first-child, .tr.table-titles + .tr, .tr.cbi-section-table-titles + .tr { border-top: 0; }
+		.th, .td, .tr::before {
+			display: inline-block;
+			flex: 1 1 50%;
+			align-self: flex-start;
+			border: 0;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			word-wrap: break-word;
+		}
+		// Specific enough to beat the desktop's edge and column paddings,
+		// not so much that a page cannot set its own.
+		.tr > .th, .tr > .td, .tr::before { padding: 4px 6px; }
+		// LuCI centres some columns (a signal reading) with an !important
+		// utility; stacked under its label, a value starts where the label
+		// does.
+		.td.center[data-title] { text-align: left !important; }
+		.td.cbi-dropdown-open { overflow: visible; }
 	}
 
-	.table .th,
-	.table .td,
-	.table .tr::before {
-		display: inline-block;
-		flex: 1 1 50%;
-		align-self: flex-start;
-		border: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		word-wrap: break-word;
+	@for $i from 1 through 10 {
+		.col-#{$i} { flex: $i $i $i * 30px !important; }
 	}
 
-	/* Specific enough to beat the desktop's edge and column paddings, not
-	 * so much that a page cannot set its own. */
-	.table .tr > .th,
-	.table .tr > .td,
-	.table .tr::before {
-		padding: 4px 6px;
-	}
-
-	/* LuCI centres some columns (a signal reading) with an !important
-	 * utility; stacked under its label, a value starts where the label does. */
-	.table .td.center[data-title] {
-		text-align: left !important;
-	}
-
-	.table .td.cbi-dropdown-open {
-		overflow: visible;
-	}
-
-	.col-1 { flex: 1 1 30px !important; }
-	.col-2 { flex: 2 2 60px !important; }
-	.col-3 { flex: 3 3 90px !important; }
-	.col-4 { flex: 4 4 120px !important; }
-	.col-5 { flex: 5 5 150px !important; }
-	.col-6 { flex: 6 6 180px !important; }
-	.col-7 { flex: 7 7 210px !important; }
-	.col-8 { flex: 8 8 240px !important; }
-	.col-9 { flex: 9 9 270px !important; }
-	.col-10 { flex: 10 10 300px !important; }
-
-	.td select {
-		word-wrap: normal;
-	}
-
-	.td[data-widget="button"],
-	.td[data-widget="fvalue"] {
-		flex: 1 1 17%;
-		text-align: left;
-	}
+	.td select { word-wrap: normal; }
+	.td[data-widget="button"], .td[data-widget="fvalue"] { flex: 1 1 17%; text-align: left; }
 
 	.td.cbi-value-field {
 		align-self: flex-start;
 		flex-basis: 100%;
+		.cbi-button { width: 100%; }
 	}
 
-	.td.cbi-value-field .cbi-button {
-		width: 100%;
-	}
-
-	.table.cbi-section-table {
-		border: none;
-		background: none;
-		margin: 0;
-	}
-
-	.tr.table-titles,
-	.cbi-section-table-titles,
-	.cbi-section-table-descr {
-		display: none;
-	}
-
-	.cbi-section-table-row {
-		margin: 0 0 8px;
-	}
+	.table.cbi-section-table { border: none; background: none; margin: 0; }
+	.tr.table-titles, .cbi-section-table-titles, .cbi-section-table-descr { display: none; }
+	.cbi-section-table-row { margin: 0 0 8px; }
 
 	.tr[data-title]::before {
 		display: block;
@@ -361,105 +214,63 @@
 	.td[data-title]::before {
 		content: attr(data-title);
 		display: block;
-		color: var(--uf-text-3);
-		font-size: 12px;
+		@include text(12px, $color: var(--uf-text-3));
 		font-weight: 500;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: pre-line;
+		@include ellipsis(pre-line);
 	}
 
-	.td[data-description]::after {
-		display: block;
-	}
+	.td[data-description]::after { display: block; }
 
-	/* Its own line, its title (if it has one) over the buttons, not at
-	 * the far end; not the desktop's 1% either, should a page let it
-	 * size to its buttons. */
+	// Its own line, its title (if it has one) over the buttons, not at the
+	// far end; not the desktop's 1% either, should a page let it size to
+	// its buttons.
 	.td.cbi-section-actions {
 		flex-basis: 100%;
 		width: auto;
 		max-width: 100%;
 		overflow: initial;
 		text-align: left;
+		> * { justify-content: flex-start; }
 	}
 
-	.td.cbi-section-actions > * {
-		justify-content: flex-start;
+	.hide-sm, .hide-xs { display: none !important; }
+
+	.td.cbi-value-field {
+		&[data-widget="CBI.DummyValue"], &[data-widget="CBI.Button"], &[data-widget="CBI.FlagValue"],
+		&[data-widget="dvalue"], &[data-widget="button"], &[data-widget="fvalue"] {
+			flex-basis: 50%;
+			text-align: left;
+		}
 	}
 
-	.hide-sm,
-	.hide-xs {
-		display: none !important;
-	}
-
-	.td.cbi-value-field[data-widget="CBI.DummyValue"],
-	.td.cbi-value-field[data-widget="CBI.Button"],
-	.td.cbi-value-field[data-widget="CBI.FlagValue"],
-	.td.cbi-value-field[data-widget="dvalue"],
-	.td.cbi-value-field[data-widget="button"],
-	.td.cbi-value-field[data-widget="fvalue"] {
-		flex-basis: 50%;
-		text-align: left;
-	}
-
-	/* No row hover: a touch leaves it stuck on a row. */
-	.table .tr:hover > .td {
-		background-color: transparent !important;
-	}
+	// No row hover: a touch leaves it stuck on a row.
+	.table .tr:hover > .td { background-color: transparent !important; }
 
 	.cbi-page-actions {
 		justify-content: stretch;
+		> * { flex: 1 1 auto; }
 	}
 
-	.cbi-page-actions > * {
-		flex: 1 1 auto;
+	[data-page="admin-status-overview"] .td[width="33%"] { flex-basis: 40%; }
+
+	// The row actions keep a line of their own.
+	#wifi_assoclist_table .td, [data-page="admin-status-processes"] .td:not(.cbi-section-actions) { flex-basis: 50% !important; }
+	[data-page="admin-status-processes"] .td[data-widget="button"] { flex-basis: 33% !important; }
+
+	[data-page="admin-system-mounts"], [data-page="admin-system-startup"], [data-page="admin-status-processes"] {
+		.td[data-widget="button"]::before { display: none; }
 	}
 
-	[data-page="admin-status-overview"] .td[width="33%"] {
-		flex-basis: 40%;
+	[data-name="bridge-vlan"] {
+		> div { overflow: visible !important; }
+		.td[data-title] { flex-basis: 33%; }
 	}
 
-	/* The row actions keep a line of their own. */
-	#wifi_assoclist_table .td,
-	[data-page="admin-status-processes"] .td:not(.cbi-section-actions) {
-		flex-basis: 50% !important;
+	[data-page="admin-network-network"] {
+		.td[data-name="_ifacebox"] { flex-basis: 40%; }
+		.td[data-name="_ifacestat"] { flex-basis: 60%; }
 	}
 
-	[data-page="admin-status-processes"] .td[data-widget="button"] {
-		flex-basis: 33% !important;
-	}
-
-	[data-page="admin-system-mounts"] .td[data-widget="button"]::before,
-	[data-page="admin-system-startup"] .td[data-widget="button"]::before,
-	[data-page="admin-status-processes"] .td[data-widget="button"]::before {
-		display: none;
-	}
-
-	[data-name="bridge-vlan"] > div {
-		overflow: visible !important;
-	}
-
-	[data-name="bridge-vlan"] .td[data-title] {
-		flex-basis: 33%;
-	}
-
-	[data-page="admin-network-network"] .td[data-name="_ifacebox"] {
-		flex-basis: 40%;
-	}
-
-	[data-page="admin-network-network"] .td[data-name="_ifacestat"] {
-		flex-basis: 60%;
-	}
-
-	.td .ifacebox {
-		width: 100%;
-		margin: 0 !important;
-	}
-
-	.modal {
-		width: calc(100% - 24px);
-		margin: 12px auto;
-		padding: 16px;
-	}
+	.td .ifacebox { width: 100%; margin: 0 !important; }
+	.modal { width: calc(100% - 24px); margin: 12px auto; padding: 16px; }
 }

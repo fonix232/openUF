@@ -1,34 +1,74 @@
-/* Tokens
- * ------
- * .uf-scheme-light and .uf-scheme-dark carry a palette of their own into a
- * subtree, whatever the page's: the colour scheme previews on System >
- * openUF Theme. The dark one takes both blocks, so tokens derived from
- * others (--uf-blue from --uf-blue-rgb) are derived from its own. */
+@use '../abstracts' as *;
 
+// Icons, drawn on a 24px grid and used as masks so they take currentColor.
+$icons: (
+	dashboard: stroked(cap, "<circle cx='12' cy='12' r='9'/><path d='M12 12.5 15.5 8'/><circle cx='12' cy='13' r='1.6'/><path d='M7.2 16.5a6 6 0 0 1 0-7M16.8 16.5a6 6 0 0 0 .9-2'/>"),
+	gear: stroked(join, "<path d='M19.39 13.3 21.44 14.44 20.4 16.95 18.14 16.3 16.3 18.14 16.95 20.4 14.44 21.44 13.3 19.39 10.7 19.39 9.56 21.44 7.05 20.4 7.7 18.14 5.86 16.3 3.6 16.95 2.56 14.44 4.61 13.3 4.61 10.7 2.56 9.56 3.6 7.05 5.86 7.7 7.7 5.86 7.05 3.6 9.56 2.56 10.7 4.61 13.3 4.61 14.44 2.56 16.95 3.6 16.3 5.86 18.14 7.7 20.4 7.05 21.44 9.56 19.39 10.7Z'/><circle cx='12' cy='12' r='3'/>"),
+	apps: stroked(none, "<rect x='3.75' y='3.75' width='7' height='7' rx='2'/><rect x='13.25' y='3.75' width='7' height='7' rx='2'/><rect x='3.75' y='13.25' width='7' height='7' rx='2'/><rect x='13.25' y='13.25' width='7' height='7' rx='3.5'/>"),
+	topology: stroked(cap, "<circle cx='5.5' cy='12' r='2.5'/><circle cx='18.5' cy='5' r='2'/><circle cx='18.5' cy='12' r='2'/><circle cx='18.5' cy='19' r='2'/><path d='M8 12h8.5M7.6 10.6l9.1-4.6M7.6 13.4l9.1 4.6'/>"),
+	shield: stroked(join cap, "<path d='M12 3 19.5 6v5.5c0 4.4-3.1 8.1-7.5 9.5-4.4-1.4-7.5-5.1-7.5-9.5V6Z'/><path d='m9 12 2.2 2.2L15.2 10'/>"),
+	chart: stroked(cap, "<path d='M3.5 20.5h17'/><rect x='5.25' y='11' width='3.5' height='6.5' rx='1'/><rect x='10.25' y='5' width='3.5' height='12.5' rx='1'/><rect x='15.25' y='8.5' width='3.5' height='9' rx='1'/>"),
+	storage: stroked(none, "<ellipse cx='12' cy='6' rx='7.5' ry='2.75'/><path d='M4.5 6v12c0 1.5 3.4 2.75 7.5 2.75s7.5-1.25 7.5-2.75V6M4.5 12c0 1.5 3.4 2.75 7.5 2.75s7.5-1.25 7.5-2.75'/>"),
+	box: stroked(join, "<path d='M12 2.75 20 7v10l-8 4.25L4 17V7Z'/><path d='m4 7 8 4.25L20 7M12 11.25v10'/>"),
+	power: stroked(cap, "<path d='M12 3.5v8'/><path d='M7.2 6.4a7.75 7.75 0 1 0 9.6 0'/>"),
+	dot: stroked(none, "<circle cx='12' cy='12' r='8.5'/><circle cx='12' cy='12' r='3.25'/>"),
+	panel-open: stroked(cap join, "<path d='M5 5v14M9.5 12H19M15 8l4 4-4 4'/>"),
+	panel-close: stroked(cap join, "<path d='M19 5v14M14.5 12H5M9 8l-4 4 4 4'/>"),
+	burger: stroked(cap, "<path d='M4 7h16M4 12h16M4 17h16'/>"),
+	auto: svg("<circle cx='12' cy='12' r='8.25' fill='none' stroke='black' stroke-width='1.5'/><path d='M12 3.75a8.25 8.25 0 0 1 0 16.5Z'/>"),
+	sun: stroked(cap, "<circle cx='12' cy='12' r='4'/><path d='M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4'/>"),
+	moon: stroked(join, "<path d='M19.5 14.6A8 8 0 0 1 9.4 4.5a8 8 0 1 0 10.1 10.1Z'/>"),
+	chevron: stroked(cap join, "<path d='m7 10 5 5 5-5'/>", 2),
+	check: stroked(cap join, "<path d='m5.5 12.5 4.5 4.5 8.5-9.5'/>", 3),
+	info: svg("<path fill-rule='evenodd' d='M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20Zm0 1.75a8.25 8.25 0 1 0 0 16.5 8.25 8.25 0 0 0 0-16.5ZM11 10.5h2V17h-2Zm1-3.75a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Z'/>"),
+	close: stroked(cap, "<path d='m6 6 12 12M18 6 6 18'/>", 1.75),
+	spinner: svg("<circle cx='10' cy='10' r='8' stroke-opacity='.2'/><path d='M10 2a8 8 0 0 1 8 8' stroke-linecap='round'><animateTransform attributeName='transform' type='rotate' dur='.8s' from='0 10 10' to='360 10 10' repeatCount='indefinite'/></path>", " stroke='black' stroke-width='2.5' fill='none'", 20),
+	activity: stroked(cap join, "<path d='M2.75 12.5h4l2.75-7 5 13.5 2.75-6.5h4'/>"),
+	eye: stroked(join, "<path d='M2.75 12S6.25 5.75 12 5.75 21.25 12 21.25 12 17.75 18.25 12 18.25 2.75 12 2.75 12Z'/><circle cx='12' cy='12' r='3'/>"),
+	eye-off: stroked(join cap, "<path d='M2.75 12S6.25 5.75 12 5.75 21.25 12 21.25 12 17.75 18.25 12 18.25 2.75 12 2.75 12Z'/><circle cx='12' cy='12' r='3'/><path d='m4 4 16 16'/>"),
+	// Device kinds, standing in for LuCI's own device icons (_badges).
+	ethernet: stroked(join, "<rect x='3.75' y='4.75' width='16.5' height='14.5' rx='2.5'/><path d='M8 8.75h8v5.5h-2v2h-4v-2H8Z'/>"),
+	bridge: stroked(join cap, "<rect x='2.75' y='7.75' width='7' height='8.5' rx='1.75'/><rect x='14.25' y='7.75' width='7' height='8.5' rx='1.75'/><path d='M9.75 12h4.5M6.25 7.75V5.5h11.5v2.25'/>"),
+	wifi: stroked(cap, "<path d='M3.25 9.25a12.5 12.5 0 0 1 17.5 0M6.25 12.5a8.25 8.25 0 0 1 11.5 0M9.25 15.75a4 4 0 0 1 5.5 0'/><circle cx='12' cy='19' r='1.1' fill='black'/>"),
+	vlan: stroked(join, "<path d='M3.75 3.75h7l9.5 9.5-7 7-9.5-9.5Z'/><circle cx='7.75' cy='7.75' r='1.5'/>"),
+	alias: stroked(cap, "<path d='M10.25 13.75a3.75 3.75 0 0 0 5.3 0l3.2-3.2a3.75 3.75 0 0 0-5.3-5.3l-1.2 1.2M13.75 10.25a3.75 3.75 0 0 0-5.3 0l-3.2 3.2a3.75 3.75 0 0 0 5.3 5.3l1.2-1.2'/>"),
+	tunnel: stroked(join cap, "<path d='M3.75 19.75V11.5a8.25 8.25 0 0 1 16.5 0v8.25ZM8.25 19.75V12a3.75 3.75 0 0 1 7.5 0v7.75'/>"),
+	wireguard: stroked(cap, "<rect x='4.75' y='10.25' width='14.5' height='10' rx='2'/><path d='M8 10.25V7.75a4 4 0 0 1 8 0v2.5M12 14.25v2'/>"),
+	switch: stroked(cap join, "<rect x='2.75' y='6.75' width='18.5' height='10.5' rx='2'/><path d='M6.5 11h2M11 11h2M15.5 11h2M6.5 14h11'/>"),
+	vrf: stroked(join cap, "<path d='M12 3.75 20.25 8 12 12.25 3.75 8Z'/><path d='m3.75 12 8.25 4.25L20.25 12M3.75 16l8.25 4.25L20.25 16'/>"),
+	// Four bars, each in its own quarter of the width, so a hard-stop
+	// gradient under the mask fills exactly as many as the level says.
+	signal: svg("<rect x='1.5' y='15' width='3' height='5.5' rx='1'/><rect x='7.5' y='11' width='3' height='9.5' rx='1'/><rect x='13.5' y='7' width='3' height='13.5' rx='1'/><rect x='19.5' y='3' width='3' height='17.5' rx='1'/>"),
+);
+
+// .uf-scheme-light and .uf-scheme-dark carry a palette of their own into a
+// subtree, whatever the page's: the colour scheme previews on System >
+// openUF Theme. The dark one takes both blocks, so tokens derived from
+// others (--uf-blue from --uf-blue-rgb) are derived from its own.
 :root,
 .uf-scheme-light,
 .uf-scheme-dark {
 	--uf-font: "UI Sans", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 	--uf-mono: "UI Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 
-	/* Accent and status colours. The plain token is for dots, bars, lines
-	 * and fills; *-text is the same hue dark (or light) enough to read as
-	 * 13px text (4.5:1) on a card, a field or its own tinted chip; *-soft is
-	 * a chip background under that text. The blue is UniFi's #006fff one
-	 * step deeper, so that it is also a text colour (on white, on its chip)
-	 * and carries a white label. */
+	// Accent and status colours. The plain token is for dots, bars, lines
+	// and fills; *-text is the same hue dark (or light) enough to read as
+	// 13px text (4.5:1) on a card, a field or its own tinted chip; *-soft is
+	// a chip background under that text. The blue is UniFi's #006fff one
+	// step deeper, so that it is also a text colour (on white, on its chip)
+	// and carries a white label.
 	--uf-blue-rgb: 0, 102, 235;
 	--uf-blue: rgb(var(--uf-blue-rgb));
 	--uf-blue-strong: #0059cc;
 	--uf-blue-soft: #ebf3ff;
 	--uf-blue-line: #99c5ff;
-	/* Solid blue under white text: primary buttons, the changes chip. */
+	// Solid blue under white text: primary buttons, the changes chip.
 	--uf-blue-fill: var(--uf-blue);
 	--uf-blue-fill-hover: var(--uf-blue-strong);
 	--uf-green-rgb: 56, 204, 101;
 	--uf-green: rgb(var(--uf-green-rgb));
 	--uf-green-text: #157a35;
-	/* UniFi's "Good": between green (Excellent) and red (Poor). */
+	// UniFi's "Good": between green (Excellent) and red (Poor).
 	--uf-lime-rgb: 184, 196, 30;
 	--uf-lime: rgb(var(--uf-lime-rgb));
 	--uf-lime-text: #687000;
@@ -39,7 +79,7 @@
 	--uf-orange-rgb: 245, 165, 36;
 	--uf-orange: rgb(var(--uf-orange-rgb));
 	--uf-orange-text: #9c5a00;
-	/* Throughput: upload purple, download cyan. */
+	// Throughput: upload purple, download cyan.
 	--uf-purple: #9b6cf6;
 	--uf-purple-text: #7c4ae0;
 	--uf-cyan: #29a8f0;
@@ -77,8 +117,8 @@
 	--uf-subnav-w: 216px;
 	--uf-control-h: 32px;
 
-	/* LuCI applications style against luci-theme-bootstrap's variables, so
-	 * map them onto this palette rather than leave them undefined. */
+	// LuCI applications style against luci-theme-bootstrap's variables, so
+	// map them onto this palette rather than leave them undefined.
 	--background-color-high: var(--uf-surface);
 	--background-color-medium: var(--uf-canvas);
 	--background-color-low: var(--uf-field);
@@ -109,56 +149,20 @@
 	--on-warn-color: var(--uf-text-1);
 	--disabled-opacity: var(--uf-disabled-opacity);
 
-	/* Icons, drawn on a 24px grid and used as masks so they take currentColor. */
-	--uf-i-dashboard: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><circle cx='12' cy='12' r='9'/><path d='M12 12.5 15.5 8'/><circle cx='12' cy='13' r='1.6'/><path d='M7.2 16.5a6 6 0 0 1 0-7M16.8 16.5a6 6 0 0 0 .9-2'/></svg>");
-	--uf-i-gear: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'><path d='M19.39 13.3 21.44 14.44 20.4 16.95 18.14 16.3 16.3 18.14 16.95 20.4 14.44 21.44 13.3 19.39 10.7 19.39 9.56 21.44 7.05 20.4 7.7 18.14 5.86 16.3 3.6 16.95 2.56 14.44 4.61 13.3 4.61 10.7 2.56 9.56 3.6 7.05 5.86 7.7 7.7 5.86 7.05 3.6 9.56 2.56 10.7 4.61 13.3 4.61 14.44 2.56 16.95 3.6 16.3 5.86 18.14 7.7 20.4 7.05 21.44 9.56 19.39 10.7Z'/><circle cx='12' cy='12' r='3'/></svg>");
-	--uf-i-apps: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5'><rect x='3.75' y='3.75' width='7' height='7' rx='2'/><rect x='13.25' y='3.75' width='7' height='7' rx='2'/><rect x='3.75' y='13.25' width='7' height='7' rx='2'/><rect x='13.25' y='13.25' width='7' height='7' rx='3.5'/></svg>");
-	--uf-i-topology: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><circle cx='5.5' cy='12' r='2.5'/><circle cx='18.5' cy='5' r='2'/><circle cx='18.5' cy='12' r='2'/><circle cx='18.5' cy='19' r='2'/><path d='M8 12h8.5M7.6 10.6l9.1-4.6M7.6 13.4l9.1 4.6'/></svg>");
-	--uf-i-shield: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><path d='M12 3 19.5 6v5.5c0 4.4-3.1 8.1-7.5 9.5-4.4-1.4-7.5-5.1-7.5-9.5V6Z'/><path d='m9 12 2.2 2.2L15.2 10'/></svg>");
-	--uf-i-chart: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><path d='M3.5 20.5h17'/><rect x='5.25' y='11' width='3.5' height='6.5' rx='1'/><rect x='10.25' y='5' width='3.5' height='12.5' rx='1'/><rect x='15.25' y='8.5' width='3.5' height='9' rx='1'/></svg>");
-	--uf-i-storage: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5'><ellipse cx='12' cy='6' rx='7.5' ry='2.75'/><path d='M4.5 6v12c0 1.5 3.4 2.75 7.5 2.75s7.5-1.25 7.5-2.75V6M4.5 12c0 1.5 3.4 2.75 7.5 2.75s7.5-1.25 7.5-2.75'/></svg>");
-	--uf-i-box: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'><path d='M12 2.75 20 7v10l-8 4.25L4 17V7Z'/><path d='m4 7 8 4.25L20 7M12 11.25v10'/></svg>");
-	--uf-i-power: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><path d='M12 3.5v8'/><path d='M7.2 6.4a7.75 7.75 0 1 0 9.6 0'/></svg>");
-	--uf-i-dot: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5'><circle cx='12' cy='12' r='8.5'/><circle cx='12' cy='12' r='3.25'/></svg>");
-	--uf-i-panel-open: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='M5 5v14M9.5 12H19M15 8l4 4-4 4'/></svg>");
-	--uf-i-panel-close: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='M19 5v14M14.5 12H5M9 8l-4 4 4 4'/></svg>");
-	--uf-i-burger: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><path d='M4 7h16M4 12h16M4 17h16'/></svg>");
-	--uf-i-auto: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='12' cy='12' r='8.25' fill='none' stroke='black' stroke-width='1.5'/><path d='M12 3.75a8.25 8.25 0 0 1 0 16.5Z'/></svg>");
-	--uf-i-sun: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><circle cx='12' cy='12' r='4'/><path d='M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4'/></svg>");
-	--uf-i-moon: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'><path d='M19.5 14.6A8 8 0 0 1 9.4 4.5a8 8 0 1 0 10.1 10.1Z'/></svg>");
-	--uf-i-chevron: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m7 10 5 5 5-5'/></svg>");
-	--uf-i-check: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><path d='m5.5 12.5 4.5 4.5 8.5-9.5'/></svg>");
-	--uf-i-info: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill-rule='evenodd' d='M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20Zm0 1.75a8.25 8.25 0 1 0 0 16.5 8.25 8.25 0 0 0 0-16.5ZM11 10.5h2V17h-2Zm1-3.75a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Z'/></svg>");
-	--uf-i-close: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round'><path d='m6 6 12 12M18 6 6 18'/></svg>");
-	--uf-i-spinner: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' stroke='black' stroke-width='2.5' fill='none'><circle cx='10' cy='10' r='8' stroke-opacity='.2'/><path d='M10 2a8 8 0 0 1 8 8' stroke-linecap='round'><animateTransform attributeName='transform' type='rotate' dur='.8s' from='0 10 10' to='360 10 10' repeatCount='indefinite'/></path></svg>");
-	--uf-i-activity: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='M2.75 12.5h4l2.75-7 5 13.5 2.75-6.5h4'/></svg>");
-	--uf-i-eye: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'><path d='M2.75 12S6.25 5.75 12 5.75 21.25 12 21.25 12 17.75 18.25 12 18.25 2.75 12 2.75 12Z'/><circle cx='12' cy='12' r='3'/></svg>");
-	--uf-i-eye-off: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><path d='M2.75 12S6.25 5.75 12 5.75 21.25 12 21.25 12 17.75 18.25 12 18.25 2.75 12 2.75 12Z'/><circle cx='12' cy='12' r='3'/><path d='m4 4 16 16'/></svg>");
-
-	/* Device kinds, standing in for LuCI's own device icons (see "Device icons"). */
-	--uf-i-ethernet: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'><rect x='3.75' y='4.75' width='16.5' height='14.5' rx='2.5'/><path d='M8 8.75h8v5.5h-2v2h-4v-2H8Z'/></svg>");
-	--uf-i-bridge: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><rect x='2.75' y='7.75' width='7' height='8.5' rx='1.75'/><rect x='14.25' y='7.75' width='7' height='8.5' rx='1.75'/><path d='M9.75 12h4.5M6.25 7.75V5.5h11.5v2.25'/></svg>");
-	--uf-i-wifi: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><path d='M3.25 9.25a12.5 12.5 0 0 1 17.5 0M6.25 12.5a8.25 8.25 0 0 1 11.5 0M9.25 15.75a4 4 0 0 1 5.5 0'/><circle cx='12' cy='19' r='1.1' fill='black'/></svg>");
-	--uf-i-vlan: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'><path d='M3.75 3.75h7l9.5 9.5-7 7-9.5-9.5Z'/><circle cx='7.75' cy='7.75' r='1.5'/></svg>");
-	--uf-i-alias: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><path d='M10.25 13.75a3.75 3.75 0 0 0 5.3 0l3.2-3.2a3.75 3.75 0 0 0-5.3-5.3l-1.2 1.2M13.75 10.25a3.75 3.75 0 0 0-5.3 0l-3.2 3.2a3.75 3.75 0 0 0 5.3 5.3l1.2-1.2'/></svg>");
-	--uf-i-tunnel: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><path d='M3.75 19.75V11.5a8.25 8.25 0 0 1 16.5 0v8.25ZM8.25 19.75V12a3.75 3.75 0 0 1 7.5 0v7.75'/></svg>");
-	--uf-i-wireguard: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><rect x='4.75' y='10.25' width='14.5' height='10' rx='2'/><path d='M8 10.25V7.75a4 4 0 0 1 8 0v2.5M12 14.25v2'/></svg>");
-	--uf-i-switch: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><rect x='2.75' y='6.75' width='18.5' height='10.5' rx='2'/><path d='M6.5 11h2M11 11h2M15.5 11h2M6.5 14h11'/></svg>");
-	--uf-i-vrf: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><path d='M12 3.75 20.25 8 12 12.25 3.75 8Z'/><path d='m3.75 12 8.25 4.25L20.25 12M3.75 16l8.25 4.25L20.25 16'/></svg>");
-	/* Four bars, each in its own quarter of the width, so a hard-stop
-	 * gradient under the mask fills exactly as many as the level says. */
-	--uf-i-signal: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect x='1.5' y='15' width='3' height='5.5' rx='1'/><rect x='7.5' y='11' width='3' height='9.5' rx='1'/><rect x='13.5' y='7' width='3' height='13.5' rx='1'/><rect x='19.5' y='3' width='3' height='17.5' rx='1'/></svg>");
+	@each $name, $icon in $icons {
+		--uf-i-#{$name}: #{$icon};
+	}
 
 	color-scheme: light;
 }
 
-/* UniFi's dark theme: a near-black canvas and app bar, dark grey cards and
- * columns, hairline borders a step lighter, and text that stops short of
- * pure white. Fields and hover tints are translucent white, so they read
- * the same on a card, in a menu or in a dialog. The accent is lifted to
- * #5aa2ff for text and lines, so it reads on its own tint inside a dialog;
- * solid fills keep a deeper blue, darker still on hover, so white labels
- * on them stay legible (4.5:1). */
+// UniFi's dark theme: a near-black canvas and app bar, dark grey cards and
+// columns, hairline borders a step lighter, and text that stops short of
+// pure white. Fields and hover tints are translucent white, so they read
+// the same on a card, in a menu or in a dialog. The accent is lifted to
+// #5aa2ff for text and lines, so it reads on its own tint inside a dialog;
+// solid fills keep a deeper blue, darker still on hover, so white labels
+// on them stay legible (4.5:1).
 :root[data-darkmode="true"],
 .uf-scheme-dark {
 	--uf-blue-rgb: 90, 162, 255;

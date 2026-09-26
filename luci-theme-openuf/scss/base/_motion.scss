@@ -1,5 +1,6 @@
-/* Busy states and motion
- * ---------------------- */
+@use '../abstracts' as *;
+
+// Busy states and motion.
 
 @keyframes flash {
 	0% { opacity: 1; }
@@ -7,9 +8,7 @@
 	100% { opacity: 1; }
 }
 
-.flash {
-	animation: flash .35s;
-}
+.flash { animation: flash .35s; }
 
 #view > div.spinning:first-child {
 	display: table;
@@ -20,37 +19,19 @@
 .spinning {
 	position: relative;
 	padding-left: 30px !important;
+	&::before {
+		content: "";
+		position: absolute;
+		top: calc(50% - 9px);
+		left: 6px;
+		@include icon(var(--uf-i-spinner), 18px, var(--uf-btn-fg, var(--uf-blue)));
+	}
 }
 
-.spinning::before {
-	content: "";
-	position: absolute;
-	top: calc(50% - 9px);
-	left: 6px;
-	width: 18px;
-	height: 18px;
-	background: var(--uf-btn-fg, var(--uf-blue));
-	-webkit-mask: var(--uf-i-spinner) center / contain no-repeat;
-	mask: var(--uf-i-spinner) center / contain no-repeat;
-}
-
-@keyframes fade-in {
-	0% { opacity: 0; }
-	100% { opacity: 1; }
-}
-
-@keyframes fade-out {
-	0% { opacity: 1; }
-	100% { opacity: 0; }
-}
-
-.fade-in {
-	animation: fade-in .3s ease;
-}
-
-.fade-out {
-	animation: fade-out .3s ease;
-}
+@keyframes fade-in { 0% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes fade-out { 0% { opacity: 1; } 100% { opacity: 0; } }
+.fade-in { animation: fade-in .3s ease; }
+.fade-out { animation: fade-out .3s ease; }
 
 @media (prefers-reduced-motion: reduce) {
 	*, *::before, *::after {
