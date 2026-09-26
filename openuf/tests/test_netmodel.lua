@@ -206,8 +206,8 @@ return {
 			assert_true(has(p.vlans[2].ports, "lan1:t"), "unconfigured port: others tagged")
 			assert_eq(p.mgmt.device, "br-lan.1", "management on the native VLAN")
 			assert_eq(p.mgmt.proto, "dhcp", "DHCP management")
-			assert_eq(netmodel.network_for(p, "br0"), "lan", "untagged VAPs join lan")
-			assert_eq(netmodel.network_for(p, "br0.2"), "openuf_v2", "VLAN 2 VAPs")
+			assert_eq(p.net_for_bridge["br0"], "lan", "untagged VAPs join lan")
+			assert_eq(p.net_for_bridge["br0.2"], "openuf_v2", "VLAN 2 VAPs")
 		end
 	},
 	{
@@ -217,8 +217,8 @@ return {
 			local p = netmodel.plan(netmodel.parse(sys), inform_switch_parse(sys), e8450_cfg())
 			assert_eq(p.mgmt.device, "br-lan.50", "management on br-lan.50")
 			assert_true(has(p.vlans[50].ports, "wan:t"), "VLAN 50 tagged on the uplink")
-			assert_eq(netmodel.network_for(p, "br-trunk"), "openuf_v1", "untagged VAPs")
-			assert_eq(netmodel.network_for(p, "br0"), "lan", "br0 is management")
+			assert_eq(p.net_for_bridge["br-trunk"], "openuf_v1", "untagged VAPs")
+			assert_eq(p.net_for_bridge["br0"], "lan", "br0 is management")
 			assert_eq(p.vlan_ifaces[1], "openuf_v1", "native VLAN gets an interface")
 		end
 	},
@@ -250,9 +250,6 @@ return {
 			local flagged = bifrost_uci()
 			flagged.cursor:set("network", "switch", "vlan_filtering", "1")
 			assert_eq(netmodel.backend(e8450_cfg(), flagged.cursor), "vlan_filtering", "explicit option")
-			local sw = e8450_cfg()
-			sw.vlan = {ports = {}}
-			assert_eq(netmodel.backend(sw, u.cursor), "bridges", "swconfig boards never")
 		end
 	},
 	{

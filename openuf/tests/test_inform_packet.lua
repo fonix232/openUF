@@ -2,7 +2,6 @@
 -- Run from project root: lua tests/run_tests.lua
 
 OPENUF_TEST_MODE = true
-dofile("src/lib/lib.lua")	-- needed by announce (loaded by inform)
 
 local crypto = dofile("src/unifi/crypto.lua")
 local state  = dofile("src/state.lua")
@@ -911,13 +910,13 @@ return {
 		end
 	},
 	{
-		name = "inform packet: handle_response restores stock switch VLANs on an explicit Port VLAN disable",
+		name = "inform packet: handle_response restores the stock ports on an explicit Port VLAN disable",
 		fn = function()
 			-- Unticking the device-level "Port VLAN" box keeps the switch.*
 			-- block on the wire with both gates at =disabled (the live-captured
 			-- baseline shape). That must route to switchvlan.restore(st) --
-			-- before the fix apply() just early-returned and the openuf_swvlan*
-			-- sections plus the mutated stock port strings survived forever.
+			-- apply() alone just early-returns and openUF's port layout
+			-- survives forever.
 			local st = sample_state()
 			local calls = {}
 			local orig = inform._switchvlan
@@ -952,56 +951,6 @@ return {
 			inform.handle_response(resp, st, nil)
 			inform._switchvlan = orig
 			assert_eq(table.concat(calls, ","), "apply", "apply called with nil, restore never")
-		end
-	},
-	{
-		name = "inform packet: a tagged SSID's VLAN reaches switchvlan as a trunk request",
-		fn = function()
-			-- The switch drops frames for a VID it has no entry for, so a
-			-- VLAN-tagged SSID needs a trunk even with the controller's
-			-- per-port VLAN feature switched off entirely. Confirmed live:
-			-- bridge correct, VAP up, 100% packet loss to the VLAN's gateway
-			-- until the trunk existed.
-			--
-			-- This also pins the scope bug it was written for: vap_table used
-			-- to be local to the wifi branch, so the switch pass read nil and
-			-- silently trunked nothing while every test still passed.
-			local st = sample_state()
-			local got
-			local orig = inform._switchvlan
-			inform._switchvlan = {
-				apply   = function(_, _, _, vlans) got = vlans end,
-				restore = function() end,
-			}
-			local sys_cfg = "aaa.1.ssid=Home IoT\naaa.1.wpa=2\n"
-				.. "aaa.1.wpa.key.1.mgmt=WPA-PSK\naaa.1.br.devname=br0.20\n"
-				.. "wireless.1.ssid=Home IoT\nwireless.1.parent=radio1\n"
-			local resp = ('{"_type":"setparam","system_cfg":"%s"}')
-				:format(sys_cfg:gsub("\n", "\\n"))
-			inform.handle_response(resp, st, nil)
-			inform._switchvlan = orig
-			assert_true(got ~= nil, "switchvlan is handed a vlan list")
-			assert_eq(#got, 1, "one tagged SSID -> one VLAN to trunk")
-			assert_eq(got[1], 20, "the VLAN off aaa.<n>.br.devname=br0.20")
-		end
-	},
-	{
-		name = "inform packet: an untagged-only push asks for no trunk",
-		fn = function()
-			local st = sample_state()
-			local got
-			local orig = inform._switchvlan
-			inform._switchvlan = {
-				apply   = function(_, _, _, vlans) got = vlans end,
-				restore = function() end,
-			}
-			local sys_cfg = "aaa.1.ssid=Home LAN\naaa.1.br.devname=br0\n"
-				.. "wireless.1.ssid=Home LAN\nwireless.1.parent=radio1\n"
-			local resp = ('{"_type":"setparam","system_cfg":"%s"}')
-				:format(sys_cfg:gsub("\n", "\\n"))
-			inform.handle_response(resp, st, nil)
-			inform._switchvlan = orig
-			assert_eq(#(got or {}), 0, "br0 with no suffix -> nothing to trunk")
 		end
 	},
 	{
@@ -2363,13 +2312,8 @@ return {
 		end
 	},
 	{
-		name = "inform packet: build_json passes the modelmap's hwassign to get_radio_table",
+		name = "inform packet: build_json passes dev.conf.hwassign to get_radio_table",
 		fn = function()
-			-- The knob is documented in USAGE.md and conf.lua and was read by
-			-- nothing at all. Pin the whole path, not just get_radio_table's
-			-- filtering: hwassign lives at dev.openuf.uap in the modelmap while
-			-- build_json only ever receives dev.conf, so a lookup on the wrong
-			-- table would leave it just as dead as before while looking wired.
 			local seen = "not called"
 			inform._ucihelper = {
 				get_vap_table   = function() return {} end,
@@ -2377,7 +2321,7 @@ return {
 			}
 			inform.build_json(sample_state(), {
 				net = {lan_cpueth = "eth0"},
-				uap = {hwassign = {"radio0", "radio1"}},
+				hwassign = {"radio0", "radio1"},
 			})
 			inform._ucihelper = nil
 			assert_true(type(seen) == "table", "hwassign reached get_radio_table")
@@ -2386,7 +2330,7 @@ return {
 		end
 	},
 	{
-		name = "inform packet: build_json passes no hwassign when the modelmap has none",
+		name = "inform packet: build_json passes no hwassign when local.lua sets none",
 		fn = function()
 			local seen, called = "sentinel", false
 			inform._ucihelper = {
@@ -2706,8 +2650,7 @@ return {
 	{
 		name = "inform packet: parse_packet inflates a zlib-compressed response",
 		fn = function()
-			-- OpenWrt 25.12 has no Lua zlib binding, so this exercises the in-tree
-			-- pure-Lua inflater on the parse path. The fixture is a real zlib stream
+			-- The in-tree pure-Lua inflater on the parse path. The fixture is a real zlib stream
 			-- (tests/fixtures/zlib_response.bin) whose plaintext is asserted below.
 			-- The mgmt_cfg newlines are JSON-escaped (\n), so the decompressed bytes
 			-- contain literal backslash-n, written here as \\n.

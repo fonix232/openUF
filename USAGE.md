@@ -14,7 +14,7 @@ have: `usteer`, `tc-tiny`, `kmod-sched-act-police`, `luasec`, `kmod-leds-gpio`,
 | `lua` | Lua 5.1 runtime |
 | `lua-cjson` | Fast JSON encode/decode |
 | `luasocket` | TCP client for HTTP POST to controller |
-| `lua-openssl` | AES-128-CBC **and AES-128-GCM** (replaces `luacrypto`, which was dropped from the 25.12 feeds). Effectively mandatory — see the GCM note below |
+| `lua-openssl` | AES-128-CBC **and AES-128-GCM** — see the GCM note below |
 | `luabitop` | bit operations for Lua 5.1 |
 | `libuci-lua` | `require("uci")` — every radio and WLAN read and write goes through it. Not pulled in by `lua`. Without it the device adopts, reports its ports and statistics and looks perfectly healthy, while `radio_table` goes out **empty** and the controller has no radio to push a WLAN onto: pushes are accepted and no SSID is ever created. openUF says so at startup rather than leaving you to find it |
 | `iw` | Radio and station statistics |
@@ -161,7 +161,7 @@ with `dev` in scope:
 
 ```lua
 dev.conf.led = "green:status"        -- a LED name from `ls /sys/class/leds`
-dev.openuf.uap.hwassign = {"radio0"} -- report only this radio
+dev.conf.hwassign = {"radio0"}       -- report only this radio
 ```
 
 ⚠️ **Check the LED is actually wired.** `/sys/class/leds` lists what the drivers registered,
@@ -441,7 +441,7 @@ announced on stderr rather than passed off as a fresh install.
 | `inform_url` | URL for the 10-second inform heartbeat. Seeded from the `inform_url` option on a first boot (or after a factory reset) and overwritten by the controller or by `syswrapper.sh set-inform`; once present here it always wins over the option |
 | `use_gcm` | `true` when the controller has requested AES-128-GCM encryption (`use_aes_gcm=true` in mgmt_cfg) |
 | `blocked_stas` | MACs blocked from the controller's Clients view; re-applied to nftables on startup so blocks survive restarts |
-| `swvlan_backup` | Original `ports` strings of the stock `switch_vlan` sections, snapshotted before per-port VLAN assignment first modifies them; used to restore them (see § 6) |
+| `dsa_brlan_ports` | `br-lan`'s port list as the board shipped it, snapshotted before per-port VLAN assignment first moves a socket; used to restore it (see § 6) |
 | `ip_mode`, `static_ip`, `static_netmask`, `static_gateway`, `static_dns` | The last "IP Settings" push. `ip_mode` is `"static"` or `"dhcp"`; the `static_*` fields are set only in static mode and cleared on a revert to DHCP. `static_dns` is an array in the controller's primary/secondary order, written to `/etc/resolv.conf`. On DHCP, DNS is left to the lease and openUF does not touch `resolv.conf`. In static mode these are **re-applied on every start**, because the address is `ip addr` state that a reboot discards and the controller does not re-push it (a matching `cfgversion` gets a `noop` back, carrying no `system_cfg` at all) — the same reason `blocked_stas` and `led_enabled` are reconciled at startup |
 
 To reset to factory defaults:
@@ -479,7 +479,7 @@ Settings carried through from the controller:
 | Multicast and Broadcast Blocker | nftables rules, not a hostapd option. `openuf_bcfilt`/`openuf_bcfilt_macs` on the section are the persisted record: the ruleset dies with a reboot, so openUF rebuilds it from those two options on every start |
 | Proxy ARP | `proxy_arp` — **needs a full `wpad` build** |
 | Client Isolation | `isolate` (hostapd `ap_isolate`) |
-| Network / VLAN assignment | a per-VLAN bridge (`br-openuf<id>`) holding the tagged uplink sub-device (`eth1.<id>`), which the VAP joins — plus a `switch_vlan` trunk on swconfig boards. See below |
+| Network / VLAN assignment | a per-VLAN bridge (`br-openuf<id>`) holding the tagged uplink sub-device (`eth1.<id>`), which the VAP joins. See below |
 | Channel, TX power | `wifi-device` channel/txpower; the controller's **Auto** channel is written as the literal `channel=auto`, engaging hostapd ACS (the AP surveys the band at radio bring-up and picks the least-busy channel). **Auto** TX power *deletes* the `txpower` option (UCI has no auto value; absent = driver default/max), so reverting from a fixed dBm actually takes effect |
 | Radio enable/disable (TX Power → Disabled) | `wifi-device` `disabled`; the radio's WLANs get `wifi-iface` `disabled` too, keeping their config for a later re-enable |
 | Channel width | `wifi-device` htmode, from the radio's `ieee_mode` token, **clamped to what the radio can actually do** — see below |
@@ -487,7 +487,7 @@ Settings carried through from the controller:
 | IoT Optimization: DTIM Interval Lock | nothing new — arrives as `dtim_period=3` on the 2.4 GHz SSID |
 | IoT Optimization: Force WiFi 4 Mode | `bss_load_update_period=0` (suppresses the QBSS Load IE) + an `openuf_iot` marker |
 | Minimum RSSI | per-**radio**; enforced by openUF deauthenticating clients below the threshold, not by hostapd |
-| Per-port VLAN (Ports → *port* → Native VLAN) | swconfig `switch_vlan` sections named `openuf_swvlan<id>` — see below |
+| Per-port VLAN (Ports → *port* → Native VLAN) | the socket moved out of `br-lan` into `br-openuf<id>` — see below |
 
 **Channel width is clamped to the hardware.** openUF presents itself as a
 U6-InWall (802.11ax) whatever the host radios really are, so a controller will
@@ -567,8 +567,8 @@ followed by a 4-way handshake is the fallback — the client roamed, it just pai
 authentication for it. `hostapd_cli -i <vap> sta <mac>` shows the negotiated
 `AKMSuiteSelector`: `00-0f-ac-4` is FT-PSK, `00-0f-ac-9` FT-SAE, `00-0f-ac-8` plain SAE.
 
-**VLAN-tagged SSIDs** (assigning a WiFi network to a non-native network) need three
-things on the AP, and openUF builds all three:
+**VLAN-tagged SSIDs** (assigning a WiFi network to a non-native network) need two
+things on the AP, and openUF builds both:
 
 1. a tagged sub-device on the uplink — `eth1.<vlan>`;
 2. a **bridge** holding it, `br-openuf<vlan>`, which the VAP joins. This is the part
@@ -576,45 +576,12 @@ things on the AP, and openUF builds all three:
    netifd brings the interface up, `ip link` shows both netdevs, hostapd starts, and a
    client associates and gets *nothing* — because the VAP and the uplink are two
    separate masterless interfaces. Everything looks healthy except `ip link`'s missing
-   `master`;
-3. on swconfig boards, a `switch_vlan` **trunk** so the switch passes the VID at all.
-   Without it an ASIC that filters unknown VIDs drops every frame (confirmed: 100%
-   packet loss on an AR8327 until the entry existed). openUF tags exactly two ports —
-   the CPU port and the uplink socket, the latter found at runtime by
-   `sysinfo.uplink_phys_port()`. That is the whole path a tagged SSID's frames take
-   (`VAP → br-openuf<id> → eth0.<id> → CPU → uplink → gateway`); no LAN socket is on it.
-   If the uplink cannot be resolved openUF leaves any existing trunk alone rather than
-   guessing.
+   `master`.
 
-   **On a DSA board step 3 does not exist and is not needed.** With bridge VLAN
-   filtering off — the OpenWrt default, and the state a `config bridge-vlan`-free
-   `br-lan` is in — the switch passes tagged frames straight through, and the
-   sub-device on the uplink socket (`wan.<vlan>` on an AX3000T) takes its VID
-   before the bridge ever sees it. Steps 1 and 2 are the whole path there.
-
-> **Why not simply tag every socket.** openUF used to, and it broke every untagged
-> wired client behind an AP running a tagged SSID. On the `ar8216`/`ar8226`/`ar8229`/
-> `ar8236` driver family the tag flag is **not** per (port, VLAN): `ar8xxx_sw_set_ports()`
-> folds it into one global per-port bitmask (`priv->vlan_tagged`) from which
-> `__ar8216_setup_port()` picks add-tag vs strip-tag *for every VLAN at once*. Tagging a
-> socket into VLAN 10 therefore made it egress-tagged in VLAN 1 too, and the printer
-> plugged into it went deaf while still transmitting — UCI read `1 2 3 4 0t` while the
-> switch reported `0t 1t 2t 3t 4t`. The AR8327 has a real per-(port, VLAN) tag table and
-> showed none of it, which is how the bug survived. A consequence worth knowing on the
-> global-bitmask chips: a port cannot be untagged in VLAN 1 *and* tagged in VLAN 10, so
-> running a tagged wireless VLAN necessarily leaves the **uplink** socket egress-tagged
-> for VLAN 1 as well. UniFi gateways accept that, and it is confined to the one port
-> facing the gateway.
-
-> **Keep VLAN ids below the switch's VLAN table size.** netifd has no `vid` option
-> (`strings /sbin/netifd` lists only `vlan` and `ports`), so a `switch_vlan` section's
-> `vlan` value is *both* the table slot and the VLAN id. Small switches have small
-> tables — the TL-WDR3500's AR8229 reports `vlans: 16` in `swconfig dev switch0 help` —
-> and a section naming a slot the hardware lacks is skipped by netifd **silently**.
-> openUF reads that size and logs the mismatch instead of writing config that will be
-> ignored. Whether it actually breaks traffic depends on the ASIC: the AR8327 filters
-> unknown VIDs and needs the entry, the AR8229 forwards them and the SSID works without
-> one. Choosing a VLAN id under 16 keeps both boards properly configured.
+No switch trunk is needed. With bridge VLAN filtering off — the OpenWrt default, and the
+state a `config bridge-vlan`-free `br-lan` is in — the switch passes tagged frames straight
+through, and the sub-device on the uplink socket (`wan.<vlan>` on an AX3000T) takes its VID
+before the bridge ever sees it.
 
 Changing a network's VLAN id, or deleting the WLAN, tears the old bridge and interface
 down again — only `openuf_`-prefixed sections are ever removed.
@@ -625,12 +592,7 @@ down again — only `openuf_`-prefixed sections are ever removed.
 device-level box is ticked the per-port VLAN controls stay greyed out and nothing reaches
 the wire.
 
-openUF applies it only on **swconfig** boards (ath79-era). It writes one
-`config switch_vlan` section per VLAN, named `openuf_swvlan<id>`, translating the
-controller's `untagged`/`tagged`/`exclude` per-port modes into swconfig's port syntax
-(`1`, `1t`, omitted) with the CPU port always tagged in.
-
-**On a DSA board it works differently, and deliberately not via `config bridge-vlan`.**
+**It works by moving the socket, deliberately not via `config bridge-vlan`.**
 The socket assigned to VLAN 10 is moved out of `br-lan` and into `br-openuf10` — the
 bridge that already holds the tagged uplink sub-device `wan.10`, and the IoT VAP if a
 tagged SSID sits on the same VLAN:
@@ -784,35 +746,12 @@ running Network 10.6.
 > several link bounces during this investigation stopped transmitting entirely — zero
 > packets in 60 s on a live 100 Mbps link — and only a power cycle brought it back.
 
-Three things must line up or the port is skipped rather than guessed at:
+The port must not be the uplink — reassigning the uplink's VLAN would cut the device off
+the network, so that is refused outright. The uplink is whichever socket the default
+gateway is reached through (found in the bridge FDB); if that cannot be determined,
+**every** port is refused rather than risking the wrong one.
 
-- on a swconfig switch (a board openUF no longer supports), `dev.conf.vlan` must describe
-  it (`cpu_lan` + a `ports` name→number map).
-  Without it openUF has no idea what the physical switch ports are, and guessing strands
-  the device.
-- the port needs a `swport` in `dev.conf.net.ports`, naming its `dev.conf.vlan.ports` key.
-- the port must not be the uplink — reassigning the uplink's VLAN would cut the device off
-  the network, so that is refused outright. On a board described by sockets rather
-  than netdevs, the uplink is whichever socket the default gateway is reached through
-  (found in the switch's ARL table); if that cannot be determined, **every** port is
-  refused rather than risking the wrong one.
-
-Because assigning a port to a VLAN means removing it from the stock VLAN's port list
-(swconfig allows one *untagged* VLAN per port), this is the one place openUF modifies UCI
-sections it did not create: a port moved untagged onto an openUF VLAN loses its untagged
-membership in every other `switch_vlan` section, and an explicit *exclude* drops the
-port's membership from that VLAN. Two safety refusals apply — an exclude that would leave
-the port untagged **nowhere** is ignored, and the management VLAN is never stripped of
-its last downstream port. openUF snapshots the original `ports` strings into `state.json`
-(`swvlan_backup`) before the first change, and `switchvlan.restore()` puts them back. Unticking the device-level **Port VLAN** box runs
-that restore automatically (the wire keeps the `switch.*` block with both gates at
-`disabled`, which openUF treats as the explicit off signal); a push that carries no
-`switch.*` block at all leaves the switch untouched. Inspect the result with
-`uci show network` and `swconfig dev switch0 show`.
-
-> The generated UCI is unit-tested, but **openUF has no switch hardware to verify against** —
-> that these sections actually program the switch ASIC, and that
-> `/etc/init.d/network reload` behaves on real ath79, are unconfirmed.
+Inspect the result with `uci show network` and `bridge link`.
 
 **Band Steering** is `usteer`'s decision, not openUF's: openUF configures the daemon
 (`usteer.local.band_steering_threshold`) and forces 802.11k neighbour reports plus
@@ -1105,7 +1044,7 @@ address"** against a network that is perfectly configured.
 `ucihelper.ensure_bridge_identity` runs once at daemon start and pins the bridge's
 `macaddr` to `lan_cpueth`'s MAC when — and only when — the two differ, so identity, LLDP
 and management traffic all agree, the way they do on a real UniFi AP. Boards where they
-already match (every swconfig one) are untouched and no reload is issued. It logs what it
+already match are untouched and no reload is issued. It logs what it
 pinned; adoption is keyed on `lan_cpueth`'s MAC, which it never changes.
 
 > If the board takes its management address by **DHCP**, the new L2 identity means a new

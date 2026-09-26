@@ -43,7 +43,6 @@ local function bifrost(extra)
 		["bridge fdb show"] = "aa:bb:cc:dd:ee:01 dev lan4 master br-lan\n33:33:00:00:00:01 dev lan1 self permanent\n",
 		["readlink /sys/class/net/lan4/master"] = "../br-lan\n",
 		["ls /sys/class/leds"] = "inet:blue\ninet:orange\npower:blue\npower:orange\nmt76-phy0\n",
-		["uci -q show wireless"] = "wireless.radio0=wifi-device\nwireless.radio1=wifi-device\nwireless.x=wifi-iface\n",
 	}
 end
 
@@ -56,7 +55,6 @@ return {
 			assert_eq(d.uplink, "lan4", "the socket the gateway is learned on")
 			assert_eq(d.identity_mac, "c4:41:1e:f8:98:3e", "the bridge's MAC, not the socket's")
 			assert_eq(d.led, "power:blue", "status/power LED, blue preferred")
-			assert_eq(table.concat(d.radios, ","), "radio0,radio1", "every wifi-device")
 			local by_if = {}
 			for _, p in ipairs(d.ports) do by_if[p.ifname] = p.idx end
 			assert_eq(by_if.lan4, 5, "a switch model's uplink is its last port")
@@ -97,8 +95,6 @@ return {
 			io.stderr = saved_err
 			assert_eq(dev.conf.net.lan_cpueth, "lan4", "detected uplink")
 			assert_eq(dev.identity.model, "U6IW", "a 5-socket WiFi 6 board is a U6-IW")
-			assert_eq(dev.openuf.uap.ufmodel, "auto", "chosen automatically")
-			assert_eq(#dev.openuf.uap.hwassign, 2, "radios for the payload")
 			assert_not_nil(written[board.LAYOUT_FILE], "layout kept")
 			assert_eq(cjson.decode(written[board.IDENTITY_FILE]).model, "U6IW", "identity kept")
 			-- Moving the cable changes nothing once the layout is kept.

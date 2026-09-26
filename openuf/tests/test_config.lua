@@ -88,7 +88,7 @@ return {
 			config._exists = function(p) return p == config.LOCAL_FILE end
 			config._describe = function()
 				loaded[#loaded + 1] = "board"
-				return {conf = {net = {}}, openuf = {uap = {ufmodel = "auto"}}}
+				return {conf = {net = {}}}
 			end
 			config._dofile = function(p)
 				loaded[#loaded + 1] = p

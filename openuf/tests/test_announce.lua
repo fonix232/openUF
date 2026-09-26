@@ -2,8 +2,8 @@
 -- Run from project root: lua tests/run_tests.lua
 
 OPENUF_TEST_MODE = true				-- suppress main loop
-dofile("src/lib/lib.lua")		-- sets global ufpkt
 local announce = dofile("src/announce.lua")
+local tlv = announce._tlv
 
 -- Minimal config for packet building (fixed values for deterministic tests)
 local function sample_cfg(overrides)
@@ -50,6 +50,114 @@ local function find_tlv(pkt, want_type)
 end
 
 return {
+	{
+		name = "announce tlv: gen4 converts 0x12345678 big-endian",
+		fn = function()
+			local t = tlv.gen4(0x12345678)
+			assert_eq(#t, 4, "table length")
+			assert_eq(t[1], 0x12, "byte 1 (MSB)")
+			assert_eq(t[2], 0x34, "byte 2")
+			assert_eq(t[3], 0x56, "byte 3")
+			assert_eq(t[4], 0x78, "byte 4 (LSB)")
+		end
+	},
+	{
+		name = "announce tlv: gen4 converts 256 (0x0100) correctly",
+		fn = function()
+			local t = tlv.gen4(256)
+			assert_eq(t[1], 0x00, "byte 1")
+			assert_eq(t[2], 0x00, "byte 2")
+			assert_eq(t[3], 0x01, "byte 3")
+			assert_eq(t[4], 0x00, "byte 4")
+		end
+	},
+	{
+		name = "announce tlv: gen4 converts 0 to all-zero bytes",
+		fn = function()
+			local t = tlv.gen4(0)
+			assert_eq(t[1], 0, "byte 1")
+			assert_eq(t[2], 0, "byte 2")
+			assert_eq(t[3], 0, "byte 3")
+			assert_eq(t[4], 0, "byte 4")
+		end
+	},
+	{
+		name = "announce tlv: gen4 converts 0xFFFFFFFF correctly",
+		fn = function()
+			local t = tlv.gen4(0xFFFFFFFF)
+			assert_eq(t[1], 0xFF, "byte 1")
+			assert_eq(t[2], 0xFF, "byte 2")
+			assert_eq(t[3], 0xFF, "byte 3")
+			assert_eq(t[4], 0xFF, "byte 4")
+		end
+	},
+	{
+		name = "announce tlv: init creates 3-byte TLV header with correct type",
+		fn = function()
+			local t = tlv.init(0x0b)
+			assert_eq(#t, 3, "table length")
+			assert_eq(t[1], 0x0b, "type byte")
+			assert_eq(t[2], 0x00, "length high byte (always 0)")
+			assert_eq(t[3], 0x00, "length low byte (before finish)")
+		end
+	},
+	{
+		name = "announce tlv: catstr appends string as individual bytes",
+		fn = function()
+			local t = {}
+			tlv.catstr(t, "AB")
+			assert_eq(#t, 2, "table length")
+			assert_eq(t[1], 65, "byte value of 'A'")
+			assert_eq(t[2], 66, "byte value of 'B'")
+		end
+	},
+	{
+		name = "announce tlv: catstr appends empty string without error",
+		fn = function()
+			local t = {1, 2}
+			tlv.catstr(t, "")
+			assert_eq(#t, 2, "table unchanged")
+		end
+	},
+	{
+		name = "announce tlv: cattbl appends source bytes to destination",
+		fn = function()
+			local dst = {0x01, 0x02}
+			local src = {0x03, 0x04, 0x05}
+			tlv.cattbl(dst, src)
+			assert_eq(#dst, 5, "table length after append")
+			assert_eq(dst[3], 0x03, "first appended byte")
+			assert_eq(dst[4], 0x04, "second appended byte")
+			assert_eq(dst[5], 0x05, "third appended byte")
+		end
+	},
+	{
+		name = "announce tlv: finish sets length byte and appends TLV to outer packet",
+		fn = function()
+			local outer = {0x02, 0x06, 0x00, 0x00}
+			local rec = tlv.init(0x0b)		-- hostname TLV
+			tlv.catstr(rec, "test")			-- 4 bytes of value
+			-- rec is now {0x0b, 0x00, 0x00, 116, 101, 115, 116} (7 elements)
+			tlv.finish(rec, outer)
+			-- finish sets rec[3] = 7 - 3 = 4, then appends all 7 bytes to outer
+			assert_eq(#outer, 4 + 7, "outer packet total length")
+			assert_eq(outer[5], 0x0b, "TLV type in outer")
+			assert_eq(outer[6], 0x00, "TLV length high byte")
+			assert_eq(outer[7], 0x04, "TLV length low byte = 4")
+			assert_eq(outer[8], 116, "first value byte 't'")
+		end
+	},
+	{
+		name = "announce tlv: finish correctly encodes 6-byte value length",
+		fn = function()
+			local outer = {}
+			local rec = tlv.init(0x01)	-- HW addr TLV
+			tlv.cattbl(rec, {0x11, 0x22, 0x33, 0x44, 0x55, 0x66})
+			tlv.finish(rec, outer)
+			-- value length should be 6
+			assert_eq(outer[3], 0x06, "value length = 6")
+		end
+	},
 	{
 		name = "announce: packet starts with 0x02 0x06 header",
 		fn = function()

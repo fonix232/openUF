@@ -100,7 +100,7 @@ local function get_shaper()   return get_sibling("openwrt.shaper",   M._shaper) 
 -- state on every single inform -- invisible until now because radio_table
 -- was always empty (no target hardware to source it from) prior to the UCI
 -- mock. Only "ng"/"na" are handled -- openUF only targets dual-band 2.4/5GHz
--- hardware (see modelmap/generic-dualband-ap.lua's hwassign); 60GHz/6GHz
+-- hardware; 60GHz/6GHz
 -- would need channel ranges that overlap 5GHz's numbering and can't be
 -- disambiguated by channel number alone.
 local function band_for_channel(channel)
@@ -330,7 +330,7 @@ end
 
 -- Raise an OpenWrt htmode to at least `floor`, per-kind and per-width
 -- independently ("VHT80" with a floor of "HE20" becomes "HE80"). Overrides the
--- controller, so it only runs when a modelmap asked for it
+-- controller, so it only runs when local.lua asked for it
 -- (dev.conf.radio.<band>.htmode_floor); the hardware clamp still runs after.
 -- Returns the htmode and, when it changed, the original.
 function M.raise_htmode(htmode, floor)
@@ -351,7 +351,7 @@ end
 -- Lower an htmode to at most `ceiling` -- the mirror of raise_htmode, for a
 -- width the driver ADVERTISES and the radio cannot actually run (e.g. HE160
 -- on a board whose driver cannot start DFS CAC, when every 160 MHz block
--- overlaps DFS). `iw phy` cannot say "advertised but unusable"; a modelmap
+-- overlaps DFS). `iw phy` cannot say "advertised but unusable"; local.lua
 -- can, via dev.conf.radio.<band>.htmode_max.
 function M.cap_htmode(htmode, ceiling)
 	if type(htmode) ~= "string" or type(ceiling) ~= "string" then return htmode, nil end
@@ -1087,7 +1087,7 @@ end
 -- country: ISO 3166-1 alpha-2 regulatory domain from the controller's site
 -- setting (system_cfg's radio.<n>.countrycode, numeric on the wire and mapped
 -- to alpha-2 by inform.lua). nil leaves UCI alone.
--- radio_policy: the modelmap's dev.conf.radio table, keyed by band ("ng" =
+-- radio_policy: local.lua's dev.conf.radio table, keyed by band ("ng" =
 -- 2.4 GHz, "na" = 5/6 GHz) -- board-level answers the controller cannot know:
 --   acs_exclude_dfs  with channel Auto, keep ACS off DFS channels (for a
 --                    driver that cannot start CAC, where ACS picking a DFS
@@ -1873,7 +1873,7 @@ end
 -- Every wifi-device in UCI, unfiltered, read once per pass.
 --
 -- get_radio_table was called TWICE per heartbeat -- once by build_json with
--- the modelmap's hwassign, and once by get_vap_table with none, to build its
+-- dev.conf.hwassign, and once by get_vap_table with none, to build its
 -- band lookup -- so /etc/config/wireless was loaded through a fresh
 -- uci.cursor() twice for one answer, on config that changes only when the
 -- controller pushes one.
@@ -1926,14 +1926,11 @@ local function radio_rows()
 end
 
 -- Return a table of radio info for the inform payload.
--- hwassign: the modelmap's dev.openuf.uap.hwassign -- the radio names to
--- report. Documented since the first release as controlling exactly this, but
--- read by nothing until now, so every wifi-device in UCI was reported no matter
--- what the modelmap said. That matters on a board with a radio openUF should
--- not present as part of the emulated model (a third radio, a mesh-only or
--- monitor phy): the controller would show and try to configure a radio the
--- emulated model does not have. nil/empty keeps the report-everything
--- behavior, which is what a modelmap without hwassign means.
+-- hwassign: dev.conf.hwassign (set in local.lua) -- the radio names to
+-- report. That matters on a board with a radio openUF should not present as
+-- part of the emulated model (a third radio, a mesh-only or monitor phy): the
+-- controller would show and try to configure a radio the emulated model does
+-- not have. nil/empty reports every radio.
 function M.get_radio_table(hwassign)
 	local allowed = nil
 	if type(hwassign) == "table" and #hwassign > 0 then

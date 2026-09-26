@@ -41,7 +41,6 @@ local MODE = ...
 -- self-executing run() block at the bottom of inform.lua (and announce.lua's
 -- broadcast loop, which _populate_net_info would otherwise start).
 OPENUF_TEST_MODE = true
-pcall(dofile, "lib/lib.lua")
 package.path = "./?.lua;" .. package.path
 local ok_conf, dev, config = pcall(function() return require("config").load() end)
 if not ok_conf then

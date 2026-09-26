@@ -503,146 +503,6 @@ return {
 		end
 	},
 	{
-		-- Both swconfig fixtures are verbatim captures from the two real APs
-		-- (MACs anonymized): an AR9344 that exposes per-port MIB counters and
-		-- an AR8327 that answers "mib: ???" because its poll interval is 0.
-		name = "sysinfo: switch_status() reads per-port link, speed, duplex and pvid",
-		fn = function()
-			with_fixtures({}, {["swconfig"] = fixture("swconfig_show_ar9344.txt")}, function()
-				local st = sysinfo.switch_status("switch0")
-				assert_eq(st.ports[0].speed, 1000, "CPU port link is the internal 1000")
-				-- The socket the uplink cable is in had negotiated 100baseT
-				-- while the CPU netdev reported 1000 -- the whole reason this
-				-- reads the switch and not sysfs.
-				assert_eq(st.ports[4].speed, 100, "socket 4 negotiated 100baseT")
-				assert_true(st.ports[4].up, "socket 4 has link")
-				assert_true(st.ports[4].full_duplex, "socket 4 is full duplex")
-				assert_eq(st.ports[4].pvid, 1, "socket 4 pvid")
-				assert_true(st.ports[1].up == false, "socket 1 has no link")
-				assert_true(st.ports[1].speed == nil, "a down socket has no negotiated speed")
-			end)
-		end
-	},
-	{
-		name = "sysinfo: switch_status() reports a half-duplex socket as half",
-		fn = function()
-			-- Synthetic: neither real board had a half-duplex link to capture,
-			-- and full-duplex-everywhere fixtures cannot tell a real reading
-			-- from the hardcoded `true` this replaced.
-			local capture = table.concat({
-				"Port 0:",
-				"\tpvid: 1",
-				"\tlink: port:0 link:up speed:10baseT half-duplex auto",
-				"",
-			}, "\n")
-			with_fixtures({}, {["swconfig"] = capture}, function()
-				local st = sysinfo.switch_status("switch0")
-				assert_eq(st.ports[0].speed, 10, "10baseT")
-				assert_true(st.ports[0].full_duplex == false, "half duplex is reported as half")
-			end)
-		end
-	},
-	{
-		name = "sysinfo: switch_status() takes per-port byte counters only where the driver has them",
-		fn = function()
-			with_fixtures({}, {["swconfig"] = fixture("swconfig_show_ar9344.txt")}, function()
-				local st = sysinfo.switch_status("switch0")
-				assert_eq(st.ports[3].rx_bytes, 45338209, "socket 3 RxGoodByte")
-				assert_eq(st.ports[3].tx_bytes, 1183354521, "socket 3 TxByte")
-			end)
-			with_fixtures({}, {["swconfig"] = fixture("swconfig_show_ar8327.txt")}, function()
-				local st = sysinfo.switch_status("switch0")
-				assert_true(st.ports[2].rx_bytes == nil,
-					"an AR8327 with mib polling off reports no counters -- not zeros")
-				assert_eq(st.ports[2].speed, 1000, "link is still readable without MIB")
-			end)
-		end
-	},
-	{
-		name = "sysinfo: switch_status() separates ARL entries from port sections",
-		fn = function()
-			-- Both start with "Port <n>:" and only the MAC tells them apart;
-			-- confusing the two either loses every learned host or invents a
-			-- port section per host.
-			with_fixtures({}, {["swconfig"] = fixture("swconfig_show_ar8327.txt")}, function()
-				local st = sysinfo.switch_status("switch0")
-				assert_eq(st.arl["aa:bb:cc:dd:ee:12"], 4, "host learned on socket 4")
-				assert_eq(st.arl["aa:bb:cc:dd:ee:08"], 1, "host learned on socket 1")
-				local n = 0
-				for _ in pairs(st.ports) do n = n + 1 end
-				assert_eq(n, 7, "seven port sections, not one per ARL line")
-				-- The VLAN table follows the port sections and must not be
-				-- parsed as one.
-				assert_true(st.ports[7] == nil, "no port section invented from the VLAN table")
-			end)
-		end
-	},
-	{
-		name = "sysinfo: switch_status() is empty when there is no switch",
-		fn = function()
-			with_fixtures({}, {}, function()
-				local st = sysinfo.switch_status("switch0")
-				assert_eq(next(st.ports), nil, "no ports")
-				assert_eq(next(st.arl), nil, "no ARL")
-			end)
-		end
-	},
-	{
-		name = "sysinfo: uplink_phys_port() finds the socket the default gateway is on",
-		fn = function()
-			with_fixtures(
-				{["/proc/net/arp"] = fixture("proc_net_arp_switch.txt")},
-				{
-					["swconfig"] = fixture("swconfig_show_ar9344.txt"),
-					["ip route"] = "default via 10.0.0.1 dev br-lan \n",
-				},
-				function()
-					local st = sysinfo.switch_status("switch0")
-					assert_eq(sysinfo.uplink_phys_port(st.arl), 4, "uplink is socket 4")
-				end
-			)
-			-- Same network, other board, cable in a different socket: the
-			-- answer has to come from the ARL, not from the modelmap.
-			with_fixtures(
-				{["/proc/net/arp"] = fixture("proc_net_arp_switch.txt")},
-				{
-					["swconfig"] = fixture("swconfig_show_ar8327.txt"),
-					["ip route"] = "default via 10.0.0.1 dev br-lan \n",
-				},
-				function()
-					local st = sysinfo.switch_status("switch0")
-					assert_eq(sysinfo.uplink_phys_port(st.arl), 2, "uplink is socket 2")
-				end
-			)
-		end
-	},
-	{
-		name = "sysinfo: uplink_phys_port() gives up rather than guessing",
-		fn = function()
-			local arl = {["aa:bb:cc:dd:ee:ff"] = 4}
-			-- No default route.
-			with_fixtures({["/proc/net/arp"] = fixture("proc_net_arp_switch.txt")}, {}, function()
-				assert_true(sysinfo.uplink_phys_port(arl) == nil, "no default route -> nil")
-			end)
-			-- Default route whose gateway has not been ARP-resolved.
-			with_fixtures(
-				{["/proc/net/arp"] = fixture("proc_net_arp_switch.txt")},
-				{["ip route"] = "default via 10.0.0.254 dev br-lan \n"},
-				function()
-					assert_true(sysinfo.uplink_phys_port(arl) == nil, "gateway not in arp -> nil")
-				end
-			)
-			-- Gateway resolved but never learned by the switch.
-			with_fixtures(
-				{["/proc/net/arp"] = fixture("proc_net_arp_switch.txt")},
-				{["ip route"] = "default via 10.0.0.1 dev br-lan \n"},
-				function()
-					assert_true(sysinfo.uplink_phys_port({}) == nil, "gateway not in ARL -> nil")
-				end
-			)
-		end
-	},
-	{
 		name = "sysinfo: bridge_fdb_ports() maps learned MACs to their DSA socket",
 		fn = function()
 			-- Real `bridge fdb show br br-lan` off a Xiaomi AX3000T. The
@@ -734,50 +594,6 @@ return {
 				assert_true(sysinfo.bridge_of("eth0") == nil, "not enslaved -> nil")
 			end)
 			assert_true(sysinfo.bridge_of(nil) == nil, "nil ifname -> nil")
-		end
-	},
-	{
-		name = "sysinfo: switch_mac_table() returns one socket's hosts, joined with arp",
-		fn = function()
-			sysinfo._mac_first_seen = {}
-			with_fixtures(
-				{["/proc/net/arp"] = fixture("proc_net_arp_switch.txt")},
-				{["swconfig"] = fixture("swconfig_show_ar9344.txt")},
-				function()
-					local st = sysinfo.switch_status("switch0")
-					local hosts = sysinfo.switch_mac_table(3, st.arl)
-					assert_eq(#hosts, 1, "one host behind socket 3")
-					assert_eq(hosts[1].mac, "aa:bb:cc:dd:ee:0c", "the host's mac")
-					assert_eq(hosts[1].ip, "10.0.0.50", "ip joined from arp")
-					assert_eq(hosts[1].age, 0, "freshly observed")
-					-- Socket 4 is the uplink: the whole LAN is learned there,
-					-- which is why the caller suppresses it (pinned in
-					-- test_inform_json), not this function.
-					assert_eq(#sysinfo.switch_mac_table(4, st.arl), 8, "uplink socket's hosts")
-					assert_eq(#sysinfo.switch_mac_table(2, st.arl), 0, "an empty socket has none")
-				end
-			)
-			sysinfo._mac_first_seen = {}
-		end
-	},
-	{
-		name = "sysinfo: switch_mac_table() drops multicast MACs and is safe without an ARL",
-		fn = function()
-			sysinfo._mac_first_seen = {}
-			with_fixtures({}, {}, function()
-				local arl = {
-					["01:00:5e:00:00:01"] = 2,   -- IPv4 multicast
-					["33:33:00:00:00:01"] = 2,   -- IPv6 multicast
-					["ff:ff:ff:ff:ff:ff"] = 2,   -- broadcast
-					["aa:bb:cc:dd:ee:01"] = 2,
-				}
-				local hosts = sysinfo.switch_mac_table(2, arl)
-				assert_eq(#hosts, 1, "only the unicast host survives")
-				assert_eq(hosts[1].mac, "aa:bb:cc:dd:ee:01", "the host")
-				assert_eq(#sysinfo.switch_mac_table(nil, arl), 0, "nil port is safe")
-				assert_eq(#sysinfo.switch_mac_table(2, nil), 0, "nil ARL is safe")
-			end)
-			sysinfo._mac_first_seen = {}
 		end
 	},
 	{
@@ -1010,13 +826,6 @@ return {
 			assert_true(sysinfo.sae_supported(), "ucode generator naming psk-sae -> supported")
 
 			sysinfo._sae_supported_cache = nil
-			sysinfo._read_file = function(path)
-				if path == "/lib/netifd/hostapd.sh" then return "sae_password\n" end
-				return nil
-			end
-			assert_true(sysinfo.sae_supported(), "legacy hostapd.sh mentioning sae -> supported")
-
-			sysinfo._sae_supported_cache = nil
 			sysinfo._read_file = function() return nil end
 			assert_false(sysinfo.sae_supported(), "neither readable -> not claimed")
 
@@ -1161,11 +970,10 @@ return {
 	{
 		name = "sysinfo: a pass reads /proc/net/arp and the leases once, not once per port",
 		fn = function()
-			-- _ip_by_mac/_hostname_by_mac are called from BOTH mac_table and
-			-- switch_mac_table, which build_json runs once per downstream
-			-- socket -- five reads of the ARP cache and four of the lease file
-			-- per heartbeat on the Archer C5, plus the ARL walked whole once
-			-- per socket. One pass answers every socket.
+			-- _ip_by_mac/_hostname_by_mac are called from mac_table, which
+			-- build_json runs once per downstream socket -- a read of the ARP
+			-- cache and the lease file per socket per heartbeat, plus the FDB
+			-- walked whole once per socket. One pass answers every socket.
 			local orig_rf, orig_cmd = sysinfo._read_file, sysinfo._run_cmd
 			local arp_reads, lease_reads = 0, 0
 			sysinfo._read_file = function(path)
@@ -1178,7 +986,13 @@ return {
 				end
 				return nil
 			end
-			sysinfo._run_cmd = function() return "" end
+			sysinfo._run_cmd = function(cmd)
+				if cmd == "bridge fdb show br br-lan" then
+					return "aa:bb:cc:dd:ee:01 dev lan2 master br-lan \n"
+						.. "aa:bb:cc:dd:ee:02 dev lan3 master br-lan \n"
+				end
+				return ""
+			end
 
 			-- No pass open: every call reads, exactly as before.
 			sysinfo.end_pass()
@@ -1189,10 +1003,9 @@ return {
 
 			arp_reads, lease_reads = 0, 0
 			sysinfo.begin_pass()
-			local arl = {["aa:bb:cc:dd:ee:01"] = 2, ["aa:bb:cc:dd:ee:02"] = 3}
-			local p2 = sysinfo.switch_mac_table(2, arl)
-			local p3 = sysinfo.switch_mac_table(3, arl)
-			sysinfo.switch_mac_table(4, arl)
+			local p2 = sysinfo.mac_table("lan2", "br-lan")
+			local p3 = sysinfo.mac_table("lan3", "br-lan")
+			sysinfo.mac_table("lan4", "br-lan")
 			assert_eq(arp_reads, 1, "one ARP read for every socket in the payload")
 			assert_eq(lease_reads, 1, "one lease read for every socket in the payload")
 			-- ...and the answers are still right, per socket.
@@ -1203,15 +1016,8 @@ return {
 			assert_eq(#p3, 1, "port 3 keeps its own host")
 			assert_eq(p3[1].mac, "aa:bb:cc:dd:ee:02", "the right one")
 
-			-- A fresh ARL inside the same pass is bucketed afresh: the memo is
-			-- keyed on the table, so a new dump is never served a stale one.
-			local arl2 = {["aa:bb:cc:dd:ee:03"] = 2}
-			local again = sysinfo.switch_mac_table(2, arl2)
-			assert_eq(#again, 1, "a new ARL is bucketed, not served from the old one")
-			assert_eq(again[1].mac, "aa:bb:cc:dd:ee:03", "with its own host")
-
 			-- Closing the pass restores the un-memoized behaviour, and RELEASES
-			-- what it held: the memo pins an ARP map and a bucketed ARL, which
+			-- what it held: the memo pins an ARP map and a bucketed FDB, which
 			-- must not sit in a long-running daemon between heartbeats.
 			sysinfo.end_pass()
 			assert_nil(sysinfo._pass_cache, "end_pass releases the memo")

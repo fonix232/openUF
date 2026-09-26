@@ -80,10 +80,9 @@ if [ "$AP_MODE" = 1 ] && [ ! -f /etc/openuf/state.json ] && [ ! -f /etc/openuf/a
 	uci -q commit wireless
 	date > /etc/openuf/ap-mode.done
 fi
-# An AP-mode DSA board: the controller owns the bridge from its first push
-# (netmodel.lua). A swconfig board has no per-socket netdevs to filter.
-if [ -f /etc/openuf/ap-mode.done ] && [ "$BRIDGE_BACKEND" = auto ] \
-		&& ! jsonfilter -i /etc/board.json -e '@.switch' >/dev/null 2>&1; then
+# An AP-mode board: the controller owns the bridge from its first push
+# (netmodel.lua).
+if [ -f /etc/openuf/ap-mode.done ] && [ "$BRIDGE_BACKEND" = auto ]; then
 	BRIDGE_BACKEND=vlan_filtering
 fi
 

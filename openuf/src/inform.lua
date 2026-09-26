@@ -30,10 +30,8 @@ local l2guard   = require("openwrt.l2guard")
 local staevents = require("unifi.staevents")
 local dnswatch  = require("openwrt.dnswatch")
 local http      = require("unifi.http")
-local wire      = require("unifi.wire")
 local wlan      = require("unifi.wlan")
 local ports     = require("unifi.ports")
-local country   = require("unifi.country")
 local payload   = require("unifi.payload")
 local report    = require("openwrt.report")
 local provision = require("openwrt.provision")
@@ -228,7 +226,6 @@ M._http_post = nil
 
 -- The TNBU packet itself (unifi/packet.lua), with this module's crypto seam.
 local packet = require("unifi.packet")
-local is_mac, is_hex32 = wire.is_mac, wire.is_hex32
 function M.build_packet(json_str, st) return packet.build(json_str, st, M._crypto) end
 function M.parse_packet(raw, st) return packet.parse(raw, st, M._crypto) end
 
@@ -240,9 +237,6 @@ M._inform_ip_cache = {}
 function M._inform_ip(url)
 	return http.inform_ip(url, M._time(), M._inform_ip_cache)
 end
-
--- The sys_stats block (unifi/payload.lua).
-M._sys_stats = payload.sys_stats
 
 -- The payload (openwrt/report.lua), read through this module's seams.
 function M.build_json(st, cfg, ufhw)
@@ -472,10 +466,10 @@ function M._populate_net_info(st, cfg)
 	if not ok_ann then return end
 
 	local iface = cfg and cfg.net and cfg.net.lan_cpueth or "eth1"
-	-- A map may pin the identity MAC (modelmap/auto.lua: the MAC the network
-	-- already knows the AP by, because some boards' socket MAC is random per
-	-- boot). Everything else -- the bridge pin, LLDP, discovery -- follows it.
-	local mac_tbl = (announce.parse_mac and announce.parse_mac(cfg and cfg.net and cfg.net.identity_mac))
+	-- The identity MAC (board.lua: the MAC the network already knows the AP
+	-- by, because some boards' socket MAC is random per boot). Everything
+	-- else -- the bridge pin, LLDP, discovery -- follows it.
+	local mac_tbl = announce.parse_mac(cfg and cfg.net and cfg.net.identity_mac)
 		or announce.get_mac(iface)
 	if mac_tbl then
 		-- Format as "xx:xx:xx:xx:xx:xx"
@@ -489,10 +483,8 @@ function M._populate_net_info(st, cfg)
 			ip_tbl[1], ip_tbl[2], ip_tbl[3], ip_tbl[4])
 	end
 	-- Without this the payload's top-level hostname fell back to "openUF"
-	-- for every device (the doc comments always claimed hostname was
-	-- populated here, but only mac/ip ever were). Feature-detected so an
-	-- older announce module without get_hostname degrades to the fallback.
-	local hostname = announce.get_hostname and announce.get_hostname()
+	-- for every device.
+	local hostname = announce.get_hostname()
 	if hostname then st.hostname = hostname end
 	st.netmask = st.ip and M._netmask_of(st.ip) or nil
 end
@@ -552,12 +544,12 @@ end
 
 -- dev.conf.net.lan_cpueth decides the device's IDENTITY, not just which port
 -- carries VLANs: its MAC is what the controller keys the adopted device on.
--- Change it on an already-adopted device -- switching modelmaps, say -- and
+-- Change it on an already-adopted device -- a different board layout, say -- and
 -- every inform afterwards arrives under a MAC the controller has no adoption
 -- for, so it rejects them (HTTP 400) while the old record sits there going
 -- Offline. That is invisible from the device: the daemon is healthy, the
 -- config is right, the radios are up, and the log just fills with anonymous
--- 400s. Observed for real when a board-specific modelmap moved lan_cpueth
+-- 400s. Observed for real when a board-specific model map moved lan_cpueth
 -- from the (unused) WAN socket to the LAN trunk, which have different MACs.
 -- Returns true when it warned, so this is testable without running the loop.
 -- require("uci") comes from libuci-lua, which `lua` does not pull in and which
@@ -1126,9 +1118,6 @@ function M.run(cfg, ufhw)
 	if st.led_enabled ~= nil then
 		M._led.set_enabled(cfg and cfg.led, st.led_enabled)
 	end
-	-- Per-port byte counters are a switch-driver setting that some boards ship
-	-- switched off; without it every socket reports 0 B in the Ports view.
-	if M._switchvlan then pcall(M._switchvlan.enable_mib_polling, cfg) end
 	-- nftables state does not survive a reboot, so the per-socket MAC tap is
 	-- reinstalled here from the UCI sections that record which sockets have
 	-- learning off -- the same discipline _firewall.reconcile uses for the
@@ -1154,7 +1143,6 @@ function M.run(cfg, ufhw)
 		if not ok_u then io.stderr:write("inform: unhandled ledger: " .. tostring(err_u) .. "\n") end
 	end
 
-	local socket = require("socket")
 	local ctx = {
 		interval   = 10,
 		backoff    = 10,
@@ -1212,9 +1200,8 @@ end
 
 if not OPENUF_TEST_MODE then
 	local ok, err = pcall(function()
-		if not ufpkt then require("loader").run("lib.lib") end
-		-- Settings come from UCI (/etc/config/openuf; config.lua), with the
-		-- model map it names.
+		-- Settings come from UCI (/etc/config/openuf; config.lua), the board
+		-- from board.lua.
 		local dev, config = require("config").load()
 		-- state_file and inform_url: the paths every entry point agrees on.
 		-- inform_url is only the DEFAULT: an adopted device keeps whatever the
@@ -1229,10 +1216,6 @@ if not OPENUF_TEST_MODE then
 		-- The options travel under dev.conf.config: every consumer reads
 		-- cfg.config.<option>.
 		dev.conf.config = config
-		-- Same treatment for the modelmap's UniFi block (dev.openuf.uap): only
-		-- dev.conf is passed down, so hwassign is otherwise unreachable from
-		-- build_json.
-		dev.conf.uap = dev.openuf and dev.openuf.uap
 		M.run(dev.conf, ufhw)
 	end)
 	if not ok then

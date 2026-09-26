@@ -115,10 +115,6 @@ local function sorted_keys(t)
 	return keys
 end
 
-local function lua_pattern_escape(s)
-	return (s:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1"))
-end
-
 -- ─── Parsing ─────────────────────────────────────────────────────────────────
 
 -- The controller's model (unifi/network.lua).
@@ -149,9 +145,6 @@ end
 function M.backend(cfg, cursor)
 	local want = cfg and cfg.config and cfg.config.bridge_backend or "auto"
 	if want == "vlan_filtering" or want == "bridges" then return want end
-	-- swconfig boards describe their switch in dev.conf.vlan; this backend is
-	-- DSA-only (a socket per netdev).
-	if cfg and cfg.vlan and cfg.vlan.ports then return "bridges" end
 	local ok, c = pcall(function() return cursor or get_uci().cursor() end)
 	if not ok or not c then return "bridges" end
 	if c:get("network", M.SECTION_PREFIX .. "br") then return "vlan_filtering" end
@@ -303,13 +296,6 @@ function M.plan(model, sw, cfg, opts)
 		vlan_ifaces = vlan_ifaces,
 		net_for_bridge = net_for_bridge,
 	}
-end
-
--- The UCI network a VAP joins, from its aaa.<n>.br.devname; nil when the plan
--- knows nothing about that bridge (the caller keeps its own default).
-function M.network_for(plan, br_devname)
-	if not plan or not br_devname then return nil end
-	return plan.net_for_bridge[br_devname]
 end
 
 -- Stable text of a plan, for change detection and the failed-plan memory.

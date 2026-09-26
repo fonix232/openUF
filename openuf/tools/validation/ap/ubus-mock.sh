@@ -13,8 +13,7 @@
 # Only handles the one subcommand ucihelper.lua actually calls.
 #
 # The radio->netdev base mapping is static (radio0=wlan0, radio1=wlan1),
-# matching src/openwrt/modelmap/generic-dualband-ap.lua's hwassign -- real hardware's
-# phy->netdev mapping is likewise static per device. But the *interfaces* list
+# OpenWrt's usual dual-band naming -- real hardware's phy->netdev mapping is likewise static per device. But the *interfaces* list
 # is built from whatever VAPs are currently provisioned, with the per-interface
 # "config": {"ssid": ...} that real netifd reports, because per-WLAN features
 # (the Multicast and Broadcast Blocker) resolve a specific VAP's netdev by SSID.

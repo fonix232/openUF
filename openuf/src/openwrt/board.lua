@@ -21,7 +21,6 @@
 	                WAX220's eth0) is random on every boot
 	  • LED         the first of status/power/system/run, preferring blue,
 	                white, green
-	  • radios      every wifi-device in /etc/config/wireless
 
 	Both choices are kept: the layout in /etc/openuf/modelmap-auto.json once
 	the uplink could actually be DETECTED, the identity in
@@ -30,7 +29,8 @@
 	derive again.
 
 	DSA boards only: on a swconfig board the sockets are not netdevs.
-	/etc/openuf/local.lua can still change or replace what this returns.
+	/etc/openuf/local.lua can still change or replace what this returns --
+	including dev.conf.hwassign, the radios to report (nil: all of them).
 ]]--
 
 local identity = require("unifi.identity")
@@ -96,7 +96,7 @@ function M.identity(board)
 	return uap
 end
 
--- Sockets, uplink, MAC, LED and radios, and whether the uplink was detected
+-- Sockets, uplink, MAC and LED, and whether the uplink was detected
 -- (only then is the layout worth keeping).
 function M.derive(board, uplink_idx)
 	local net = (board or {}).network or {}
@@ -163,20 +163,13 @@ function M.derive(board, uplink_idx)
 		end
 	end
 
-	local radios = {}
-	for name in M._sh("uci -q show wireless"):gmatch("wireless%.([%w_]+)=wifi%-device") do
-		radios[#radios + 1] = name
-	end
-	if #radios == 0 then radios = {"radio0", "radio1"} end
-
 	return {
-		ports = ports, uplink = uplink, identity_mac = mac and mac:lower(),
-		led = led, radios = radios,
+		ports = ports, uplink = uplink, identity_mac = mac and mac:lower(), led = led,
 	}, detected
 end
 
--- The device description the daemon works from: dev.conf (net, led),
--- dev.openuf.uap (radios) and dev.identity (the UniFi model presented).
+-- The device description the daemon works from: dev.conf (net, led) and
+-- dev.identity (the UniFi model presented).
 ---@return Dev
 function M.describe()
 	local board = decode(M._read(M.BOARD_FILE))
@@ -189,7 +182,7 @@ function M.describe()
 		if detected and ok_json then M._write(M.LAYOUT_FILE, cjson.encode(fresh)) end
 	end
 
-	local dev = {conf = {}, openuf = {}, identity = uap}
+	local dev = {conf = {}, identity = uap}
 	dev.conf.net = {
 		lan_name     = "lan",
 		lan_cpueth   = layout.uplink,
@@ -202,10 +195,6 @@ function M.describe()
 		dev.conf.net.ports[#dev.conf.net.ports + 1] = {idx = p.idx, ifname = p.ifname}
 	end
 	dev.conf.led = layout.led
-	dev.openuf.uap = {
-		ufmodel  = "auto",
-		hwassign = layout.radios,
-	}
 	return dev
 end
 

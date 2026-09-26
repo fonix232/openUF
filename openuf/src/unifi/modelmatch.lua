@@ -63,7 +63,7 @@ local function rate(gen, width)
 	return best
 end
 
--- The board's sockets, in the same order modelmap/auto.lua uses.
+-- The board's sockets, in the same order board.lua uses.
 function M.sockets(board)
 	local net = type(board) == "table" and board.network or {}
 	local list, seen = {}, {}
@@ -161,7 +161,7 @@ function M.find(catalog, code)
 	return nil
 end
 
--- A ufmodel identity table for a catalogue entry.
+-- An identity table for a catalogue entry.
 function M.identity(m)
 	return {
 		platform         = m.platform or m.model,

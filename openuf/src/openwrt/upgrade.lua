@@ -99,7 +99,7 @@ end
 
 -- The version string for the payload. `learned` is the catalogue version the
 -- controller last asked this device to upgrade to (st.fw_version); it wins
--- over the ufmodel's built-in one.
+-- over the identity's built-in one.
 function M.version(ufver, conf, learned)
 	conf = conf or {}
 	local base = type(learned) == "string" and learned:match("^%d+%.%d+%.%d+%.%d+$") and learned

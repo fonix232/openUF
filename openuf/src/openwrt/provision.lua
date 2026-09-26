@@ -272,7 +272,7 @@ function M.handle(ctx, json_str, st, cfg)
 						netplan = plan
 						-- The per-VLAN-bridge ledgers describe a layout that no
 						-- longer exists; their restore paths must never run on it.
-						st.dsa_brlan_ports, st.swvlan_backup = nil, nil
+						st.dsa_brlan_ports = nil
 						st.ip_mode, st.static_ip, st.static_netmask = nil, nil, nil
 						st.static_gateway, st.static_dns = nil, nil
 						ip = nil   -- addressing is part of the plan, as UCI
@@ -358,12 +358,10 @@ function M.handle(ctx, json_str, st, cfg)
 			-- WiFi pass because their L2 is the same bridge a tagged SSID
 			-- uses, and apply_config prunes any bridge no WLAN wants --
 			-- which would delete the one a per-port assignment is about to
-			-- need, on every push, then have switchvlan rebuild it. DSA
-			-- only: on swconfig a port VLAN is a switch table entry, not a
-			-- bridge. Safe when nothing is pushed (an empty set).
+			-- need, on every push, then have switchvlan rebuild it. Safe
+			-- when nothing is pushed (an empty set).
 			local port_vlans = {}
-			if not netplan and not net_blocked and ctx._switchvlan and ctx._switchvlan.dsa_members
-				and not (cfg and cfg.vlan and cfg.vlan.ports) then
+			if not netplan and not net_blocked and ctx._switchvlan and ctx._switchvlan.dsa_members then
 				local br = ctx._sysinfo.bridge_of(cfg and cfg.net and cfg.net.lan_cpueth)
 				local up = br and ctx._sysinfo.uplink_bridge_port(br) or nil
 				local ok_pv, m = pcall(ctx._switchvlan.dsa_members,
@@ -405,87 +403,31 @@ function M.handle(ctx, json_str, st, cfg)
 			-- before a switch port is put on the same VLAN.
 			if ctx._switchvlan and not netplan and not net_blocked then
 				local ok_sv, err_sv = pcall(function()
-					-- Every VLAN a tagged SSID lands on. The switch drops
-					-- frames for a VID it has no entry for, so these need
-					-- trunking whether or not per-port VLAN is in use.
-					local wireless_vlans, seen = {}, {}
-					for _, vap in ipairs(vap_table or {}) do
-						if vap.vlan_enabled and vap.vlan and not seen[vap.vlan] then
-							seen[vap.vlan] = true
-							wireless_vlans[#wireless_vlans + 1] = vap.vlan
-						end
-					end
-					-- Which socket the uplink cable is in, so a pushed port
-					-- VLAN can never be applied to it (see physical_port).
-					-- Asked of whichever source this board has: the switch's
-					-- ARL table on swconfig, the bridge FDB on DSA.
-					local uplink_phys, uplink_ifname = nil, nil
-					if cfg and cfg.vlan and cfg.vlan.ports then
-						local swst = ctx._sysinfo.switch_status(cfg.vlan.device)
-						uplink_phys = ctx._sysinfo.uplink_phys_port(swst.arl)
-					else
-						local br = ctx._sysinfo.bridge_of(cfg and cfg.net and cfg.net.lan_cpueth)
-						if br then uplink_ifname = ctx._sysinfo.uplink_bridge_port(br) end
-					end
+					-- Which socket the uplink cable is in (the bridge FDB), so a
+					-- pushed port VLAN can never be applied to it.
+					local uplink_ifname
+					local br = ctx._sysinfo.bridge_of(cfg and cfg.net and cfg.net.lan_cpueth)
+					if br then uplink_ifname = ctx._sysinfo.uplink_bridge_port(br) end
 					local sw = ctx._parse_switch_system_cfg(sys_raw)
 					-- Turning Port VLAN off does not always announce itself.
-					-- The gates were once observed staying on the wire at
-					-- =disabled, but a device that has HAD the feature on and
-					-- then has it unticked gets a full system_cfg with no
-					-- switch.* keys at all -- confirmed live on the AX3000T,
-					-- where the teardown therefore never ran and br-lan kept
-					-- openUF's port list forever.
+					-- Unticking the device-level box keeps the switch.* block on
+					-- the wire at =disabled, but a device that has HAD the
+					-- feature on and then has it unticked gets a full system_cfg
+					-- with no switch.* keys at all -- confirmed live on the
+					-- AX3000T, where the teardown therefore never ran and br-lan
+					-- kept openUF's port list forever.
 					--
-					-- So absence counts as off too, but only when openUF holds
-					-- a reversibility ledger: that is proof it applied
-					-- something, which in turn is proof the controller was
-					-- sending switch.* until now. With no ledger there is
-					-- nothing to undo and this is a no-op anyway. Safe on a
-					-- partial push -- the worst case is a restore to stock
-					-- that the next full push re-applies -- and it cannot
+					-- So absence counts as off too, but only when openUF holds a
+					-- reversibility ledger: that is proof it applied something,
+					-- which in turn is proof the controller was sending switch.*
+					-- until now. Safe on a partial push -- the worst case is a
+					-- restore that the next full push re-applies -- and it cannot
 					-- flap, since restore() spends the ledger. Reachable only
 					-- inside `type(sys_raw) == "string"`, never on a noop.
-					local had_applied = st.swvlan_backup ~= nil
-						or st.dsa_brlan_ports ~= nil
-					if (sw and not sw.enabled) or (sw == nil and had_applied) then
-						-- Explicit disable: unticking the device-level "Port
-						-- VLAN" box keeps the switch.* block on the wire with
-						-- both gates at =disabled (confirmed live -- the
-						-- baseline capture carries them that way). Tear our
-						-- sections down and put the stock port strings back,
-						-- or the switch stays segmented forever after the
-						-- user turns the feature off. A blob with no switch.*
-						-- lines at all (sw == nil: older controller, partial
-						-- push) still leaves everything alone -- restore only
-						-- ever runs on an affirmative off signal, and its own
-						-- empty-ledger no-op keeps steady-state disabled
-						-- pushes free of switch reloads.
-						-- ...unless a tagged SSID still needs its VLAN
-						-- trunked. restore() puts the stock port strings
-						-- back and drops every openuf section, which would
-						-- take the wireless trunk with it and silently kill
-						-- the IoT WLAN's uplink. apply() reconciles both
-						-- concerns in one pass.
-						--
-						-- That hazard is SWCONFIG-ONLY, and gating on the
-						-- wireless VLANs alone got it wrong on DSA: there the
-						-- tagged SSID needs no trunk at all and its bridge
-						-- belongs to ucihelper, so restore() cannot harm it --
-						-- it only hands br-lan its original port list back.
-						-- Skipping restore there meant the reversibility
-						-- ledger was never spent and br-lan kept the port
-						-- ORDER openUF had left it in, so unticking Port VLAN
-						-- looked like it had done nothing.
-						if (cfg and cfg.vlan and cfg.vlan.ports)
-							and #wireless_vlans > 0 then
-							ctx._switchvlan.apply(sw, cfg, st, wireless_vlans,
-								uplink_phys, uplink_ifname)
-						else
-							ctx._switchvlan.restore(st, cfg)
-						end
+					if (sw and not sw.enabled) or (sw == nil and st.dsa_brlan_ports ~= nil) then
+						ctx._switchvlan.restore(st, cfg)
 					else
-						ctx._switchvlan.apply(sw, cfg, st, wireless_vlans,
-							uplink_phys, uplink_ifname)
+						ctx._switchvlan.apply(sw, cfg, st, uplink_ifname)
 					end
 					-- Either branch may have moved a socket into or out of a
 					-- VLAN bridge, which is the one thing bridge_of's 300 s TTL

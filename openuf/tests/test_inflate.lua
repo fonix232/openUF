@@ -3,10 +3,8 @@
 --
 -- WHY THIS FILE EXISTS
 --
--- This is not a fallback path. inform.lua prefers a native `zlib` binding and
--- falls back to this module -- but OpenWrt 25.12 ships no Lua zlib binding, so
--- on every real target the fallback IS the path: every FLAG_COMPRESSED
--- response from the controller is decompressed by the code under test here. A
+-- OpenWrt ships no Lua zlib binding, so every FLAG_COMPRESSED response from
+-- the controller is decompressed by the code under test here. A
 -- bug in it fails the inform outright, and until now 225 lines of hand-written
 -- bitstream reader, Huffman table builder and dynamic-table decoder had no
 -- test of any kind.

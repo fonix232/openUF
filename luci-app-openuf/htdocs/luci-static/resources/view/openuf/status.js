@@ -33,7 +33,7 @@ function badge(ok, yes, no) {
 	}, ok ? yes : no);
 }
 
-// Values from state files and conf.lua are inserted as text, never as markup
+// Values from state files and UCI are inserted as text, never as markup
 // (LuCI's E() treats a string child as HTML).
 function T(s) {
 	return document.createTextNode(String(s));

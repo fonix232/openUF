@@ -33,16 +33,11 @@
 ---@field net DevNet
 ---@field led string?        a /sys/class/leds name, or nil when the board has none usable
 ---@field config Config      the options (set by the entry points)
----@field uap DevUap         (set by the entry points)
+---@field hwassign string[]? the UCI radios reported, from local.lua; nil: all
 ---@field radio table<string, RadioPolicy>? per-band limits, from local.lua
-
----@class DevUap
----@field ufmodel string     always "auto"
----@field hwassign string[]  the UCI radios reported ("radio0", "radio1")
 
 ---@class Dev                openwrt/board.lua's describe()
 ---@field conf DevConf
----@field openuf {uap: DevUap}
 ---@field identity Identity
 
 ---@class RadioPolicy

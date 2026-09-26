@@ -6,8 +6,6 @@
 
 -- Deliberate exceptions, each with its reason.
 local ALLOWED = {
-	-- The last-resort AES-CBC backend is the openssl CLI (crypto.lua header).
-	["src/unifi/crypto.lua"] = {["os.execute"] = true},
 	-- The ledger creates its own directory before its first write.
 	["src/unifi/unhandled.lua"] = {["os.execute"] = true},
 }

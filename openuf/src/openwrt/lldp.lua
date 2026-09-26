@@ -99,27 +99,18 @@ function M._neighbors_uncached()
 	if type(ifaces) ~= "table" then return {} end
 
 	-- ifaces can be a single object or array depending on lldpd version
-	local iface_list = {}
-	if ifaces[1] ~= nil then
-		iface_list = ifaces
-	else
-		iface_list = {ifaces}
-	end
+	local iface_list = ifaces[1] ~= nil and ifaces or {ifaces}
 
 	for _, iface in ipairs(iface_list) do
 		-- Each interface may have one or more neighbors
 		local port_name = iface.name or ""
 		local neighbors = iface.neighbor
-		if type(neighbors) ~= "table" then
-			-- no neighbors on this port
-		elseif neighbors[1] ~= nil then
-			-- array of neighbors
+		-- none, one object, or an array of them
+		if type(neighbors) == "table" then
+			if neighbors[1] == nil then neighbors = {neighbors} end
 			for _, nbr in ipairs(neighbors) do
 				result[#result + 1] = M._parse_neighbor(port_name, nbr)
 			end
-		else
-			-- single neighbor
-			result[#result + 1] = M._parse_neighbor(port_name, neighbors)
 		end
 	end
 

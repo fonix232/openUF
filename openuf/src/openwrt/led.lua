@@ -1,15 +1,14 @@
 --[[
 	LED control for the controller-triggered "locate" identify action.
 
-	Drives a Linux LED-class sysfs directory, configured as dev.conf.led in the
-	modelmap. All operations are safe no-ops when that is unset (hardware whose
+	Drives a Linux LED-class sysfs directory, dev.conf.led (board.lua). All
+	operations are safe no-ops when that is unset (hardware whose
 	LED name we don't know) or the sysfs path doesn't exist -- callers don't
 	need to check availability themselves.
 
 	Accepted dev.conf.led shapes, normalised by _resolve below:
 	  "/sys/class/leds/tp-link:green:system"  full sysfs path
 	  "tp-link:green:system"                  bare LED name
-	  {sysfs = "tp-link:green:system", ...}   legacy modelmap table
 	  nil                                     no LED (no-op)
 
 	Anything else is treated as absent rather than raising: these functions are
@@ -63,7 +62,6 @@ end
 
 -- Normalise dev.conf.led into a sysfs directory path, or nil if unusable.
 local function _resolve(led)
-	if type(led) == "table" then led = led.sysfs end
 	if type(led) ~= "string" or led == "" then return nil end
 	-- A bare LED name (no path separator) is relative to /sys/class/leds.
 	if not led:find("/", 1, true) then return LED_ROOT .. led end

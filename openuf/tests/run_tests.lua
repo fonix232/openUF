@@ -136,10 +136,7 @@ local function run_suite(tests)
 end
 
 -- Test files to run in order.
--- Files that don't exist yet are silently skipped so the runner
--- remains useful during incremental development.
 local test_files = {
-	"tests/test_lib.lua",
 	"tests/test_announce.lua",
 	"tests/test_state.lua",
 	"tests/test_config.lua",
@@ -177,11 +174,8 @@ for _, filepath in ipairs(test_files) do
 	forget_modules()
 	local fn, err = loadfile(filepath)
 	if not fn then
-		-- Missing file during incremental development — skip silently
-		if err and not err:find("No such file") and not err:find("cannot open") then
-			print("ERROR loading " .. filepath .. ": " .. tostring(err))
-			failed = failed + 1
-		end
+		print("ERROR loading " .. filepath .. ": " .. tostring(err))
+		failed = failed + 1
 	else
 		local ok, result = pcall(fn)
 		if not ok then

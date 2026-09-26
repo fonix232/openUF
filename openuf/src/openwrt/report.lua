@@ -11,7 +11,6 @@
 local cjson   = require("cjson")
 local ufp     = require("unifi.payload")   -- the payload TABLE is `payload` below
 local country = require("unifi.country")
-local wlan    = require("unifi.wlan")
 
 local M = {}
 
@@ -105,11 +104,9 @@ function M.build(ctx, st, cfg, ufhw)
 		if ufuci.begin_pass then ufuci.begin_pass() end
 		local ok_v, rv = pcall(ufuci.get_vap_table)
 		if ok_v then vap_table = rv end
-		-- The modelmap's hwassign restricts which radios are reported; absent,
-		-- every wifi-device in UCI is (see get_radio_table). It lives at
-		-- dev.openuf.uap in the modelmap while cfg here is dev.conf, so the
-		-- entry point merges it in as cfg.uap -- same pattern as cfg.config.
-		local hwassign = cfg and cfg.uap and cfg.uap.hwassign
+		-- dev.conf.hwassign (local.lua) restricts which radios are reported;
+		-- absent, every wifi-device in UCI is (see get_radio_table).
+		local hwassign = cfg and cfg.hwassign
 		local ok_r, rr = pcall(ufuci.get_radio_table, hwassign)
 		if ok_r then radio_table = rr end
 
@@ -795,29 +792,11 @@ function M.build(ctx, st, cfg, ufhw)
 	local iface_by_name = {}
 	for _, iface in ipairs(ifaces) do iface_by_name[iface.name] = iface end
 
-	-- On a swconfig board the kernel sees only the CPU port, so every fact a
-	-- netdev can offer about "the port" is really a fact about the internal
-	-- SoC<->switch link. Ask the switch instead when the board has one and the
-	-- uplink socket can be identified; anything short of that stays on the
-	-- netdev path below rather than guessing which socket is which (see
-	-- sysinfo.switch_status / sysinfo.uplink_phys_port).
-	local sw = {ports = {}, arl = {}}
-	if cfg and cfg.vlan and cfg.vlan.ports then
-		local ok_sw, s = pcall(ctx._sysinfo.switch_status, cfg.vlan.device)
-		if ok_sw and type(s) == "table" then sw = s end
-	end
-	local uplink_phys = nil
-	if next(sw.ports) then
-		local ok_up, phys = pcall(ctx._sysinfo.uplink_phys_port, sw.arl)
-		if ok_up then uplink_phys = phys end
-	end
-
-	-- On a DSA board there is no switch to ask and no ARL to read, but every
-	-- socket is its own netdev and the bridge they are all enslaved to knows
-	-- which one the gateway is behind. Same measurement, different source --
-	-- and the same reason for measuring it: a modelmap constant is wrong the
-	-- moment someone moves the cable, and a socket wrongly treated as
-	-- downstream reports the whole LAN segment as hosts plugged into it.
+	-- Every socket is its own netdev, and the bridge they are all enslaved to
+	-- knows which one the gateway is behind. Measured rather than declared: a
+	-- board constant is wrong the moment someone moves the cable, and a socket
+	-- wrongly treated as downstream reports the whole LAN segment as hosts
+	-- plugged into it.
 	--
 	-- Only honoured when it names a socket this board actually reports.
 	-- Otherwise no entry would be flagged at all and the uplink would publish
@@ -838,7 +817,7 @@ function M.build(ctx, st, cfg, ufhw)
 	-- gateway, which sees everything. Each socket is asked about its own
 	-- bridge in the port loop below.
 	local uplink_bridge = nil
-	if not next(sw.ports) then
+	do
 		local lan = cfg and cfg.net and cfg.net.lan_cpueth
 		local ok_br, br = pcall(ctx._sysinfo.bridge_of, lan)
 		if ok_br and br then
@@ -852,175 +831,113 @@ function M.build(ctx, st, cfg, ufhw)
 		end
 	end
 	local mgmt_vlan = (cfg and cfg.net and cfg.net.lan_vlanid) or 1
-	local cpu_iface = iface_by_name[cfg and cfg.net and cfg.net.lan_cpueth]
 
 	local port_table = {}
 	for _, p in ipairs(ports) do
-		local phys = uplink_phys and ctx._switchvlan
-			and ctx._switchvlan.resolve_swport(cfg, p.swport) or nil
-		local link = phys and sw.ports[phys] or nil
-
-		local entry
-		if link then
-			-- Per-socket: the speed, duplex and link state of the physical
-			-- socket a cable is actually in, and the uplink flag on whichever
-			-- socket the default gateway is reached through.
-			local is_uplink = (phys == uplink_phys)
-			-- Per-port MIB counters where the switch driver exposes them (an
-			-- AR9344 does; an AR8327 with mib polling off does not), and only
-			-- bytes -- swconfig has no per-port packet or error count. The
-			-- uplink falls back to the CPU netdev's counters, which for that
-			-- one socket are a fair proxy: everything the CPU sent or received
-			-- crossed it. A downstream socket has no such stand-in, and its
-			-- share of the CPU netdev's total is not knowable, so it reports 0
-			-- rather than a made-up number.
-			local rx_bytes, tx_bytes = link.rx_bytes, link.tx_bytes
-			local counted_iface = nil
-			if not (rx_bytes or tx_bytes) and is_uplink then
-				counted_iface = cpu_iface
-				rx_bytes = counted_iface and counted_iface.rx_bytes
-				tx_bytes = counted_iface and counted_iface.tx_bytes
-			end
-			entry = {
-				port_idx    = p.idx,
-				name        = "Port " .. tostring(p.idx),
-				media       = "GE",
-				up          = link.up,
-				enable      = true,
-				speed       = link.up and (link.speed or 1000) or 0,
-				full_duplex = link.up and (link.full_duplex ~= false) or false,
-				is_uplink   = is_uplink,
-				speed_caps  = 0,
-				port_poe    = false,
-				poe_caps    = 0,
-				rx_bytes    = rx_bytes or 0,
-				tx_bytes    = tx_bytes or 0,
-				rx_packets  = counted_iface and counted_iface.rx_packets or 0,
-				tx_packets  = counted_iface and counted_iface.tx_packets or 0,
-				rx_errors   = counted_iface and counted_iface.rx_errors  or 0,
-				tx_errors   = counted_iface and counted_iface.tx_errors  or 0,
-			}
-			-- Hosts from the switch's own ARL table -- which socket each MAC
-			-- sits on, the one thing the bridge FDB cannot say. Suppressed on
-			-- the uplink (that socket faces the controller's network: every
-			-- host on the far side would be reported as plugged into this AP,
-			-- and see the netdev branch below for why not even the gateway
-			-- alone may be reported there) and on any socket whose pvid is
-			-- not the management VLAN -- the
-			-- Archer C5's WAN socket is live but stranded on VLAN 2, and a
-			-- host there is not reachable on the LAN it would be listed in.
-			if not is_uplink and (link.pvid == nil or link.pvid == mgmt_vlan) then
-				entry.mac_table = ufp.arr(ufp.filter_hosts(
-					ctx._sysinfo.switch_mac_table, phys, sw.arl, nil, nil,
-					self_macs, station_macs))
-			end
-		else
-			-- Netdev-only: no switch, no swconfig, or no identifiable uplink.
-			-- Link state from the kernel, not from the netdev merely existing:
-			-- an unused socket exists in /proc/net/dev and is idle, and
-			-- reporting it as a live port misleads the Ports view. Falls back
-			-- to existence only when sysfs cannot answer.
-			local iface = iface_by_name[p.ifname]
-			local link_up = ctx._link_up(p.ifname)
-			if link_up == nil then link_up = (iface ~= nil) end
-			entry = {
-				port_idx    = p.idx,
-				name        = "Port " .. tostring(p.idx),
-				media       = "GE",
-				up          = link_up,
-				enable      = true,
-				-- Negotiated link speed/duplex, read from the netdev rather
-				-- than asserted: these were hardcoded 1000/full, so the
-				-- controller's Ports view showed "GbE" for every device on
-				-- every board no matter what the link had actually negotiated.
-				-- A port with no link has no negotiated speed: 0, not the
-				-- fallback. The kernel reports -1 for a down interface, which
-				-- _link_speed already discards, so without this the fallback
-				-- claimed a gigabit link on a socket with nothing in it.
-				speed       = (not link_up) and 0 or (ctx._link_speed(p.ifname) or 1000),
-				full_duplex = link_up and (ctx._link_duplex(p.ifname) ~= "half") or false,
-				-- Detected where the bridge could answer (DSA), declared
-			-- otherwise. Never both: a board that detects an uplink has
-			-- already agreed the flag is not board truth.
+		-- Link state from the kernel, not from the netdev merely existing:
+		-- an unused socket exists in /proc/net/dev and is idle, and
+		-- reporting it as a live port misleads the Ports view. Falls back
+		-- to existence only when sysfs cannot answer.
+		local iface = iface_by_name[p.ifname]
+		local link_up = ctx._link_up(p.ifname)
+		if link_up == nil then link_up = (iface ~= nil) end
+		local entry = {
+			port_idx    = p.idx,
+			name        = "Port " .. tostring(p.idx),
+			media       = "GE",
+			up          = link_up,
+			enable      = true,
+			-- Negotiated link speed/duplex, read from the netdev rather
+			-- than asserted: these were hardcoded 1000/full, so the
+			-- controller's Ports view showed "GbE" for every device on
+			-- every board no matter what the link had actually negotiated.
+			-- A port with no link has no negotiated speed: 0, not the
+			-- fallback. The kernel reports -1 for a down interface, which
+			-- _link_speed already discards, so without this the fallback
+			-- claimed a gigabit link on a socket with nothing in it.
+			speed       = (not link_up) and 0 or (ctx._link_speed(p.ifname) or 1000),
+			full_duplex = link_up and (ctx._link_duplex(p.ifname) ~= "half") or false,
+			-- Detected where the bridge could answer, declared otherwise.
+			-- Never both: a board that detects an uplink has already
+			-- agreed the flag is not board truth.
 			is_uplink   = (uplink_ifname ~= nil and p.ifname == uplink_ifname)
 				or (uplink_ifname == nil and p.uplink) or false,
-				speed_caps  = 0,
-				port_poe    = false,
-				poe_caps    = 0,
-				rx_bytes    = iface and iface.rx_bytes   or 0,
-				tx_bytes    = iface and iface.tx_bytes   or 0,
-				rx_packets  = iface and iface.rx_packets or 0,
-				tx_packets  = iface and iface.tx_packets or 0,
-				rx_errors   = iface and iface.rx_errors  or 0,
-				tx_errors   = iface and iface.tx_errors  or 0,
-			}
-			-- Wired clients are only reported on downstream (non-uplink)
-			-- ports -- the controller itself skips client creation on ports
-			-- flagged is_uplink, since that port faces the controller's own
-			-- network, not an end host.
+			speed_caps  = 0,
+			port_poe    = false,
+			poe_caps    = 0,
+			rx_bytes    = iface and iface.rx_bytes   or 0,
+			tx_bytes    = iface and iface.tx_bytes   or 0,
+			rx_packets  = iface and iface.rx_packets or 0,
+			tx_packets  = iface and iface.tx_packets or 0,
+			rx_errors   = iface and iface.rx_errors  or 0,
+			tx_errors   = iface and iface.tx_errors  or 0,
+		}
+		-- Wired clients are only reported on downstream (non-uplink)
+		-- ports -- the controller itself skips client creation on ports
+		-- flagged is_uplink, since that port faces the controller's own
+		-- network, not an end host.
+		--
+		-- Do NOT be tempted to report just the gateway here, however
+		-- reasonable "the device on the other end of this cable" sounds,
+		-- and however visibly a real UniFi gateway does it on its own
+		-- uplink port. openUF knows which MAC that is -- finding it is how
+		-- the uplink socket was identified in the first place -- and
+		-- reporting it would populate the Ports view's Connection column.
+		-- It would also invert the topology. The controller matches every
+		-- MAC on a port against its adopted devices, and a port carrying
+		-- exactly one known device files that device in this one's
+		-- `downlink_table`; the guard that would stop it is
+		--     bl9 = !is_uplink && isUplinkMac(neighbour)
+		-- which disables itself on precisely the port where it is needed.
+		-- The gateway would hang beneath every AP that reported it.
+		--
+		-- A real gateway gets away with it because its upstream is the
+		-- ISP's router, which is not an adopted device and so never
+		-- reaches that branch. openUF cannot tell the two cases apart
+		-- from the device, and the failure mode is a wrong map of the
+		-- network, so it reports nothing on the uplink at all.
+		if not entry.is_uplink then
+			-- This socket's bridge, which is the uplink's for every socket
+			-- openUF has not moved. bridge_of is TTL-cached and
+			-- bridge_fdb_ports is memoized per bridge NAME for the pass,
+			-- so the common case resolves to the same string and reuses
+			-- the dump already taken -- no extra fork. A socket in
+			-- br-openuf<vid> costs one dump of that bridge instead.
 			--
-			-- Do NOT be tempted to report just the gateway here, however
-			-- reasonable "the device on the other end of this cable" sounds,
-			-- and however visibly a real UniFi gateway does it on its own
-			-- uplink port. openUF knows which MAC that is -- finding it is how
-			-- the uplink socket was identified in the first place -- and
-			-- reporting it would populate the Ports view's Connection column.
-			-- It would also invert the topology. The controller matches every
-			-- MAC on a port against its adopted devices, and a port carrying
-			-- exactly one known device files that device in this one's
-			-- `downlink_table`; the guard that would stop it is
-			--     bl9 = !is_uplink && isUplinkMac(neighbour)
-			-- which disables itself on precisely the port where it is needed.
-			-- The gateway would hang beneath every AP that reported it.
-			--
-			-- A real gateway gets away with it because its upstream is the
-			-- ISP's router, which is not an adopted device and so never
-			-- reaches that branch. openUF cannot tell the two cases apart
-			-- from the device, and the failure mode is a wrong map of the
-			-- network, so it reports nothing on the uplink at all.
-			if not entry.is_uplink then
-				-- This socket's bridge, which is the uplink's for every socket
-				-- openUF has not moved. bridge_of is TTL-cached and
-				-- bridge_fdb_ports is memoized per bridge NAME for the pass,
-				-- so the common case resolves to the same string and reuses
-				-- the dump already taken -- no extra fork. A socket in
-				-- br-openuf<vid> costs one dump of that bridge instead.
-				--
-				-- nil (not a bridge port at all) is passed through rather than
-				-- papered over with the uplink's: mac_table then forks
-				-- `bridge fdb show dev <socket>`, which is the right answer
-				-- for an unbridged socket and an empty one for a bridged
-				-- socket looked up in the wrong bridge.
-				local ok_sb, sock_bridge = pcall(ctx._sysinfo.bridge_of, p.ifname)
-				if not ok_sb then sock_bridge = nil end
-				-- A socket in a bridge that is not the uplink's is one openUF
-				-- moved, which is the only case where MAC learning is off and
-				-- the FDB has nothing to say -- so it is the only case allowed
-				-- to fall back to switchvlan's nft tap. Every other board never
-				-- forks `nft` at all.
-				local allow_tap = (uplink_bridge ~= nil and sock_bridge ~= nil
-					and sock_bridge ~= uplink_bridge)
-				-- Which VLAN this socket carries, read off the bridge openUF
-				-- moved it into rather than plumbed down from the push: that
-				-- bridge IS the VLAN (ucihelper names it br-openuf<vid>), so
-				-- the socket's own enslavement is the most direct statement of
-				-- it available, and it cannot disagree with where the frames
-				-- actually go. nil for a socket still in the management
-				-- bridge, which is the same thing as VLAN 1.
-				local port_vlan = sock_bridge
-					and tonumber(sock_bridge:match("^br%-openuf(%d+)$")) or nil
-				if port_vlan == mgmt_vlan then port_vlan = nil end
-				-- A vlan-filtering bridge (netmodel's, or a hand-made one) is one
-				-- bridge for every network: the host's own FDB entry says which.
-				if port_vlan == nil and sock_bridge and ctx._sysinfo.bridge_filters_vlans
-					and ctx._sysinfo.bridge_filters_vlans(sock_bridge) then
-					local ok_v, map = pcall(ctx._sysinfo.bridge_fdb_vlans, sock_bridge)
-					if ok_v and type(map) == "table" and next(map) then port_vlan = map end
-				end
-				entry.mac_table = ufp.arr(ufp.filter_hosts(
-					ctx._sysinfo.mac_table, p.ifname, sock_bridge, allow_tap,
-					port_vlan, self_macs, station_macs))
+			-- nil (not a bridge port at all) is passed through rather than
+			-- papered over with the uplink's: mac_table then forks
+			-- `bridge fdb show dev <socket>`, which is the right answer
+			-- for an unbridged socket and an empty one for a bridged
+			-- socket looked up in the wrong bridge.
+			local ok_sb, sock_bridge = pcall(ctx._sysinfo.bridge_of, p.ifname)
+			if not ok_sb then sock_bridge = nil end
+			-- A socket in a bridge that is not the uplink's is one openUF
+			-- moved, which is the only case where MAC learning is off and
+			-- the FDB has nothing to say -- so it is the only case allowed
+			-- to fall back to switchvlan's nft tap. Every other board never
+			-- forks `nft` at all.
+			local allow_tap = (uplink_bridge ~= nil and sock_bridge ~= nil
+				and sock_bridge ~= uplink_bridge)
+			-- Which VLAN this socket carries, read off the bridge openUF
+			-- moved it into rather than plumbed down from the push: that
+			-- bridge IS the VLAN (ucihelper names it br-openuf<vid>), so
+			-- the socket's own enslavement is the most direct statement of
+			-- it available, and it cannot disagree with where the frames
+			-- actually go. nil for a socket still in the management
+			-- bridge, which is the same thing as VLAN 1.
+			local port_vlan = sock_bridge
+				and tonumber(sock_bridge:match("^br%-openuf(%d+)$")) or nil
+			if port_vlan == mgmt_vlan then port_vlan = nil end
+			-- A vlan-filtering bridge (netmodel's, or a hand-made one) is one
+			-- bridge for every network: the host's own FDB entry says which.
+			if port_vlan == nil and sock_bridge and ctx._sysinfo.bridge_filters_vlans
+				and ctx._sysinfo.bridge_filters_vlans(sock_bridge) then
+				local ok_v, map = pcall(ctx._sysinfo.bridge_fdb_vlans, sock_bridge)
+				if ok_v and type(map) == "table" and next(map) then port_vlan = map end
 			end
+			entry.mac_table = ufp.arr(ufp.filter_hosts(
+				ctx._sysinfo.mac_table, p.ifname, sock_bridge, allow_tap,
+				port_vlan, self_macs, station_macs))
 		end
 		port_table[#port_table + 1] = entry
 	end
@@ -1094,7 +1011,7 @@ function M.build(ctx, st, cfg, ufhw)
 		-- device is permanently shown as needing an update. `fw.pre` (e.g.
 		-- "U6IW.") is a separate, correct field used only by announce.lua's
 		-- L2 discovery "firmware version verbose" TLV -- do not reuse it here.
-		-- The catalogue version: built into the ufmodel, or learned from the
+		-- The catalogue version: built into the identity, or learned from the
 		-- controller's own upgrade commands. 10.6 calls a device upgradable
 		-- whenever this differs from the catalogue's by a character; the
 		-- opt-in variants (advertising an OpenWrt update, the revision scheme)

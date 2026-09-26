@@ -31,10 +31,9 @@ end
 -- The same seam ucihelper.begin_pass/end_pass provides, for the same reason:
 -- build_json asks several of the functions below the SAME question once per
 -- socket, and the answer cannot change inside one payload. `/proc/net/arp` was
--- read five times per heartbeat and `/tmp/dhcp.leases` four (once per
--- downstream socket, from both mac_table and switch_mac_table, plus one more
--- for the default gateway), and the switch's whole ARL table was walked once
--- per socket to keep the handful of entries on it.
+-- read once per downstream socket plus one more for the default gateway,
+-- `/tmp/dhcp.leases` once per socket, and the bridge's whole FDB was walked
+-- once per socket to keep the handful of entries on it.
 --
 -- Scoped to a pass rather than given a TTL: both files are genuinely live
 -- between heartbeats, and none of this may outlast the payload it was read
@@ -77,10 +76,9 @@ end
 -- dropped on the address's own bit and each bucket sorted (pairs() order is
 -- undefined; the payload must be stable).
 --
--- Both wired-host sources hand us that exact shape -- the switch's ARL table
--- and the bridge's FDB -- and both were scanned WHOLE once per socket to keep
--- the entries on that one, O(sockets x hosts) on a switch that may have
--- learned a couple of hundred. One inversion answers every socket.
+-- The bridge's FDB was scanned WHOLE once per socket to keep the entries on
+-- that one, O(sockets x hosts) on a bridge that may have learned a couple of
+-- hundred. One inversion answers every socket.
 --
 -- Memoized on the map TABLE, not on a name: build_json fetches one dump per
 -- heartbeat and hands the same table to every socket, so a pass given a fresh
@@ -543,18 +541,12 @@ M._sae_supported_cache = nil
 -- SAE would make the controller push a config the radio cannot run.
 --
 -- Probed from the wifi config generator rather than by parsing a binary:
--- OpenWrt 24+ ships ucode wifi scripts that name the auth types they can
--- emit ('sae', 'psk-sae'), and older releases express the same in
--- hostapd.sh. Both are plain file reads, no process spawn.
+-- OpenWrt's ucode wifi scripts name the auth types they can emit ('sae',
+-- 'psk-sae'). A plain file read, no process spawn.
 function M.sae_supported()
 	if M._sae_supported_cache ~= nil then return M._sae_supported_cache end
-	local found = false
 	local ucode = M._read_file("/usr/share/ucode/wifi/ap.uc")
-	if ucode and ucode:find("psk-sae", 1, true) then found = true end
-	if not found then
-		local legacy = M._read_file("/lib/netifd/hostapd.sh")
-		if legacy and legacy:find("sae", 1, true) then found = true end
-	end
+	local found = ucode ~= nil and ucode:find("psk-sae", 1, true) ~= nil
 	M._sae_supported_cache = found
 	return found
 end
@@ -682,7 +674,7 @@ function M.radio_caps(ifname)
 end
 
 -- First-seen timestamps for wired hosts, keyed by "<source> mac" -- used to
--- derive `uptime` in M.mac_table()/M.switch_mac_table() the same way
+-- derive `uptime` in M.mac_table() the same way
 -- sta_table's connected_sec comes from iw (which has no equivalent concept
 -- for a learned MAC).
 -- Injectable/resettable by tests, same pattern as M._prev_cpu above.
@@ -845,7 +837,7 @@ function M.nft_tap()
 		if not out or out == "" then return {macs = macs, ips = ips} end
 		for ifname, mac, rest in
 			out:gmatch('"([^"]+)"%s*%.%s*(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)([^,\n]*)') do
-			-- Same multicast-bit filter the FDB and ARL sources apply. A
+			-- Same multicast-bit filter the FDB source applies. A
 			-- source address can never be multicast, so this only ever
 			-- rejects a malformed dump -- kept for the same reason it is
 			-- kept there.
@@ -944,76 +936,8 @@ function M.mac_table(ifname, bridge, allow_tap)
 	return hosts_from_macs(ifname, macs, tap and tap.ips[ifname] or nil)
 end
 
--- === swconfig: what the CPU netdev cannot tell you =========================
---
--- On the ath79 boards openUF targets, every ethernet socket sits behind a
--- switch ASIC and the kernel sees only the CPU port. sysfs therefore answers
--- questions about the internal SoC<->switch link (always 1000/full), not about
--- the socket a cable is actually in, and the bridge FDB attributes every wired
--- host to the one CPU netdev. Both were reported as port facts and both were
--- wrong on real hardware -- a TL-WDR3500 whose uplink socket had negotiated
--- 100baseT reported GbE, while the gateway's own view of the same link said FE.
---
--- The switch knows all of it, and one `swconfig dev <sw> show` returns the lot:
--- per-port link/speed/duplex, per-port pvid, the ARL table (MAC -> physical
--- port), and -- where the driver exposes them -- per-port MIB byte counters.
-
--- Parses one `swconfig dev <device> show` into
---   {ports = {[phys] = {up, speed, full_duplex, pvid, rx_bytes, tx_bytes}},
---    arl   = {[mac] = phys}}
--- Both tables are empty when swconfig is missing or the board has no switch,
--- which is the signal callers use to stay on the netdev-only path.
---
--- Two line shapes both start with "Port <n>:" and must not be confused: an ARL
--- entry ("Port 4: MAC aa:bb:..", listed under the global attributes, one line
--- per learned host) and a port section header ("Port 4:" alone, followed by
--- indented attributes). The MAC is the discriminator.
---
--- MIB counters are optional: the AR8327 in an Archer C5 reports "mib: ???"
--- (its ar8xxx_mib_poll_interval is 0) while the AR9344 in a WDR3500 prints a
--- RxGoodByte/TxByte block. Only those two counters exist even there -- there
--- is no per-port packet or error count to be had from this interface.
-function M.switch_status(device)
-	local status = {ports = {}, arl = {}}
-	local out = M._run_cmd("swconfig dev " .. (device or "switch0") .. " show")
-	if not out or out == "" then return status end
-
-	local cur   -- physical port whose section is being parsed
-	for line in out:gmatch("[^\n]+") do
-		local arl_port, arl_mac =
-			line:match("^Port (%d+):%s+MAC%s+(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)")
-		local header = line:match("^Port (%d+):%s*$")
-		if arl_mac then
-			status.arl[arl_mac:lower()] = tonumber(arl_port)
-		elseif header then
-			cur = tonumber(header)
-			status.ports[cur] = {up = false}
-		elseif line:match("^VLAN %d+:") then
-			cur = nil   -- the VLAN table follows the port sections
-		elseif cur and status.ports[cur] then
-			local p = status.ports[cur]
-			local pvid = line:match("^%s*pvid:%s*(%d+)")
-			if pvid then p.pvid = tonumber(pvid) end
-			local state = line:match("^%s*link:%s*port:%d+%s+link:(%a+)")
-			if state then
-				p.up = (state == "up")
-				if p.up then
-					local speed = line:match("speed:(%d+)baseT")
-					p.speed = speed and tonumber(speed) or nil
-					p.full_duplex = line:match("(%a+)%-duplex") ~= "half"
-				end
-			end
-			local rx = line:match("^RxGoodByte%s*:%s*(%d+)")
-			if rx then p.rx_bytes = tonumber(rx) end
-			local tx = line:match("^TxByte%s*:%s*(%d+)")
-			if tx then p.tx_bytes = tonumber(tx) end
-		end
-	end
-	return status
-end
-
 -- Uplink detection is deliberately MEASURED rather than declared (see
--- M.uplink_phys_port): a modelmap constant is wrong the moment someone moves
+-- M.uplink_bridge_port): a board constant is wrong the moment someone moves
 -- the cable. But two of its three inputs are not measurements of the cable at
 -- all and were re-asked every ten seconds anyway -- which bridge a netdev is
 -- enslaved to (a `readlink` fork), and the default route's gateway IP (an
@@ -1021,7 +945,7 @@ end
 --
 -- Cached with the same TTL discipline as PHY_INFO_TTL. What stays live is the
 -- part that actually follows the cable: the gateway's MAC is looked up in the
--- ARP cache every time, and resolved against the ARL/FDB every time, so a
+-- ARP cache every time, and resolved against the FDB every time, so a
 -- moved cable is still picked up on the next heartbeat.
 --
 -- A nil answer is NOT cached. "No default route yet" and "not a bridge port
@@ -1053,9 +977,8 @@ end
 -- IP's hardware address from the kernel's ARP cache. Lowercased. nil whenever
 -- any link of the chain is missing -- no default route, no ARP entry yet.
 --
--- This is the "which way is the controller" question, and both uplink
--- detectors below are only different ways of asking the switch where that MAC
--- lives: swconfig's ARL table on ath79, the bridge FDB on DSA.
+-- This is the "which way is the controller" question; uplink_bridge_port
+-- asks the bridge FDB which socket that MAC lives behind.
 function M._default_gateway_mac()
 	local gw_ip = uplink_memo("default_gw_ip", function()
 		return tostring(M._run_cmd("ip route show default") or "")
@@ -1071,30 +994,11 @@ function M._default_gateway_mac()
 	return nil
 end
 
--- Which physical switch port the uplink cable is in, from an ARL table as
--- returned by M.switch_status().arl -- the port the default gateway's MAC was
--- learned on. Verified against both real boards: the same gateway MAC appears
--- on physical port 4 of one AP and port 2 of the other, matching the cabling.
+-- === Sockets and the bridge ===============================================
 --
--- Deliberately measured rather than declared in the modelmap. These boards are
--- deployed as APs with the cable in whichever LAN socket is convenient, and a
--- wrong answer is not a cosmetic error: a socket wrongly treated as downstream
--- makes the AP report the entire LAN segment, gateway included, as hosts
--- plugged into it. Returns nil whenever any link of the chain is missing, and
--- callers must then fall back to the netdev-only port rather than guess.
-function M.uplink_phys_port(arl)
-	if type(arl) ~= "table" then return nil end
-	local gw_mac = M._default_gateway_mac()
-	return gw_mac and arl[gw_mac] or nil
-end
-
--- === DSA: the same questions, asked of the bridge ==========================
---
--- A DSA board (mediatek/filogic, and every other 21.02+ target) has no
--- swconfig and no ARL to read. It does not need one: each socket is its own
--- netdev, so sysfs answers link speed and duplex per socket honestly rather
--- than describing an internal CPU link, and the bridge FDB answers the one
--- thing sysfs cannot -- which socket a MAC sits behind.
+-- Each socket is its own netdev (DSA), so sysfs answers link speed and duplex
+-- per socket, and the bridge FDB answers the one thing sysfs cannot -- which
+-- socket a MAC sits behind.
 --
 -- Confirmed on a Xiaomi Mi Router AX3000T, whose four sockets are the netdevs
 -- wan/lan2/lan3/lan4, all enslaved to br-lan.
@@ -1112,7 +1016,7 @@ function M.bridge_of(ifname)
 end
 
 -- {[mac] = port_ifname} for every host the bridge has LEARNED, from one
--- `bridge fdb show br <bridge>`. The DSA analogue of switch_status().arl.
+-- `bridge fdb show br <bridge>`.
 --
 -- Same filter discipline as M.mac_table, and for the same reasons. The
 -- load-bearing half is "permanent": the port's own address arrives as
@@ -1143,9 +1047,6 @@ function M.bridge_fdb_ports(bridge)
 	end)
 end
 
--- Which bridge port -- i.e. which socket -- the uplink cable is in, as an
--- ifname. Same contract as M.uplink_phys_port: measured, never declared, and
--- nil rather than a guess when the chain cannot be completed.
 -- On a vlan-filtering bridge the FDB says which VLAN each host was learned
 -- in (`<mac> dev lan2 vlan 3 master br-lan`), and that -- not the bridge's
 -- name -- is the network the host belongs to. mac -> vid, first entry wins;
@@ -1173,41 +1074,16 @@ function M.bridge_filters_vlans(bridge)
 	return v ~= nil and v:match("^%s*1") ~= nil
 end
 
+-- Which bridge port -- i.e. which socket -- the uplink cable is in, as an
+-- ifname: the port the default gateway's MAC was learned on. Measured, never
+-- declared -- these boards are cabled into whichever socket is convenient, and
+-- a socket wrongly treated as downstream makes the AP report the entire LAN
+-- segment, gateway included, as hosts plugged into it. nil rather than a
+-- guess when the chain cannot be completed; callers then fall back.
 function M.uplink_bridge_port(bridge)
 	local gw_mac = M._default_gateway_mac()
 	if not gw_mac then return nil end
 	return M.bridge_fdb_ports(bridge)[gw_mac]
-end
-
--- The wired hosts learned on one physical switch port, in the same shape
--- M.mac_table() returns ({mac, ip, hostname, age, uptime}) so port_table's
--- consumer does not care which source a port's hosts came from.
---
--- Multicast/broadcast MACs are filtered on the address's own multicast bit --
--- the ARL has no "self"/"permanent" markers to lean on the way `bridge fdb`
--- does. The device's own MACs and its wireless stations are filtered by the
--- caller, which is where both sets are already known.
-function M.switch_mac_table(phys, arl)
-	if phys == nil or type(arl) ~= "table" then return {} end
-	local macs = hosts_by_port(arl)[phys]
-	if not macs or #macs == 0 then return {} end
-
-	local ip_by_mac       = M._ip_by_mac()
-	local hostname_by_mac = M._hostname_by_mac()
-
-	local now = M._time()
-	local hosts = {}
-	for _, mac in ipairs(macs) do
-		local first_seen = M._note_seen("swport" .. tostring(phys) .. " " .. mac, now)
-		hosts[#hosts + 1] = {
-			mac      = mac,
-			ip       = ip_by_mac[mac],
-			hostname = hostname_by_mac[mac],
-			age      = 0,
-			uptime   = math.floor(now - first_seen),
-		}
-	end
-	return hosts
 end
 
 return M

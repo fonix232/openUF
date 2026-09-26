@@ -17,21 +17,7 @@
 	  40+      *   Payload (may be compressed then encrypted)
 ]]--
 
-local bit = (function()
-	local ok, b = pcall(require, "bit")
-	if ok then return b end
-	ok, b = pcall(require, "bit32")
-	if ok then return b end
-	local _l = load or loadstring
-	local function _f(e) return _l("return function(a,b) return "..e.." end")() end
-	return {
-		band   = _f("a&b"),
-		bor    = _l("return function(...) local r=0 for i=1,select('#',...)do r=r|select(i,...)end return r end")(),
-		bxor   = _f("a~b"),
-		lshift = _f("a<<b"),
-		rshift = _f("a>>b"),
-	}
-end)()
+local bit = require("bit")
 
 local M = {}
 
@@ -96,19 +82,11 @@ end
 -- GCM AAD = first 40 bytes of the packet header (per amd989/unifi-gateway encode_inform)
 function M.build(json_str, st, crypto)
 	crypto = crypto or require("unifi.crypto")
-	local use_gcm = st.use_gcm and crypto.gcm_available()
+	local use_gcm = st.use_gcm
+	-- Sent uncompressed: there is no zlib deflater on the device, and the
+	-- controller takes either.
 	local payload = json_str
-
-	-- Compress with zlib if available
 	local flags = FLAG_ENCRYPTED
-	local ok_zlib, zlib = pcall(require, "zlib")
-	if ok_zlib and zlib.compress then
-		local compressed = zlib.compress(payload)
-		if compressed and #compressed < #payload then
-			payload = compressed
-			flags = bit.bor(flags, FLAG_COMPRESSED)
-		end
-	end
 	if use_gcm then flags = bit.bor(flags, FLAG_GCM) end
 
 	local iv      = crypto.random_iv(16)
@@ -183,19 +161,8 @@ function M.parse(raw, st, crypto)
 		error("inform: controller sent snappy-compressed response; lua-snappy not supported")
 	end
 	if bit.band(flags, FLAG_COMPRESSED) ~= 0 then
-		local done = false
-		-- Prefer a native zlib binding if the host happens to have one...
-		local ok_zlib, zlib = pcall(require, "zlib")
-		if ok_zlib and type(zlib) == "table" and zlib.decompress then
-			local ok_d, out = pcall(zlib.decompress, payload)
-			if ok_d and out then payload = out; done = true end
-		end
-		-- ...otherwise fall back to the in-tree pure-Lua inflater (OpenWrt 25.12
-		-- ships no Lua zlib binding, so this is the normal path there).
-		if not done then
-			local inflate = require("unifi.inflate")
-			payload = inflate.zlib_decompress(payload)
-		end
+		-- The in-tree pure-Lua inflater: OpenWrt ships no Lua zlib binding.
+		payload = require("unifi.inflate").zlib_decompress(payload)
 	end
 
 	return payload, flags

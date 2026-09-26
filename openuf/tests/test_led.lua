@@ -121,22 +121,9 @@ return {
 		end
 	},
 	{
-		name = "led: legacy {sysfs=...} modelmap table is accepted",
-		fn = function()
-			with_capture(function(writes)
-				local t = {name = "uf_status", desc = "UF Status LED",
-					sysfs = "tp-link:green:system"}
-				assert_true(led.set_enabled(t, true), "table resolves")
-				assert_eq(writes[1].path,
-					"/sys/class/leds/tp-link:green:system/trigger",
-					"sysfs field extracted and prefixed")
-			end)
-		end
-	},
-	{
 		name = "led: unusable led config no-ops instead of throwing",
 		fn = function()
-			for _, bad in ipairs({42, true, "", {}, {sysfs = 7}}) do
+			for _, bad in ipairs({42, true, "", {}, {sysfs = "tp-link:green:system"}}) do
 				assert_false(led.locate_start(bad), "locate_start no-op")
 				assert_false(led.locate_stop(bad), "locate_stop no-op")
 				assert_false(led.set_enabled(bad, true), "set_enabled no-op")
