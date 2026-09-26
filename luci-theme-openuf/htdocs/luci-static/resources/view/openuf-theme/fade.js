@@ -75,8 +75,10 @@ return baseclass.extend({
 	},
 
 	measure(el) {
-		/* Mid-slide the text is shifted; the next change measures it. */
-		if (!el.isConnected || el.matches(':hover, :focus-within, [data-uf-fade-run]'))
+		/* Mid-slide the text is shifted, whatever started the slide; the
+		 * next change measures it. */
+		if (!el.isConnected || el.matches(':hover, :focus-within, [data-uf-fade-run]') ||
+		    parseFloat(window.getComputedStyle(el).textIndent))
 			return;
 
 		const over = el.scrollWidth - el.clientWidth;
