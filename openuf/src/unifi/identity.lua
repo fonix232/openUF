@@ -24,6 +24,12 @@ M._catalog = function() return require("unifi.catalog") end
 
 -- The identity table (inform/announce fields: model, sysid, fw, port layout)
 -- plus the chosen model code, whether this was a fresh choice, and its score.
+---@param board table?   /etc/board.json, decoded
+---@param saved string?  the model code chosen before
+---@return Identity identity
+---@return string code
+---@return boolean fresh
+---@return number? score
 function M.choose(board, saved)
 	local catalog = M._catalog()
 	local chosen = saved and match.find(catalog, saved) or nil

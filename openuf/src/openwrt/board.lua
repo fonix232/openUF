@@ -177,6 +177,7 @@ end
 
 -- The device description the daemon works from: dev.conf (net, led),
 -- dev.openuf.uap (radios) and dev.identity (the UniFi model presented).
+---@return Dev
 function M.describe()
 	local board = decode(M._read(M.BOARD_FILE))
 	local uap = M.identity(board)

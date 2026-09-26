@@ -119,6 +119,10 @@ end
 --
 -- caps.best_phy(band): the best PHY generation the hardware has on a band
 -- ("HE"), for the "ht"-means-any-PHY reading above; nil runs it literally.
+---@param sys_raw string  system_cfg
+---@param caps Caps?
+---@return RadioIntent[] radio_table
+---@return VapIntent[] vap_table
 function M.parse(sys_raw, caps)
 	local aaa, wireless, radio, stamgr, macacl = {}, {}, {}, {}, {}
 	local global_countrycode = nil

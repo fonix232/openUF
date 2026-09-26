@@ -30,6 +30,8 @@ end
 --   mgmt_vid     0 (native) | vid
 --   dhcp         true when management is DHCP
 --   static       {ip, netmask, gateway, dns = {...}} when it is static
+---@param sys_raw string  system_cfg
+---@return NetworkModel?
 function M.parse(sys_raw)
 	if type(sys_raw) ~= "string" then return nil end
 	local vlan, bridge, netconf, dhcpc = {}, {}, {}, {}

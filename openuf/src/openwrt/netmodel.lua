@@ -191,6 +191,10 @@ end
 --   keep_vids      set of extra VLAN ids to carry (foreign interfaces that
 --                  survive a takeover)
 --   identity_mac   MAC to pin on the bridge
+---@param model NetworkModel
+---@param sw PortsIntent?
+---@return NetPlan? plan
+---@return string? why  set when there is no plan
 function M.plan(model, sw, cfg, opts)
 	opts = opts or {}
 	local net = cfg and cfg.net or {}
@@ -563,6 +567,11 @@ end
 -- attaches VAPs to its interfaces, and anything else would name interfaces
 -- that do not exist.
 --   opts.uplink_ifname / opts.identity_mac: see M.plan
+---@param model NetworkModel
+---@param sw PortsIntent?
+---@return boolean changed
+---@return NetPlan? plan
+---@return ConvergeOutcome outcome
 function M.converge(model, sw, cfg, st, opts)
 	opts = opts or {}
 	local plan, why = M.plan(model, sw, cfg, opts)

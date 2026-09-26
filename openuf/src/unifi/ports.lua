@@ -32,6 +32,8 @@ local M = {}
 --
 -- Returns nil when the blob carries no switch.* line at all (distinct from a
 -- block that is present but gated off).
+---@param sys_raw string  system_cfg
+---@return PortsIntent?
 function M.parse(sys_raw)
 	local seen = false
 	local gate_switch, gate_vlan

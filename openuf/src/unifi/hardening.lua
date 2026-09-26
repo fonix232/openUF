@@ -13,6 +13,8 @@ M.BGA = "01:80:c2:00:00:00"
 -- The ebtables.* block, or nil when the blob carries none. Each recognised
 -- shape lands in its list; anything else in `unknown`, verbatim, so a new
 -- rule shape is visible rather than silently dropped.
+---@param sys_raw string  system_cfg
+---@return EbtablesRules?
 function M.parse(sys_raw)
 	if type(sys_raw) ~= "string" then return nil end
 	local seen = false
@@ -54,6 +56,8 @@ end
 -- What to enforce, boiled down to the two device-wide booleans state.json
 -- keeps: the controller emits the BPDU pair for every VAP and the tag drop
 -- for the tagged one plus bridge-wide, so per-VAP bookkeeping adds nothing.
+---@param parsed EbtablesRules?
+---@return HardeningSpec
 function M.spec_from(parsed)
 	if type(parsed) ~= "table" or not parsed.enabled then
 		return {bpdu = false, tagdrop = false}

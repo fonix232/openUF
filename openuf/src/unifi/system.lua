@@ -38,6 +38,8 @@ end
 -- The three blocks out of a system_cfg blob. Each is nil when the blob does
 -- not carry it (a partial push), so apply() touches only what was pushed.
 -- Returns nil when none of the three is present at all.
+---@param sys_raw string  system_cfg
+---@return SystemSettings?
 function M.parse(sys_raw)
 	if type(sys_raw) ~= "string" then return nil end
 	local tz, ntp, cron = nil, nil, nil
