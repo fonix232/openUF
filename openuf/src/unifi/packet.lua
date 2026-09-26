@@ -89,23 +89,6 @@ local function mac_bytes(mac_str)
 	return table.concat(bytes)
 end
 
--- 32 hex chars = 16 bytes = a valid AES-128 key (matches syswrapper.lua's check)
-function M.is_hex32(s)
-	return type(s) == "string" and #s == 32 and s:match("^[0-9a-fA-F]+$") ~= nil
-end
-
--- Exactly "aa:bb:cc:dd:ee:ff". Wire-supplied MACs -- the MAC filter's ACL, the
--- Multicast/Broadcast Blocker's allow-list -- end up inside nft and
--- hostapd_cli command lines (bcfilter.lua, firewall.lua) or in UCI lists
--- hostapd parses, so anything not of this shape is refused at the boundary
--- rather than escaped. The controller is authenticated once adopted, but
--- before that the inform channel is plain HTTP under the well-known default
--- key and a forged setparam is within reach of anyone on the path; this is
--- what keeps that from becoming a shell.
-function M.is_mac(s)
-	return type(s) == "string" and s:match("^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$") ~= nil
-end
-
 -- ─── Packet builder ──────────────────────────────────────────────────────────
 
 -- Build a TNBU binary packet from a JSON string.
