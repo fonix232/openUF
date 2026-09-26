@@ -15,7 +15,7 @@ local wlan    = require("unifi.wlan")
 
 local M = {}
 
-local RRM_MAX_AGE = 30
+local RRM_MAX_AGE = require("openwrt.rrmscan").MAX_AGE
 
 -- Build the inform JSON payload.
 -- st: current state table

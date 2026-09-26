@@ -317,4 +317,134 @@ function M.merge_into(entries, neighbours, opts)
 	return entries
 end
 
+-- ─── Scheduling ──────────────────────────────────────────────────────────────
+
+-- Matches merge_into's own cutoff, which exists because the controller's
+-- rogue-AP ingestion silently drops any entry with age >= 30.
+M.MAX_AGE = 30
+
+-- Start the inform heartbeat loop (blocks forever).
+-- cfg, ufhw: passed through to build_json()
+-- One cycle of the client-assisted enrichment: keep the notification
+-- collector alive, fold in whatever clients have reported since last time,
+-- expire what the controller would discard anyway, and -- at most every
+-- RRM_REQUEST_INTERVAL -- ask one more station to go and look.
+--
+-- Everything here is pcall-wrapped and best-effort: no hostapd, no ubus, no
+-- capable client and no answer are all ordinary outcomes, and none of them may
+-- interrupt an inform.
+function M.tick(ctx, cfg)
+	local rrm = ctx._rrmscan
+	if not rrm then return false end
+	if not (cfg and cfg.config and cfg.config.rrm_enrichment) then
+		-- Enrichment is off, but a collector from an earlier run with it ON may
+		-- still be alive: it is a detached `ubus subscribe` child reparented to
+		-- init, so it outlives both the config change and the daemon. Nothing
+		-- below this line runs any more, and harvest() is the ONLY thing that
+		-- truncates the notification file -- so left alone the child appends to
+		-- /tmp/openuf-rrm.jsonl forever with no reader and no cap. /tmp is a
+		-- RAM disk on these boards; the debug-dump cap above exists because
+		-- 31.7 MB there was measured starving state.json writes and apk.
+		--
+		-- Rate-limited on the collector's own liveness clock rather than run
+		-- every tick: this is a pgrep, and there is nothing to catch between
+		-- checks once the child is gone.
+		local now = ctx._time()
+		if now >= ctx._rrm_collector_next then
+			ctx._rrm_collector_next = now + ctx.RRM_COLLECTOR_CHECK_INTERVAL
+			local ok_r, running = pcall(rrm.collector_running)
+			if ok_r and running then pcall(rrm.collector_stop) end
+		end
+		return false
+	end
+
+	-- On ctx._time(), the seam the rest of the timed paths use, so the gate below
+	-- is testable. Note this is also the clock the age-out compares against,
+	-- and n.seen_at comes from rrmscan's own ctx._now -- a test that stubs one
+	-- must stub the other, or "freshness" is measured between two clocks.
+	local now = ctx._time()
+	if now >= ctx._rrm_collector_next then
+		ctx._rrm_collector_next = now + ctx.RRM_COLLECTOR_CHECK_INTERVAL
+		pcall(rrm.collector_ensure)
+	end
+
+	local ok, fresh, reporters = pcall(rrm.harvest)
+	if ok then
+		-- A station that answered is off the bench, whatever it reported.
+		for mac in pairs(reporters or {}) do ctx._rrm_asked[mac] = nil end
+		for _, n in ipairs(fresh or {}) do
+			-- Keyed by BSSID so a neighbour two clients both saw is carried
+			-- once, at whichever sighting is freshest.
+			local prev = ctx._rrm_cache[n.bssid]
+			if not prev or n.seen_at >= prev.seen_at then
+				ctx._rrm_cache[n.bssid] = n
+			end
+		end
+	end
+
+	local live = {}
+	for bssid, n in pairs(ctx._rrm_cache) do
+		if now - n.seen_at < M.MAX_AGE then
+			live[#live + 1] = n
+		else
+			ctx._rrm_cache[bssid] = nil
+		end
+	end
+	table.sort(live, function(a, b) return a.bssid < b.bssid end)
+	ctx._rrm_neighbours = live
+
+	if now < ctx._rrm_next_request then return true end
+	ctx._rrm_next_request = now +
+		(tonumber(cfg.config.rrm_request_interval) or ctx.RRM_REQUEST_INTERVAL)
+
+	-- Round-robin across every capable station on every BSS, one per
+	-- interval. Asking them all at once would take every 802.11k-capable
+	-- client in the house off-channel simultaneously.
+	local cands = {}
+	local ok_o, objs = pcall(rrm.hostapd_objects)
+	for _, obj in ipairs(ok_o and objs or {}) do
+		local ifname = obj:match("^hostapd%.(.+)$")
+		local ok_s, stas = pcall(rrm.capable_stations, ifname)
+		for _, sta in ipairs(ok_s and stas or {}) do
+			local key   = tostring(sta):lower()
+			local asked = ctx._rrm_asked[key]
+			local spent = asked and asked.n >= ctx.RRM_MAX_UNANSWERED
+			if spent and (now - asked.at) >= ctx.RRM_BENCH_SECONDS then
+				ctx._rrm_asked[key] = nil   -- bench over: one more try, clean count
+				spent = false
+			end
+			if not spent then
+				cands[#cands + 1] = {ifname = ifname, sta = sta}
+			end
+		end
+	end
+	if #cands == 0 then return true end
+	ctx._rrm_rr = (ctx._rrm_rr % #cands) + 1
+	local c = cands[ctx._rrm_rr]
+	local key = tostring(c.sta):lower()
+	local asked = ctx._rrm_asked[key] or {n = 0}
+	asked.n, asked.at = asked.n + 1, now
+	ctx._rrm_asked[key] = asked
+	if asked.n == ctx.RRM_MAX_UNANSWERED then
+		io.stderr:write(string.format(
+			"openuf: rrm: %s on %s advertises beacon measurement but has answered none "
+			.. "of %d requests -- not asking again for %d h\n",
+			c.sta, c.ifname, asked.n - 1, math.floor(ctx.RRM_BENCH_SECONDS / 3600)))
+	end
+	-- The operating class has to be one the CLIENT can measure. Asking every
+	-- station for class 115 (5 GHz U-NII-1) works for a dual-band client --
+	-- they ignore the band restriction and answer for 2.4 GHz too -- but a
+	-- 2.4 GHz-only station answers it with report mode 0x02, "incapable", and
+	-- an all-zero BSSID, which is nothing at all. So a station on a 2.4 GHz
+	-- BSS is asked for class 81 (2.4 GHz, channels 1-13) instead; the band
+	-- comes from that BSS's live channel.
+	local op_class = 115
+	local ok_c, caps = pcall(ctx._sysinfo.radio_caps, c.ifname)
+	if ok_c and type(caps) == "table" and caps.channel and caps.channel <= 14 then
+		op_class = 81
+	end
+	pcall(rrm.request, c.ifname, c.sta, {op_class = op_class})
+	return true
+end
+
 return M
