@@ -998,7 +998,7 @@ and when a device misses a heartbeat. `option stun '0'` turns it off.
 
 ### OpenWrt upgrades through UniFi
 
-See `openuf/src/upgrade.lua`'s header and [openuf/contrib/asu](openuf/contrib/asu/README.md). In short:
+See `openuf/src/openwrt/upgrade.lua`'s header and [openuf/contrib/asu](openuf/contrib/asu/README.md). In short:
 `option upgrade_mode 'owut'` makes a controller upgrade run an attended sysupgrade of this
 board, leaving openUF's own packages out of the ASU request (the package's bootstrap
 reinstalls them on the new image); `option advertise_updates '1'` shows UniFi's "Upgrade available" badge while `owut check` finds

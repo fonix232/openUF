@@ -224,18 +224,18 @@ version string per ufmodel.
 
 | Area | Files |
 |---|---|
-| Controller-owned bridge: one vlan-filtering bridge realising the controller's L2 model (Management VLAN, WLAN VLANs, trunk ports), takeover/recreation of foreign bridges, automatic rollback | `openuf/src/netmodel.lua`, hooks in `inform.lua`/`ucihelper.lua`, `syswrapper.sh netmodel-retry` / `netmodel-restore` |
+| Controller-owned bridge: one vlan-filtering bridge realising the controller's L2 model (Management VLAN, WLAN VLANs, trunk ports), takeover/recreation of foreign bridges, automatic rollback | `openuf/src/openwrt/netmodel.lua`, hooks in `inform.lua`/`ucihelper.lua`, `syswrapper.sh netmodel-retry` / `netmodel-restore` |
 | Protocol: `inform_ip`, pending 404, `interval`/`immediate`, `blocked_sta`, `kick-sta`, key rotation, `sys_stats`, `sysid`, MemAvailable, immediate re-inform, IP refresh | `inform.lua`, `sysinfo.lua`, `ucihelper.lua`, `ufmodel/u6iw.lua` |
-| STUN wake-up channel | `openuf/src/stun.lua` |
+| STUN wake-up channel | `openuf/src/unifi/stun.lua` |
 | IP detection on `<bridge>.<vid>` management | `announce.lua` |
-| DSA boards without a hand-written map; stable identity MAC | `openuf/src/modelmap/auto.lua`, `dev.conf.net.identity_mac` |
-| OpenWrt upgrades through UniFi (owut), catalogue-version learning | `openuf/src/upgrade.lua` |
+| DSA boards without a hand-written map; stable identity MAC | `openuf/src/openwrt/board.lua`, `dev.conf.net.identity_mac` |
+| OpenWrt upgrades through UniFi (owut), catalogue-version learning | `openuf/src/openwrt/upgrade.lua` |
 | Image builds (firmware-selector / owut / ASU API / ImageBuilder) | `openuf/contrib/asu/` |
 | Real-netifd test bench | `openuf/tools/validation/openwrt/` |
-| Client connection/roaming events (`STA_ASSOC_TRACKER` notification informs) | `openuf/src/staevents.lua` |
+| Client connection/roaming events (`STA_ASSOC_TRACKER` notification informs) | `openuf/src/unifi/staevents.lua` |
 | Applied-config reporting (`cfgversion_effective`, bounded re-push) | `inform.lua` |
 | Explicit cipher from `wpa.1.pairwise`; SAE anti-clogging/sync via `hostapd_bss_options` | `ucihelper.lua`, `inform.lua` |
-| Identity from the controller's own model registry | `openuf/tools/uidb-catalog.py`, `openuf/src/ufmodel/catalog.lua`, `openuf/src/modelmatch.lua`, `openuf/src/ufmodel/auto.lua` |
+| Identity from the controller's own model registry | `openuf/tools/uidb-catalog.py`, `openuf/src/unifi/catalog.lua`, `openuf/src/unifi/modelmatch.lua`, `openuf/src/unifi/identity.lua` |
 | yesrab/openUF ports: unhandled ledger, controller timezone/NTP/cron, L2 hardening, in-place updater, debug switches, radio policy, `country_override`, single-band generic map | `unhandled.lua`, `sysconf.lua`, `l2guard.lua`, `update.sh`, `openuf/tools/deploy.sh`, `ucihelper.lua`, `modelmap/generic-singleband-ap.lua` |
 | Ready-to-adopt AP mode on first boot | `openuf/contrib/asu/openuf-firstboot.sh` |
 | OpenWrt packages `openuf` and `luci-app-openuf` from a signed feed (apk, OpenWrt 25.12+) built by CI with the official SDK; settings in UCI (`/etc/config/openuf`) with LuCI Status / Settings / Unhandled messages pages; reinstall after firmware upgrades; migration from tarball installs | `openuf/Makefile`, `openuf/files/`, `openuf/src/config.lua`, `openuf/src/migrate.lua`, `luci-app-openuf/`, `.github/workflows/feed.yml` |

@@ -224,6 +224,27 @@ See [USAGE.md](USAGE.md) for every setting, dependency details and troubleshooti
 | `.github/` | CI: tests, the package feed (`feed.yml`, published to GitHub Pages), releases |
 | `docs/`, `USAGE.md`, `PROTOCOL-VALIDATION.md` | Documentation |
 
+### How the daemon is organised
+
+`openuf/src/` has two sides with one rule between them:
+
+- **`unifi/`** is the controller's side: the TNBU packet and its crypto, the HTTP inform
+  and STUN wake-up, discovery identity (`identity.lua` against the registry in
+  `catalog.lua`), connection events, the payload's UniFi-specific pieces, and the parsers
+  that turn what the controller pushes into plain tables — `wlan.lua` (radios and SSIDs),
+  `ports.lua`, `network.lua` (the L2 model), `system.lua`, `hardening.lua`. It depends on
+  nothing in `openwrt/`, runs no shell commands and loads no UCI or ubus binding;
+  `tests/test_architecture.lua` enforces that.
+- **`openwrt/`** is the device's side: `board.lua` describes the board from itself,
+  `report.lua` reads the device into the inform payload, and `provision.lua` carries the
+  parsed pushes and the controller's commands out through `ucihelper.lua` (WiFi),
+  `netmodel.lua` (the bridge and VLANs), `sysconf.lua`, `l2guard.lua` and the rest.
+- **`inform.lua`** is the loop between them: heartbeat, rollback window, state, status file.
+
+The tables that cross between the two sides are declared in `openuf/types/contracts.lua`
+for the Lua language server (`.luarc.json` points it there), so an editor with the Lua
+extension completes and checks them.
+
 The repository is an OpenWrt package feed: add it to a buildroot or SDK with
 `src-git openuf https://github.com/fonix232/openUF.git` in `feeds.conf`.
 
