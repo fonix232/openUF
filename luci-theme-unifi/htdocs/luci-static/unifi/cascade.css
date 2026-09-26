@@ -26,8 +26,11 @@
 
 	/* Accent and status colours. The plain token is for dots, bars, lines
 	 * and fills; *-text is the same hue dark (or light) enough to read as
-	 * 13px text on a card; *-soft is a chip background under that text. */
-	--uf-blue-rgb: 0, 111, 255;
+	 * 13px text (4.5:1) on a card, a field or its own tinted chip; *-soft is
+	 * a chip background under that text. The blue is UniFi's #006fff one
+	 * step deeper, so that it is also a text colour (on white, on its chip)
+	 * and carries a white label. */
+	--uf-blue-rgb: 0, 102, 235;
 	--uf-blue: rgb(var(--uf-blue-rgb));
 	--uf-blue-strong: #0059cc;
 	--uf-blue-soft: #ebf3ff;
@@ -37,25 +40,27 @@
 	--uf-blue-fill-hover: var(--uf-blue-strong);
 	--uf-green-rgb: 56, 204, 101;
 	--uf-green: rgb(var(--uf-green-rgb));
-	--uf-green-text: #1c9a45;
+	--uf-green-text: #157a35;
 	/* UniFi's "Good": between green (Excellent) and red (Poor). */
 	--uf-lime-rgb: 184, 196, 30;
 	--uf-lime: rgb(var(--uf-lime-rgb));
-	--uf-lime-text: #858f00;
+	--uf-lime-text: #687000;
 	--uf-red-rgb: 240, 58, 62;
 	--uf-red: rgb(var(--uf-red-rgb));
-	--uf-red-text: #d6282d;
-	--uf-red-fill: var(--uf-red);
+	--uf-red-text: #cc2328;
+	--uf-red-fill: #d82b30;
 	--uf-orange-rgb: 245, 165, 36;
 	--uf-orange: rgb(var(--uf-orange-rgb));
-	--uf-orange-text: #a86100;
+	--uf-orange-text: #9c5a00;
 	/* Throughput: upload purple, download cyan. */
 	--uf-purple: #9b6cf6;
+	--uf-purple-text: #7c4ae0;
 	--uf-cyan: #29a8f0;
+	--uf-cyan-text: #0074b0;
 
 	--uf-text-1: #212327;
 	--uf-text-2: #50565e;
-	--uf-text-3: #808893;
+	--uf-text-3: #666d77;
 	--uf-text-4: #b6b9c4;
 	--uf-on-accent: #ffffff;
 
@@ -139,6 +144,23 @@
 	--uf-i-info: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill-rule='evenodd' d='M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20Zm0 1.75a8.25 8.25 0 1 0 0 16.5 8.25 8.25 0 0 0 0-16.5ZM11 10.5h2V17h-2Zm1-3.75a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Z'/></svg>");
 	--uf-i-close: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round'><path d='m6 6 12 12M18 6 6 18'/></svg>");
 	--uf-i-spinner: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' stroke='black' stroke-width='2.5' fill='none'><circle cx='10' cy='10' r='8' stroke-opacity='.2'/><path d='M10 2a8 8 0 0 1 8 8' stroke-linecap='round'><animateTransform attributeName='transform' type='rotate' dur='.8s' from='0 10 10' to='360 10 10' repeatCount='indefinite'/></path></svg>");
+	--uf-i-activity: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='M2.75 12.5h4l2.75-7 5 13.5 2.75-6.5h4'/></svg>");
+	--uf-i-eye: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'><path d='M2.75 12S6.25 5.75 12 5.75 21.25 12 21.25 12 17.75 18.25 12 18.25 2.75 12 2.75 12Z'/><circle cx='12' cy='12' r='3'/></svg>");
+	--uf-i-eye-off: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><path d='M2.75 12S6.25 5.75 12 5.75 21.25 12 21.25 12 17.75 18.25 12 18.25 2.75 12 2.75 12Z'/><circle cx='12' cy='12' r='3'/><path d='m4 4 16 16'/></svg>");
+
+	/* Device kinds, standing in for LuCI's own device icons (see "Device icons"). */
+	--uf-i-ethernet: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'><rect x='3.75' y='4.75' width='16.5' height='14.5' rx='2.5'/><path d='M8 8.75h8v5.5h-2v2h-4v-2H8Z'/></svg>");
+	--uf-i-bridge: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><rect x='2.75' y='7.75' width='7' height='8.5' rx='1.75'/><rect x='14.25' y='7.75' width='7' height='8.5' rx='1.75'/><path d='M9.75 12h4.5M6.25 7.75V5.5h11.5v2.25'/></svg>");
+	--uf-i-wifi: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><path d='M3.25 9.25a12.5 12.5 0 0 1 17.5 0M6.25 12.5a8.25 8.25 0 0 1 11.5 0M9.25 15.75a4 4 0 0 1 5.5 0'/><circle cx='12' cy='19' r='1.1' fill='black'/></svg>");
+	--uf-i-vlan: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'><path d='M3.75 3.75h7l9.5 9.5-7 7-9.5-9.5Z'/><circle cx='7.75' cy='7.75' r='1.5'/></svg>");
+	--uf-i-alias: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><path d='M10.25 13.75a3.75 3.75 0 0 0 5.3 0l3.2-3.2a3.75 3.75 0 0 0-5.3-5.3l-1.2 1.2M13.75 10.25a3.75 3.75 0 0 0-5.3 0l-3.2 3.2a3.75 3.75 0 0 0 5.3 5.3l1.2-1.2'/></svg>");
+	--uf-i-tunnel: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><path d='M3.75 19.75V11.5a8.25 8.25 0 0 1 16.5 0v8.25ZM8.25 19.75V12a3.75 3.75 0 0 1 7.5 0v7.75'/></svg>");
+	--uf-i-wireguard: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><rect x='4.75' y='10.25' width='14.5' height='10' rx='2'/><path d='M8 10.25V7.75a4 4 0 0 1 8 0v2.5M12 14.25v2'/></svg>");
+	--uf-i-switch: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><rect x='2.75' y='6.75' width='18.5' height='10.5' rx='2'/><path d='M6.5 11h2M11 11h2M15.5 11h2M6.5 14h11'/></svg>");
+	--uf-i-vrf: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><path d='M12 3.75 20.25 8 12 12.25 3.75 8Z'/><path d='m3.75 12 8.25 4.25L20.25 12M3.75 16l8.25 4.25L20.25 16'/></svg>");
+	/* Four bars, each in its own quarter of the width, so a hard-stop
+	 * gradient under the mask fills exactly as many as the level says. */
+	--uf-i-signal: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect x='1.5' y='15' width='3' height='5.5' rx='1'/><rect x='7.5' y='11' width='3' height='9.5' rx='1'/><rect x='13.5' y='7' width='3' height='13.5' rx='1'/><rect x='19.5' y='3' width='3' height='17.5' rx='1'/></svg>");
 
 	color-scheme: light;
 }
@@ -147,29 +169,32 @@
  * columns, hairline borders a step lighter, and text that stops short of
  * pure white. Fields and hover tints are translucent white, so they read
  * the same on a card, in a menu or in a dialog. The accent is lifted to
- * #4797ff for text and lines; solid fills keep a deeper blue so white
- * labels on them stay legible (4.5:1). */
+ * #5aa2ff for text and lines, so it reads on its own tint inside a dialog;
+ * solid fills keep a deeper blue, darker still on hover, so white labels
+ * on them stay legible (4.5:1). */
 :root[data-darkmode="true"] {
-	--uf-blue-rgb: 71, 151, 255;
-	--uf-blue-strong: #6aabff;
-	--uf-blue-soft: rgba(71, 151, 255, .14);
-	--uf-blue-line: rgba(71, 151, 255, .5);
+	--uf-blue-rgb: 90, 162, 255;
+	--uf-blue-strong: #7db6ff;
+	--uf-blue-soft: rgba(90, 162, 255, .14);
+	--uf-blue-line: rgba(90, 162, 255, .5);
 	--uf-blue-fill: #1d6ff0;
-	--uf-blue-fill-hover: #2f7cf2;
+	--uf-blue-fill-hover: #1862d6;
 	--uf-green-rgb: 57, 211, 106;
 	--uf-green-text: #4fd97c;
 	--uf-lime-rgb: 200, 212, 58;
 	--uf-lime-text: #d2dc5a;
 	--uf-red-rgb: 247, 85, 89;
 	--uf-red-text: #ff7478;
-	--uf-red-fill: #d93d42;
+	--uf-red-fill: #d13539;
 	--uf-orange-text: #f7b64a;
 	--uf-purple: #ad86ff;
+	--uf-purple-text: var(--uf-purple);
 	--uf-cyan: #4cbcff;
+	--uf-cyan-text: var(--uf-cyan);
 
 	--uf-text-1: #eceef0;
 	--uf-text-2: #b1b5bf;
-	--uf-text-3: #858b96;
+	--uf-text-3: #969ca7;
 	--uf-text-4: #5c616b;
 
 	--uf-topbar: #0e0f11;
@@ -785,7 +810,10 @@ pre {
 	--uf-icon: var(--uf-i-dot);
 }
 
-.uf-rail-item[data-name="status"] { --uf-icon: var(--uf-i-dashboard); }
+/* luci-mod-dashboard's page is UniFi's Dashboard and takes its gauge;
+ * Status is live readings, so a pulse line. */
+.uf-rail-item[data-name="dashboard"] { --uf-icon: var(--uf-i-dashboard); }
+.uf-rail-item[data-name="status"] { --uf-icon: var(--uf-i-activity); }
 .uf-rail-item[data-name="system"] { --uf-icon: var(--uf-i-gear); }
 .uf-rail-item[data-name="services"] { --uf-icon: var(--uf-i-apps); }
 .uf-rail-item[data-name="network"] { --uf-icon: var(--uf-i-topology); }
@@ -1406,10 +1434,20 @@ div.cbi-value var.cbi-tooltip-container,
 	border-bottom: 1px dotted var(--uf-blue);
 }
 
+div.cbi-value var.cbi-tooltip-container {
+	color: var(--uf-text-1);
+}
+
+/* The tip keeps its own colours, dark in either scheme; values quoted in
+ * it are part of its text, not blue on the dark. */
 div.cbi-value var.cbi-tooltip-container,
 .td.cbi-value-field var.cbi-tooltip-container .cbi-tooltip {
 	white-space: normal;
-	color: var(--uf-text-1);
+}
+
+div.cbi-value .cbi-tooltip var,
+.td.cbi-value-field .cbi-tooltip var {
+	color: inherit;
 }
 
 .cbi-optionals,
@@ -1467,6 +1505,20 @@ div.cbi-value var.cbi-tooltip-container,
 .actions .secondary-action,
 .cbi-page-actions .secondary-action {
 	margin-right: auto;
+}
+
+/* An action bar inside a card or a tab pane (Flash's Configuration,
+ * Startup's Local Startup) is that card's last row, not a second card
+ * floating within it. */
+.cbi-section .cbi-page-actions,
+[data-tab] .cbi-page-actions {
+	position: static;
+	margin: 0;
+	padding: 16px 0 0;
+	background: none;
+	border: 0;
+	border-radius: 0;
+	box-shadow: none;
 }
 
 /* Controls
@@ -1546,8 +1598,9 @@ select:focus,
 	background-color: var(--uf-surface);
 }
 
+/* Hints stay a step quieter than values, but readable (4.5:1). */
 ::placeholder {
-	color: var(--uf-text-4);
+	color: var(--uf-text-3);
 	opacity: 1;
 }
 
@@ -1569,10 +1622,15 @@ select {
 	text-overflow: ellipsis;
 	/* The chevron is a mask on a pseudo-element for .cbi-select; on a bare
 	 * select it has to be a background, tinted to match the text. */
-	background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23808893' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m7 10 5 5 5-5'/></svg>");
+	background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23666d77' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m7 10 5 5 5-5'/></svg>");
 	background-repeat: no-repeat;
 	background-position: right 8px center;
 	background-size: 16px;
+}
+
+/* A data URI cannot read a token: the dark scheme's text-3, spelled out. */
+:root[data-darkmode="true"] select:not([multiple]) {
+	background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23969ca7' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m7 10 5 5 5-5'/></svg>");
 }
 
 select[multiple] {
@@ -1692,6 +1750,34 @@ input.cbi-input-invalid:focus {
 .control-group > .cbi-input-password {
 	flex: 1 1 auto;
 	min-width: 0;
+}
+
+/* LuCI labels the reveal toggle "∗"; UniFi's is an eye, crossed out
+ * while the password shows. */
+.control-group > .cbi-input-password + .cbi-button {
+	--uf-btn-fg: var(--uf-text-3);
+	flex: 0 0 auto;
+	width: var(--uf-control-h);
+	padding: 0;
+	font-size: 0;
+}
+
+.control-group > .cbi-input-password + .cbi-button:hover {
+	--uf-btn-fg: var(--uf-text-1);
+}
+
+.control-group > .cbi-input-password + .cbi-button::before {
+	content: "";
+	width: 18px;
+	height: 18px;
+	background: currentColor;
+	-webkit-mask: var(--uf-i-eye) center / contain no-repeat;
+	mask: var(--uf-i-eye) center / contain no-repeat;
+}
+
+.control-group > .cbi-input-password[type="text"] + .cbi-button::before {
+	-webkit-mask-image: var(--uf-i-eye-off);
+	mask-image: var(--uf-i-eye-off);
 }
 
 /* Checkboxes and radios */
@@ -2338,8 +2424,25 @@ input[type="submit"]:hover {
 	border-left: 0;
 	border-radius: 11px;
 	background: var(--uf-blue-soft);
-	color: var(--uf-blue);
+	color: var(--uf-blue-strong); /* on its tint over a field: 4.5:1 */
 	font-size: 12px;
+}
+
+/* A chip that starts with a device icon (Bridge ports) centres a small
+ * icon on the name, in the chip's blue. */
+.cbi-dropdown[multiple]:not([open]) > ul > li[display] > label {
+	align-items: center;
+	gap: 4px;
+}
+
+.cbi-dropdown[multiple]:not([open]) > ul > li[display] > label > span {
+	align-self: center;
+}
+
+.cbi-dropdown[multiple]:not([open]) > ul > li[display] img {
+	--uf-device-color: currentColor;
+	width: 14px;
+	height: 14px;
 }
 
 /* Zones and networks bring their own badge; do not wrap it in a chip. */
@@ -2352,6 +2455,24 @@ input[type="submit"]:hover {
 
 .cbi-dropdown[empty] > ul {
 	max-width: 1px;
+}
+
+/* An empty choice reads like any other empty field: its placeholder at
+ * the start of the text, upright, in the placeholder grey. */
+.cbi-dropdown[empty] > .more {
+	justify-content: flex-start;
+	padding: 0 10px;
+}
+
+.cbi-dropdown[empty] > .more > em,
+.cbi-dropdown > ul > li[placeholder] > em {
+	color: var(--uf-text-3);
+	font-style: normal;
+}
+
+/* Chosen in the open list, it is an item like the others. */
+.cbi-dropdown[open] > ul.dropdown > li[selected] > em {
+	color: inherit;
 }
 
 .cbi-dropdown > ul > li > form {
@@ -2387,13 +2508,15 @@ input[type="submit"]:hover {
 	position: relative;
 }
 
+/* The open list is as wide as its longest item ('Ethernet Adapter: "eth0"
+ * (wan, wan6)'), not cut to the field's width, up to a sane cap. */
 .cbi-dropdown[open] > ul.dropdown {
 	display: block;
 	position: absolute;
 	z-index: 1100;
 	min-width: 100%;
-	width: auto;
-	max-width: none;
+	width: max-content;
+	max-width: min(520px, calc(100vw - 32px));
 	padding: 4px;
 	overflow-y: auto;
 	background: var(--uf-raised);
@@ -2401,6 +2524,13 @@ input[type="submit"]:hover {
 	border-radius: var(--uf-radius);
 	box-shadow: var(--uf-shadow);
 	transition: max-height .125s ease-in;
+}
+
+/* On touch screens LuCI spans the list across the viewport itself, with
+ * an inline left and right. */
+.cbi-dropdown[open] > ul.dropdown[style*="right:"] {
+	width: auto;
+	max-width: none;
 }
 
 .cbi-dropdown > ul > li[display],
@@ -2522,10 +2652,12 @@ li.menu, .dropdown {
 	border-top: 1px solid var(--uf-divider);
 }
 
+/* Titles stay on one line while the table fits; squeezed (Static Leases
+ * at 1100px), a title wraps between its words rather than push the table
+ * out of its card. */
 .table .th {
 	color: var(--uf-text-1);
 	font-weight: 600;
-	white-space: nowrap;
 	vertical-align: bottom;
 	border-top: 0;
 	border-bottom: 1px solid var(--uf-border);
@@ -2533,6 +2665,14 @@ li.menu, .dropdown {
 
 .table .tr:first-child .td {
 	border-top: 0;
+}
+
+/* A header rule under every column, including an actions column that has
+ * no title over it (the rule is the first row's, where the titles stop). */
+.table .tr.table-titles + .tr > .td,
+.table .tr.cbi-section-table-titles + .tr > .td,
+.table .thead + .tbody > .tr:first-child > .td {
+	border-top-color: var(--uf-border);
 }
 
 .table .th:first-child,
@@ -2559,6 +2699,18 @@ li.menu, .dropdown {
 	color: var(--uf-text-1);
 }
 
+/* A long unbroken value (a DUID, an IPv6 address) may break rather than
+ * push a read-only table out of its card; while the table fits, this
+ * changes nothing. In a list squeezed by a long column, a short column
+ * (a PID, a user) keeps its few characters whole. */
+.table:not(.cbi-section-table) .td {
+	overflow-wrap: anywhere;
+}
+
+:where(.table:not(.cbi-section-table):has(.tr.table-titles, .tr.cbi-section-table-titles)) .td {
+	min-width: 4em;
+}
+
 .tr.placeholder {
 	height: 64px;
 }
@@ -2572,6 +2724,16 @@ li.menu, .dropdown {
 	text-align: center;
 	color: var(--uf-text-3);
 	border-top: 0;
+}
+
+/* The message hangs from the table's bottom edge, so it can only do that
+ * from the last row; with a row after it (a "Total") it stays in its row. */
+.tr.placeholder:not(:last-child) {
+	height: auto;
+}
+
+.tr.placeholder:not(:last-child) > .td {
+	position: static;
 }
 
 .tr.placeholder > .td > em {
@@ -2592,12 +2754,36 @@ li.menu, .dropdown {
 	background-color: var(--uf-hover);
 }
 
-.cbi-section-table .tr:hover > .td:first-child {
+/* A list (a plain table with column titles, such as Startup's scripts or
+ * the mounted file systems) is hovered like an editable one; label/value
+ * tables, which have no titles, are not lists. */
+:where(.table:not(.cbi-section-table):has(.tr.table-titles, .tr.cbi-section-table-titles)) .tr:where(:not(.table-titles, .cbi-section-table-titles, .placeholder)):hover > .td {
+	background-color: var(--uf-hover);
+}
+
+/* Its first and last column are inset, so the tint has an edge. */
+:where(.table:not(.cbi-section-table):has(.tr.table-titles, .tr.cbi-section-table-titles)) .tr > :is(.th, .td):first-child {
+	padding-left: 8px;
+}
+
+:where(.table:not(.cbi-section-table):has(.tr.table-titles, .tr.cbi-section-table-titles)) .tr > :is(.th, .td):last-child {
+	padding-right: 8px;
+}
+
+.cbi-section-table .tr:hover > .td:first-child,
+:where(.table:has(.tr.table-titles, .tr.cbi-section-table-titles)) .tr:hover > .td:first-child {
 	border-radius: var(--uf-radius-sm) 0 0 var(--uf-radius-sm);
 }
 
-.cbi-section-table .tr:hover > .td:last-child {
+.cbi-section-table .tr:hover > .td:last-child,
+:where(.table:has(.tr.table-titles, .tr.cbi-section-table-titles)) .tr:hover > .td:last-child {
 	border-radius: 0 var(--uf-radius-sm) var(--uf-radius-sm) 0;
+}
+
+/* The hover tint is the fields' own grey in the light scheme; outline the
+ * fields of a hovered row, or they dissolve into it. */
+.cbi-section-table .tr:hover > .td :where(input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="reset"], [type="file"]), select, textarea, .cbi-dropdown:not(.btn, .cbi-button)):not(:focus, [open]) {
+	border-color: var(--uf-border-strong);
 }
 
 .cbi-section-table .td:first-child {
@@ -2713,6 +2899,19 @@ table table td,
 .td.cbi-section-actions .cbi-button.drag-handle {
 	flex: 0 0 auto;
 	padding: 0;
+}
+
+/* A list's row buttons are the small size and sit in a tighter cell, so
+ * a row with actions is as low as one without, about UniFi's 32px. */
+/* Kept weak (:where), so a page's own row buttons still win. */
+:where(.table:not(.cbi-section-table):has(.tr.table-titles, .tr.cbi-section-table-titles)) .td :is(.btn, .cbi-button):not(.cbi-dropdown) {
+	height: 28px;
+	padding: 0 12px;
+}
+
+:where(.table:not(.cbi-section-table):has(.tr.table-titles, .tr.cbi-section-table-titles)) .td:has(> :is(.btn, .cbi-button), > * > :is(.btn, .cbi-button)) {
+	padding-top: 2px;
+	padding-bottom: 2px;
 }
 
 .table.valign-middle .td {
@@ -2992,16 +3191,25 @@ a.label:hover {
 	color: var(--uf-on-accent);
 }
 
-.ifacebox .ifacebox-head[style],
+/* A zone's colour arrives inline, as --zone-color-rgb and a solid pastel
+ * background; wash it over the card instead. Only heads that carry a zone
+ * colour are tinted (Port status heads have inline layout styles). */
+.ifacebox .ifacebox-head[style*="--zone-color"],
 .zonebadge[style] {
 	background: rgba(var(--zone-color-rgb, 204, 204, 204), .45) !important;
 	color: var(--uf-text-1);
 }
 
-[data-darkmode="true"] .ifacebox .ifacebox-head[style],
+[data-darkmode="true"] .ifacebox .ifacebox-head[style*="--zone-color"],
 [data-darkmode="true"] .zonebadge[style] {
 	background: rgba(var(--zone-color-rgb, 204, 204, 204), .28) !important;
 }
+
+/* Port forwards give the colour as a hex background alone; LuCI's fixed
+ * ones (lan, wan, no zone) map back to their components. */
+.zonebadge[style*="#90f090"] { --zone-color-rgb: 144, 240, 144; }
+.zonebadge[style*="#f09090"] { --zone-color-rgb: 240, 144, 144; }
+.zonebadge[style*="#eeeeee"] { --zone-color-rgb: 238, 238, 238; }
 
 .ifacebox .ifacebox-body {
 	padding: 6px;
@@ -3038,6 +3246,64 @@ a.label:hover {
 .ifacebadge-active {
 	border-color: var(--uf-blue);
 	font-weight: 600;
+}
+
+/* LuCI fades an unused device's name to half opacity inline, which leaves
+ * it unreadable (3:1); quieter text says the same and can be read. */
+.ifacebadge > span[style*="opacity"] {
+	opacity: 1 !important; /* over the inline .5 */
+	color: var(--uf-text-3);
+}
+
+/* Device icons. LuCI's are Tango drawings in fixed greys and blues, which
+ * glare on a dark card and look foreign beside line icons anywhere. Keep
+ * the <img> (its size and title still matter), push its own picture out of
+ * the box and paint a line icon in its place, in the text colour (or
+ * --uf-device-color); dimmed when the device is down, green for a port
+ * with link. */
+img:is([src*="resources/icons/ethernet"], [src*="resources/icons/bridge"], [src*="resources/icons/wifi"], [src*="resources/icons/vlan"], [src*="resources/icons/alias"], [src*="resources/icons/tunnel"], [src*="resources/icons/wireguard"], [src*="resources/icons/switch"], [src*="resources/icons/vrf"], [src*="resources/icons/port_"]) {
+	--uf-device-icon: var(--uf-i-ethernet);
+	object-position: -9999px 0;
+	background-color: var(--uf-device-color, var(--uf-text-2));
+	-webkit-mask: var(--uf-device-icon) center / contain no-repeat;
+	mask: var(--uf-device-icon) center / contain no-repeat;
+}
+
+img[src*="resources/icons/bridge"] { --uf-device-icon: var(--uf-i-bridge); }
+img[src*="resources/icons/wifi"] { --uf-device-icon: var(--uf-i-wifi); }
+img[src*="resources/icons/vlan"] { --uf-device-icon: var(--uf-i-vlan); }
+img[src*="resources/icons/alias"] { --uf-device-icon: var(--uf-i-alias); }
+img[src*="resources/icons/tunnel"] { --uf-device-icon: var(--uf-i-tunnel); }
+img[src*="resources/icons/wireguard"] { --uf-device-icon: var(--uf-i-wireguard); }
+img[src*="resources/icons/switch"] { --uf-device-icon: var(--uf-i-switch); }
+img[src*="resources/icons/vrf"] { --uf-device-icon: var(--uf-i-vrf); }
+
+/* A port with link is green, as on UniFi's port map. */
+img:is([src*="resources/icons/port_up"], [src*="resources/icons/port_pse_up"]) {
+	--uf-device-color: var(--uf-green);
+}
+
+img:is([src*="resources/icons/"][src*="_disabled."], [src*="resources/icons/port_down"], [src*="resources/icons/port_pse_down"]) {
+	--uf-device-color: var(--uf-text-4);
+}
+
+/* Signal: UniFi's four-bar meter, filled to the level in the colour of
+ * its rating (Excellent, Good, Fair, Poor), grey bars for the rest. */
+img[src*="resources/icons/signal-"] {
+	object-position: -9999px 0;
+	background: linear-gradient(90deg, var(--uf-signal-color, var(--uf-green)) var(--uf-signal-level, 0%), var(--uf-border-strong) 0);
+	-webkit-mask: var(--uf-i-signal) center / contain no-repeat;
+	mask: var(--uf-i-signal) center / contain no-repeat;
+}
+
+img[src*="resources/icons/signal-075-100"] { --uf-signal-level: 100%; }
+img[src*="resources/icons/signal-050-075"] { --uf-signal-level: 75%; --uf-signal-color: var(--uf-lime); }
+img[src*="resources/icons/signal-025-050"] { --uf-signal-level: 50%; --uf-signal-color: var(--uf-orange); }
+img[src*="resources/icons/signal-000-025"] { --uf-signal-level: 25%; --uf-signal-color: var(--uf-red); }
+
+/* No signal at all (disabled): the empty meter, fainter still. */
+img[src*="resources/icons/signal-none"] {
+	opacity: .55;
 }
 
 .network-status-table {
@@ -3111,13 +3377,16 @@ a.label:hover {
 	width: 6em;
 }
 
+/* The networks a zone covers, beside its name in a zone picker: quieter
+ * text, not a box within the badge. */
 .zonebadge > .ifacebadge {
-	margin-left: 2px;
-	background: rgba(255, 255, 255, .55);
-}
-
-[data-darkmode="true"] .zonebadge > .ifacebadge {
-	background: rgba(0, 0, 0, .25);
+	display: inline;
+	margin-left: 4px;
+	padding: 0;
+	background: none;
+	border: 0;
+	color: inherit; /* grey fails on a strong zone tint in the dark */
+	font-weight: 400;
 }
 
 .zonebadge-empty {
@@ -3243,6 +3512,46 @@ body.modal-overlay-active #modal_overlay {
 
 .uci-dialog > .cbi-section > br {
 	display: none;
+}
+
+/* Options in a dialog ("Keep settings", "Force upgrade") are a checkbox
+ * that LuCI wraps in a button-styled label, around text that can be long
+ * and hold line breaks: draw a checkbox row, as a block, not a button. */
+.modal label.btn:has(> input[type="checkbox"]) {
+	--uf-btn-bg: transparent;
+	--uf-btn-line: transparent;
+	position: relative;
+	display: block;
+	height: auto;
+	padding: 0 0 0 26px;
+	color: var(--uf-text-1);
+	font-weight: 400;
+	line-height: 20px;
+	text-align: left;
+	white-space: normal;
+}
+
+.modal label.btn:has(> input[type="checkbox"]) > input {
+	position: absolute;
+	top: 2px;
+	left: 0;
+	margin: 0;
+}
+
+/* The dangerous one is a red notice, its checkbox where the icon goes. */
+.modal label.btn.alert-message:has(> input[type="checkbox"]) {
+	--uf-btn-bg: rgba(var(--uf-red-rgb), .08);
+	--uf-btn-line: rgba(var(--uf-red-rgb), .35);
+	padding: 12px 16px 12px 44px;
+}
+
+.modal label.btn.alert-message:has(> input[type="checkbox"])::before {
+	content: none;
+}
+
+.modal label.btn.alert-message:has(> input[type="checkbox"]) > input {
+	top: 14px;
+	left: 16px;
 }
 
 .modal .cbi-value label.cbi-value-title {
@@ -3630,7 +3939,14 @@ body.modal-overlay-active #modal_overlay {
 	filter: invert(100%) hue-rotate(180deg);
 }
 
-/* Realtime graphs draw their own SVG with inline colours. */
+/* Realtime graphs draw their own SVG, in a box framed in black on white,
+ * with white labels on a black shadow, all inline. */
+#view div[style*="border:1px solid #000"] {
+	background: var(--uf-surface) !important; /* over the inline white */
+	border-color: var(--uf-border) !important; /* over the inline black */
+	border-radius: var(--uf-radius);
+}
+
 #view div[style] > svg {
 	background-color: var(--uf-surface) !important;
 	border-radius: var(--uf-radius-sm);
@@ -3641,7 +3957,9 @@ body.modal-overlay-active #modal_overlay {
 }
 
 #view div[style] > svg text {
-	fill: var(--uf-text-3);
+	fill: var(--uf-text-3) !important; /* over the inline #eee */
+	font-family: var(--uf-font) !important;
+	text-shadow: none !important;
 }
 
 /* Sign-in
@@ -3854,13 +4172,16 @@ body.uf-blank {
 	}
 
 	/* The hostname gives way to the tools, and polling shrinks to its dot
-	 * (or goes, while changes are pending), so "Unsaved Changes" fits. */
+	 * (or goes, while changes are pending), so "Unsaved Changes" fits.
+	 * Both may shrink, the hostname first, rather than push the page
+	 * sideways when a view's own CSS widens the tools. */
 	.uf-apps {
-		flex: 0 1 auto;
+		flex: 0 100 auto;
+		overflow: hidden;
 	}
 
 	.uf-tools {
-		flex: 1 0 auto;
+		flex: 1 1 auto;
 		gap: 4px;
 	}
 
@@ -3944,10 +4265,21 @@ body.uf-blank {
 		margin: 0;
 	}
 
+	/* A list's "add" field keeps its + beside it (NTP servers, DNS
+	 * servers) instead of wrapping it under a full-width field. */
+	.cbi-dynlist > .add-item {
+		flex-wrap: nowrap;
+	}
+
+	.cbi-dynlist > .add-item > input {
+		min-width: 0;
+	}
+
 	/* 16px keeps iOS from zooming into a focused field; buttons that are
-	 * dropdowns ("Save & Apply") are not fields. */
+	 * dropdowns ("Save & Apply") are not fields, and a read-only console
+	 * (Diagnostics' output, the system log) is never edited. */
 	input:not([type="button"]):not([type="submit"]):not([type="reset"]),
-	textarea, select,
+	textarea:not([readonly]), select,
 	.cbi-dropdown:not(.btn):not(.cbi-button) > ul > li {
 		font-size: 16px !important;
 	}
@@ -3987,11 +4319,24 @@ body.uf-blank {
 		display: inline-block;
 		flex: 1 1 50%;
 		align-self: flex-start;
-		padding: 4px 6px !important;
 		border: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		word-wrap: break-word;
+	}
+
+	/* Specific enough to beat the desktop's edge and column paddings, not
+	 * so much that a page cannot set its own. */
+	.table .tr > .th,
+	.table .tr > .td,
+	.table .tr::before {
+		padding: 4px 6px;
+	}
+
+	/* LuCI centres some columns (a signal reading) with an !important
+	 * utility; stacked under its label, a value starts where the label does. */
+	.table .td.center[data-title] {
+		text-align: left !important;
 	}
 
 	.table .td.cbi-dropdown-open {
@@ -4092,7 +4437,8 @@ body.uf-blank {
 		text-align: left;
 	}
 
-	.cbi-section-table .tr:hover > .td {
+	/* No row hover: a touch leaves it stuck on a row. */
+	.table .tr:hover > .td {
 		background-color: transparent !important;
 	}
 
@@ -4108,8 +4454,9 @@ body.uf-blank {
 		flex-basis: 40%;
 	}
 
+	/* The row actions keep a line of their own. */
 	#wifi_assoclist_table .td,
-	[data-page="admin-status-processes"] .td {
+	[data-page="admin-status-processes"] .td:not(.cbi-section-actions) {
 		flex-basis: 50% !important;
 	}
 
@@ -4117,7 +4464,7 @@ body.uf-blank {
 		flex-basis: 33% !important;
 	}
 
-	[data-page="admin-system-fstab"] .td[data-widget="button"]::before,
+	[data-page="admin-system-mounts"] .td[data-widget="button"]::before,
 	[data-page="admin-system-startup"] .td[data-widget="button"]::before,
 	[data-page="admin-status-processes"] .td[data-widget="button"]::before {
 		display: none;
@@ -4359,11 +4706,11 @@ body.uf-blank {
 }
 
 .Dashboard .dashboard-charts > .cbi-section:has(.dashboard-lines-plot) .dashboard-legend-inline span:nth-child(1) b {
-	color: var(--uf-cyan);
+	color: var(--uf-cyan-text);
 }
 
 .Dashboard .dashboard-charts > .cbi-section:has(.dashboard-lines-plot) .dashboard-legend-inline span:nth-child(2) b {
-	color: var(--uf-purple);
+	color: var(--uf-purple-text);
 }
 
 .Dashboard .dashboard-charts > .cbi-section:has(polyline.dashboard-series-2):not(:has(polygon.dashboard-series-2)) {
@@ -4480,12 +4827,6 @@ body.uf-blank {
 
 .Dashboard > .cbi-map {
 	margin-top: 8px;
-}
-
-/* The inactive panes are .cbi-section cards: collapsed to height 0 they
- * would still show their padding and border as empty strips. */
-.Dashboard .cbi-map-tabbed > [data-tab]:not([data-tab-active="true"]) {
-	display: none;
 }
 
 .Dashboard .cbi-map-tabbed > .cbi-section h3 {
@@ -4663,15 +5004,9 @@ body.uf-blank {
 	font-variant-numeric: tabular-nums;
 }
 
-/* The empty list's message is followed by the "Total" row here, so it
- * cannot hang at the table's bottom edge as elsewhere; and "Total 0"
- * under "No active leases" says nothing more. */
-.Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .tr.placeholder {
-	height: auto;
-}
-
+/* The empty list's message stays in its row here (the "Total" row follows
+ * it), and "Total 0" under "No active leases" says nothing more. */
 .Dashboard :is([data-tab="dhcp"], [data-tab="wifi"]) .tr.placeholder > .td {
-	position: static;
 	padding: 24px 8px;
 }
 
@@ -4771,22 +5106,18 @@ body.uf-blank {
 	background: var(--uf-text-3);
 }
 
-/* Inside the tab's card the actions are its footer, not a second card. */
+/* The tab's actions (flattened by the base) are its footer, under a rule. */
 .Dashboard [data-tab="layout"] .cbi-page-actions {
-	margin: 12px 0 0;
-	padding: 12px 0 0;
-	border: 0;
+	margin-top: 12px;
+	padding-top: 12px;
 	border-top: 1px solid var(--uf-border);
-	border-radius: 0;
-	box-shadow: none;
 }
 
 .Dashboard [data-tab="layout"] .cbi-map {
 	margin-bottom: 0;
 }
 
-/* Phones: the KPI tiles pair up, icon above the figures; the tab strip
- * scrolls instead of cutting its titles short. */
+/* Phones: the KPI tiles pair up, icon above the figures. */
 @media screen and (max-width: 640px) {
 	.Dashboard .dashboard-kpi-row > .dashboard-kpi {
 		flex: 1 1 calc(50% - var(--dashboard-gap));
@@ -4813,25 +5144,6 @@ body.uf-blank {
 	.Dashboard .dashboard-kpi-value {
 		font-size: 19px;
 		line-height: 24px;
-	}
-
-	.Dashboard .cbi-tabmenu > li {
-		flex: 0 0 auto;
-	}
-
-	.Dashboard .cbi-tabmenu > li > a {
-		overflow: visible;
-	}
-
-	/* The stacked-table rules pad every cell; keep the rows flush, and lift
-	 * a bar's figure by that padding back onto its label's line. */
-	.Dashboard :is([data-tab="internet"], [data-tab="system"], [data-tab="resources"]) .tr {
-		margin: 0 -6px;
-		padding: 4px 0;
-	}
-
-	.Dashboard [data-tab="resources"] .cbi-progressbar::before {
-		top: -34px;
 	}
 
 	/* The header row is hidden here; no rule above the empty message. */
@@ -5083,7 +5395,7 @@ body.uf-blank {
 
 .uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox > .ifacebox-head:first-child {
 	padding: 0;
-	background: none !important; /* over the zone tint the base gives styled heads */
+	background: none;
 	border: 0;
 	color: var(--uf-text-1);
 	font-size: 12px;
@@ -5130,7 +5442,7 @@ body.uf-blank {
 .uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox > .ifacebox-head.cbi-tooltip-container {
 	gap: 2px;
 	padding: 0 6px;
-	background: none !important; /* over the zone tint the base gives styled heads */
+	background: none;
 	border: 0;
 }
 
@@ -5144,7 +5456,7 @@ body.uf-blank {
 }
 
 .uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox > .ifacebox-body:last-child > .cbi-tooltip-container {
-	color: var(--uf-cyan);
+	color: var(--uf-cyan-text);
 	font-size: 11px !important; /* over the inline 80% */
 	line-height: 15px;
 	text-align: center !important; /* over the inline left */
@@ -5153,7 +5465,7 @@ body.uf-blank {
 
 /* "▲ sent" on the first line, "▼ received" on the second. */
 .uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox > .ifacebox-body:last-child > .cbi-tooltip-container::first-line {
-	color: var(--uf-purple);
+	color: var(--uf-purple-text);
 }
 
 .uf-page:has(> .includes) div[style*="grid-template-columns"] > .ifacebox .cbi-tooltip {
@@ -5351,12 +5663,6 @@ body[data-page="admin-status-channel_analysis"] .ifacebadge > img[src*="/signal-
 .uf-page:has(> .includes) #view .table .td .cbi-button {
 	height: 28px;
 	padding: 0 12px;
-}
-
-/* DUIDs and IPv6 addresses are long unbroken strings; let them wrap
- * rather than push the table out of its card. */
-.uf-page:has(> .includes) #status_leases6 .td {
-	overflow-wrap: anywhere;
 }
 
 /* Associated stations: the network as a Wi-Fi glyph and a name, the
@@ -5713,10 +6019,7 @@ body[data-page^="admin-status-realtime"] #view svg line[y1="0"][y2="100%"] {
 }
 
 body[data-page^="admin-status-realtime"] #view svg text {
-	fill: var(--uf-text-3) !important; /* over the inline #eee */
-	font-family: var(--uf-font) !important;
-	font-size: 11px !important;
-	text-shadow: none !important;
+	font-size: 11px !important; /* over the inline size */
 }
 
 body[data-page^="admin-status-realtime"] #view svg polyline {
@@ -5825,12 +6128,9 @@ body[data-page="admin-status-channel_analysis"] .cbi-title-section > h2 {
 	margin: 0;
 }
 
-/* The graph, framed and white inline: a card like the others. */
+/* The graph is a card like the others (the base recolours its frame). */
 body[data-page="admin-status-channel_analysis"] #channel_graph {
 	padding: 0;
-	background: var(--uf-surface) !important; /* over the inline #fff */
-	border: 1px solid var(--uf-border) !important; /* over the inline black */
-	border-radius: var(--uf-radius);
 	overflow: hidden;
 }
 
@@ -5843,19 +6143,14 @@ body[data-page="admin-status-channel_analysis"] #channel_graph line[style*="widt
 }
 
 body[data-page="admin-status-channel_analysis"] #channel_graph svg > text {
-	fill: var(--uf-text-3) !important; /* over the inline #eee */
-	font-family: var(--uf-font) !important;
-	font-size: 11px !important;
-	text-shadow: none !important;
+	font-size: 11px !important; /* over the inline size */
 }
 
 /* Network names in ink: the hue is on the area and on the table's dot. */
 body[data-page="admin-status-channel_analysis"] #channel_graph g > text {
 	fill: var(--uf-text-1) !important;
-	font-family: var(--uf-font) !important;
 	font-size: 11px !important;
 	font-weight: 600;
-	text-shadow: none !important;
 }
 
 body[data-page="admin-status-channel_analysis"] #channel_graph g > polyline:first-child {
@@ -5912,7 +6207,7 @@ body[data-page="admin-status-channel_analysis"] .table .td:nth-child(2) {
 
 	.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) > .tr > .td {
 		flex-basis: auto;
-		padding: 0 !important; /* over the base's stacked-cell padding */
+		padding: 0;
 	}
 
 	.uf-page:has(> .includes) .table:has(> .tr > .td[width="33%"]) > .tr > .td[width="33%"] + .td {
@@ -5945,11 +6240,6 @@ body[data-page="admin-status-channel_analysis"] .table .td:nth-child(2) {
 		padding: 4px 14px;
 	}
 
-	/* The three signal buttons on a line of their own. */
-	body[data-page="admin-status-processes"] #view > .table .td.cbi-section-actions {
-		flex-basis: 100% !important; /* over the base's 50% for this page */
-	}
-
 	body[data-page^="admin-status-nftables"] .nft-chain {
 		padding: 14px;
 	}
@@ -5967,77 +6257,15 @@ body[data-page="admin-status-channel_analysis"] .table .td:nth-child(2) {
 /* ==== page: network ==== */
 /* Network pages: Interfaces, Wireless, Routing, DHCP, DNS and Diagnostics.
  * UniFi draws state as a small dot before a name, device kinds as quiet
- * line icons and signal as a bar meter; LuCI's views bring their own
- * full-colour icons and bold "Label:" runs, so those are redrawn here. */
+ * line icons and signal as a bar meter; LuCI's views bring bold
+ * "Label:" runs, so those are redrawn here. The base draws the device
+ * icons and the signal meter. */
 
-:root {
-	/* Device kinds, on the same 24px grid as the chrome's icons. */
-	--uf-network-i-ethernet: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'><rect x='3.75' y='4.75' width='16.5' height='14.5' rx='2.5'/><path d='M8 8.75h8v5.5h-2v2h-4v-2H8Z'/></svg>");
-	--uf-network-i-bridge: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><rect x='2.75' y='7.75' width='7' height='8.5' rx='1.75'/><rect x='14.25' y='7.75' width='7' height='8.5' rx='1.75'/><path d='M9.75 12h4.5M6.25 7.75V5.5h11.5v2.25'/></svg>");
-	--uf-network-i-wifi: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><path d='M3.25 9.25a12.5 12.5 0 0 1 17.5 0M6.25 12.5a8.25 8.25 0 0 1 11.5 0M9.25 15.75a4 4 0 0 1 5.5 0'/><circle cx='12' cy='19' r='1.1' fill='black'/></svg>");
-	--uf-network-i-vlan: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'><path d='M3.75 3.75h7l9.5 9.5-7 7-9.5-9.5Z'/><circle cx='7.75' cy='7.75' r='1.5'/></svg>");
-	--uf-network-i-alias: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><path d='M10.25 13.75a3.75 3.75 0 0 0 5.3 0l3.2-3.2a3.75 3.75 0 0 0-5.3-5.3l-1.2 1.2M13.75 10.25a3.75 3.75 0 0 0-5.3 0l-3.2 3.2a3.75 3.75 0 0 0 5.3 5.3l1.2-1.2'/></svg>");
-	--uf-network-i-tunnel: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><path d='M3.75 19.75V11.5a8.25 8.25 0 0 1 16.5 0v8.25ZM8.25 19.75V12a3.75 3.75 0 0 1 7.5 0v7.75'/></svg>");
-	--uf-network-i-wireguard: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><rect x='4.75' y='10.25' width='14.5' height='10' rx='2'/><path d='M8 10.25V7.75a4 4 0 0 1 8 0v2.5M12 14.25v2'/></svg>");
-	--uf-network-i-switch: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><rect x='2.75' y='6.75' width='18.5' height='10.5' rx='2'/><path d='M6.5 11h2M11 11h2M15.5 11h2M6.5 14h11'/></svg>");
-	--uf-network-i-vrf: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><path d='M12 3.75 20.25 8 12 12.25 3.75 8Z'/><path d='m3.75 12 8.25 4.25L20.25 12M3.75 16l8.25 4.25L20.25 16'/></svg>");
-	/* Four bars, each in its own quarter of the width, so a hard-stop
-	 * gradient under the mask fills exactly as many as the level says. */
-	--uf-network-i-signal: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect x='1.5' y='15' width='3' height='5.5' rx='1'/><rect x='7.5' y='11' width='3' height='9.5' rx='1'/><rect x='13.5' y='7' width='3' height='13.5' rx='1'/><rect x='19.5' y='3' width='3' height='17.5' rx='1'/></svg>");
-}
-
-/* Device icons
- * ------------
- * LuCI's icons are Tango-style drawings in fixed greys and blues, which
- * glare in dark mode. Keep the <img> (its size and title still matter),
- * push its own picture out of its box and paint a line icon in its place,
- * in the text colour, dimmed when the device is down. */
-
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img:is([src*="/icons/ethernet"], [src*="/icons/bridge"], [src*="/icons/wifi"], [src*="/icons/vlan"], [src*="/icons/alias"], [src*="/icons/tunnel"], [src*="/icons/wireguard"], [src*="/icons/switch"], [src*="/icons/vrf"], [src*="/icons/port_"]) {
-	object-position: -9999px 0;
-	background-color: var(--uf-network-icon-color, var(--uf-text-2));
-	-webkit-mask: var(--uf-network-icon, var(--uf-network-i-ethernet)) center / contain no-repeat;
-	mask: var(--uf-network-icon, var(--uf-network-i-ethernet)) center / contain no-repeat;
-}
-
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img[src*="/icons/bridge"] { --uf-network-icon: var(--uf-network-i-bridge); }
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img[src*="/icons/wifi"] { --uf-network-icon: var(--uf-network-i-wifi); }
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img[src*="/icons/vlan"] { --uf-network-icon: var(--uf-network-i-vlan); }
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img[src*="/icons/alias"] { --uf-network-icon: var(--uf-network-i-alias); }
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img[src*="/icons/tunnel"] { --uf-network-icon: var(--uf-network-i-tunnel); }
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img[src*="/icons/wireguard"] { --uf-network-icon: var(--uf-network-i-wireguard); }
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img[src*="/icons/switch"] { --uf-network-icon: var(--uf-network-i-switch); }
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img[src*="/icons/vrf"] { --uf-network-icon: var(--uf-network-i-vrf); }
-
-/* A port with link is green, as on UniFi's port map. */
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img:is([src*="/icons/port_up"], [src*="/icons/port_pse_up"]) {
-	--uf-network-icon-color: var(--uf-green);
-}
-
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"], [data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"], [data-page="admin-network-diagnostics"]) img:is([src*="_disabled."], [src*="/icons/port_down"], [src*="/icons/port_pse_down"]) {
-	--uf-network-icon-color: var(--uf-text-4);
-}
-
-/* Signal: UniFi's bar meter, filled to the level in the colour of its
- * rating (Excellent, Good, Fair, Poor), grey bars for the rest. */
+/* The signal meter at the size of the text beside it. */
 :is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) img[src*="/icons/signal-"] {
 	width: 20px;
 	height: 20px;
-	object-position: -9999px 0;
-	background: linear-gradient(90deg, var(--uf-network-bars, var(--uf-green)) var(--uf-network-level, 0%), var(--uf-border-strong) 0);
-	-webkit-mask: var(--uf-network-i-signal) center / contain no-repeat;
-	mask: var(--uf-network-i-signal) center / contain no-repeat;
 	vertical-align: middle;
-}
-
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) img[src*="/icons/signal-075-100"] { --uf-network-level: 100%; }
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) img[src*="/icons/signal-050-075"] { --uf-network-level: 75%; --uf-network-bars: var(--uf-lime); }
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) img[src*="/icons/signal-025-050"] { --uf-network-level: 50%; --uf-network-bars: var(--uf-orange); }
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) img[src*="/icons/signal-000-025"] { --uf-network-level: 25%; --uf-network-bars: var(--uf-red); }
-
-/* Disabled: the empty meter, fainter still. */
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) img[src*="/icons/signal-none"] {
-	opacity: .55;
 }
 
 /* Values LuCI marks as unset ("none", "unspecified", "any") are grey, as
@@ -6271,23 +6499,6 @@ body[data-page="admin-status-channel_analysis"] .table .td:nth-child(2) {
 	font-weight: 400;
 }
 
-/* A chosen device in a multiple choice (Bridge ports) is a blue chip: its
- * icon small and in the chip's blue, centred on the name. */
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .cbi-dropdown[multiple]:not([open]) > ul > li[display] > label {
-	align-items: center;
-	gap: 4px;
-}
-
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .cbi-dropdown[multiple]:not([open]) > ul > li[display] > label > span {
-	align-self: center;
-}
-
-:is([data-page="admin-network-network"], [data-page="admin-network-wireless"]) .cbi-dropdown[multiple]:not([open]) > ul > li[display] img {
-	width: 14px;
-	height: 14px;
-	--uf-network-icon-color: currentColor;
-}
-
 /* The status block at the top of the interface and wireless dialogs:
  * UniFi's device panel, a tinted block with the icon (or the meter) and
  * label/value lines beside it. */
@@ -6518,7 +6729,7 @@ body[data-page="admin-status-channel_analysis"] .table .td:nth-child(2) {
 	display: inline-block;
 	width: 1em;
 	text-indent: 0;
-	color: var(--uf-cyan);
+	color: var(--uf-cyan-text);
 	font-weight: 600;
 }
 
@@ -6527,7 +6738,7 @@ body[data-page="admin-status-channel_analysis"] .table .td:nth-child(2) {
 	display: inline-block;
 	width: 1em;
 	text-indent: 0;
-	color: var(--uf-purple);
+	color: var(--uf-purple-text);
 	font-weight: 600;
 }
 
@@ -6754,6 +6965,7 @@ body[data-page="admin-status-channel_analysis"] .table .td:nth-child(2) {
 	/* The tile keeps its width; the status takes the rest, one pair a line. */
 	[data-page="admin-network-network"] #cbi-network-interface .td[data-name="_ifacebox"] {
 		flex: 0 0 124px;
+		padding-right: 6px;
 	}
 
 	[data-page="admin-network-network"] #cbi-network-interface .td[data-name="_ifacestat"] {
@@ -6806,20 +7018,17 @@ body[data-page="admin-status-channel_analysis"] .table .td:nth-child(2) {
 		min-width: max-content;
 	}
 
-	/* Stacked under its label, the reading starts where the label does
-	 * (a column, since LuCI's .center insists on centred text). */
-	[data-page="admin-network-wireless"] .modal .td:has(.ifacebadge[data-signal]) {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-	}
-
 	[data-page="admin-network-diagnostics"] .cbi-map > .table > .tr,
 	[data-page="admin-network-diagnostics"] .cbi-map > .table > .tbody > .tr {
 		grid-template-columns: minmax(0, 1fr);
 		gap: 4px;
 		padding: 0;
 		border: 0;
+	}
+
+	/* The stacked cells' padding (the page's own is 0 on wide screens). */
+	[data-page="admin-network-diagnostics"] .cbi-map > .table .td {
+		padding: 4px 6px;
 	}
 
 	[data-page="admin-network-diagnostics"] #command-output > textarea {
@@ -6892,15 +7101,6 @@ body[data-page^="admin-network-firewall"] .zonebadge[style]::before {
 	background: color-mix(in srgb, rgb(var(--zone-color-rgb, 204, 204, 204)), var(--uf-text-1) var(--uf-firewall-zone-shade));
 }
 
-/* Port forwards name the colour as hex alone; lan and wan are fixed. */
-body[data-page^="admin-network-firewall"] .zonebadge[style*="#90f090"] {
-	--zone-color-rgb: 144, 240, 144;
-}
-
-body[data-page^="admin-network-firewall"] .zonebadge[style*="#f09090"] {
-	--zone-color-rgb: 240, 144, 144;
-}
-
 /* "This device" and "any zone" are LuCI's grey: a plain neutral chip. */
 body[data-page^="admin-network-firewall"] .zonebadge[style*="238, 238, 238"],
 body[data-page^="admin-network-firewall"] .zonebadge[style*="#eeeeee"] {
@@ -6924,19 +7124,9 @@ body[data-page^="admin-network-firewall"] .zonebadge > strong {
 	font-weight: 600;
 }
 
-body[data-page^="admin-network-firewall"] .zonebadge > strong + em,
-body[data-page^="admin-network-firewall"] .zonebadge > .ifacebadge {
+body[data-page^="admin-network-firewall"] .zonebadge > strong + em {
 	margin-left: 4px;
 	color: var(--uf-text-2);
-}
-
-/* The networks a zone covers, beside its name in a zone picker. */
-body[data-page^="admin-network-firewall"] .zonebadge > .ifacebadge {
-	display: inline;
-	padding: 0;
-	background: none;
-	border: 0;
-	font-weight: 400;
 }
 
 /* "REJECT all others": the default, not a zone. */
@@ -7074,11 +7264,9 @@ body[data-page^="admin-network-firewall"] .td[data-name^="_"] var.cbi-tooltip-co
 	border-bottom-color: var(--uf-text-4);
 }
 
-/* A value's tooltip ("ICMP with types echo-request") is the dark tip: its
- * text, values included, in the tip's colour, not the card's. */
-body[data-page^="admin-network-firewall"] .td[data-name^="_"] var.cbi-tooltip-container .cbi-tooltip,
+/* Values quoted inside a value's tooltip are the tip's text, not ink. */
 body[data-page^="admin-network-firewall"] .td[data-name^="_"] .cbi-tooltip var {
-	color: var(--uf-tip-fg);
+	color: inherit;
 }
 
 /* The verdict opens the action as a status pill: accept green, reject and
@@ -7154,7 +7342,7 @@ body[data-page="admin-network-firewall-ipsets"] .td[data-name="entry"] {
 }
 
 body[data-page="admin-network-firewall-ipsets"] .td[data-name="loadfile"] > em {
-	color: var(--uf-text-4);
+	color: var(--uf-text-3);
 	font-style: normal;
 }
 
@@ -7181,25 +7369,6 @@ body[data-page^="admin-network-firewall"] #cbi-firewall-fwver::before {
 body[data-page^="admin-network-firewall"] #cbi-firewall-fwver > .cbi-section-descr {
 	margin: 0;
 	color: var(--uf-text-1);
-}
-
-/* An empty multiple choice ("unspecified") starts where a field's text
- * does, like every other placeholder. */
-body[data-page^="admin-network-firewall"] .cbi-dropdown[empty] > .more {
-	justify-content: flex-start;
-	padding: 0 10px;
-}
-
-body[data-page^="admin-network-firewall"] .cbi-dropdown[empty] > .more > em,
-body[data-page^="admin-network-firewall"] .cbi-dropdown > ul > li[placeholder] > em {
-	color: var(--uf-text-4);
-	font-style: normal;
-}
-
-/* The row hover tint is the fields' own grey in the light scheme, so a
- * hovered zone's policy fields would dissolve; outline them. */
-body[data-page^="admin-network-firewall"] .cbi-section-table-row:hover select {
-	border-color: var(--uf-border-strong);
 }
 
 /* Status > Firewall: the nftables ruleset
@@ -7560,10 +7729,7 @@ body[data-page^="admin-status-nftables"] #view > em {
  * only their views render. */
 
 :root {
-	/* A password field's reveal button, shown and hidden, and the badge
-	 * on an SSH key. */
-	--uf-system-i-eye: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'><path d='M2.75 12S6.25 5.75 12 5.75 21.25 12 21.25 12 17.75 18.25 12 18.25 2.75 12 2.75 12Z'/><circle cx='12' cy='12' r='3'/></svg>");
-	--uf-system-i-eye-off: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round' stroke-linecap='round'><path d='M2.75 12S6.25 5.75 12 5.75 21.25 12 21.25 12 17.75 18.25 12 18.25 2.75 12 2.75 12Z'/><circle cx='12' cy='12' r='3'/><path d='m4 4 16 16'/></svg>");
+	/* The badge on an SSH key. */
 	--uf-system-i-key: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><circle cx='8' cy='15.5' r='4.25'/><path d='m11 12.5 8.5-8.5M16.5 7l2.5 2.5M14.5 9l2 2'/></svg>");
 }
 
@@ -7576,19 +7742,6 @@ body[data-page="admin-system-admin-sshkeys"] #view .cbi-section-node {
 	background: var(--uf-surface);
 	border: 1px solid var(--uf-border);
 	border-radius: var(--uf-radius);
-}
-
-/* A page action bar inside a card is the card's last row, not a second
- * floating card. */
-body[data-page="admin-system-startup"] #view [data-tab] .cbi-page-actions,
-body[data-page="admin-system-flash"] .cbi-section .cbi-page-actions {
-	position: static;
-	margin: 0;
-	padding: 16px 0 0;
-	background: none;
-	border: 0;
-	border-radius: 0;
-	box-shadow: none;
 }
 
 /* Code-like text (crontab, rc.local, the backup list) is edited in the
@@ -7652,7 +7805,7 @@ body[data-page="admin-system-system"] .cbi-value[data-name="_systime"] .cbi-butt
 	--uf-system-thumb-dark-canvas: #131416;
 	--uf-system-thumb-dark-card: #232528;
 	--uf-system-thumb-dark-line: #3a3d43;
-	--uf-system-thumb-dark-accent: #4797ff;
+	--uf-system-thumb-dark-accent: #5aa2ff;
 }
 
 body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value^="/luci-static/unifi"]:checked) {
@@ -7709,33 +7862,7 @@ body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi
 }
 
 /* Administration
- * --------------
- * The password reveal toggle is an eye, crossed out while it shows. */
-body[data-page^="admin-system-"] .control-group > .cbi-input-password + .cbi-button {
-	--uf-btn-fg: var(--uf-text-3);
-	flex: 0 0 auto;
-	width: var(--uf-control-h);
-	padding: 0;
-	font-size: 0;
-}
-
-body[data-page^="admin-system-"] .control-group > .cbi-input-password + .cbi-button:hover {
-	--uf-btn-fg: var(--uf-text-1);
-}
-
-body[data-page^="admin-system-"] .control-group > .cbi-input-password + .cbi-button::before {
-	content: "";
-	width: 18px;
-	height: 18px;
-	background: currentColor;
-	-webkit-mask: var(--uf-system-i-eye) center / contain no-repeat;
-	mask: var(--uf-system-i-eye) center / contain no-repeat;
-}
-
-body[data-page^="admin-system-"] .control-group > .cbi-input-password[type="text"] + .cbi-button::before {
-	-webkit-mask-image: var(--uf-system-i-eye-off);
-	mask-image: var(--uf-system-i-eye-off);
-}
+ * -------------- */
 
 /* SSH-Keys: one row per key, as in a UniFi list. A key badge, the key's
  * comment in the primary colour, its type and fingerprint in grey under
@@ -7842,16 +7969,6 @@ body[data-page="admin-system-admin-repokeys"] .table textarea[readonly] {
 	resize: none;
 }
 
-/* The key table has no header over its Delete column, so the header's
- * rule would stop short of it; draw the rule on the first row instead. */
-body[data-page="admin-system-admin-repokeys"] .cbi-section-table .th {
-	border-bottom: 0;
-}
-
-body[data-page="admin-system-admin-repokeys"] .cbi-section-table .tbody > .tr:first-child > .td {
-	border-top: 1px solid var(--uf-border);
-}
-
 body[data-page="admin-system-admin-repokeys"] .cbi-value[data-name="_newkey"] > output {
 	display: block;
 	width: 100%;
@@ -7877,10 +7994,6 @@ body[data-page="admin-system-admin-repokeys"] .cbi-value[data-name="_newkey"] .r
 body[data-page="admin-system-startup"] .table .td {
 	padding-top: 5px;
 	padding-bottom: 5px;
-}
-
-body[data-page="admin-system-startup"] .table .tr:not(.table-titles):hover > .td {
-	background-color: var(--uf-hover);
 }
 
 body[data-page="admin-system-startup"] .table .th:first-child,
@@ -8152,10 +8265,6 @@ body[data-page="admin-system-mounts"] #cbi-fstab-global .table .td {
 	font-variant-numeric: tabular-nums;
 }
 
-body[data-page="admin-system-mounts"] #cbi-fstab-global .table .tr:not(.table-titles):hover > .td {
-	background-color: var(--uf-hover);
-}
-
 body[data-page="admin-system-mounts"] #cbi-fstab-global .table .td:nth-child(2) {
 	color: var(--uf-text-1);
 }
@@ -8294,48 +8403,6 @@ body[data-page="admin-system-flash"] .modal > ul {
 
 body[data-page="admin-system-flash"] .modal > ul > li {
 	line-height: 20px;
-}
-
-/* Options in the flash and upgrade dialogs are checkboxes that LuCI
- * wraps in a button-styled label; draw them as a checkbox row, and the
- * "Force upgrade" one as a red notice with its checkbox in the icon's
- * place. Their text has line breaks in it, so they stay blocks. */
-body[data-page="admin-system-flash"] .modal p > label.btn,
-body[data-page="admin-system-attendedsysupgrade-overview"] .modal label.btn:has(> input[type="checkbox"]) {
-	--uf-btn-bg: transparent;
-	--uf-btn-line: transparent;
-	position: relative;
-	display: block;
-	height: auto;
-	padding: 0 0 0 26px;
-	color: var(--uf-text-1);
-	font-weight: 400;
-	line-height: 20px;
-	text-align: left;
-	white-space: normal;
-}
-
-body[data-page="admin-system-flash"] .modal p > label.btn > input,
-body[data-page="admin-system-attendedsysupgrade-overview"] .modal label.btn > input[type="checkbox"] {
-	position: absolute;
-	top: 2px;
-	left: 0;
-	margin: 0;
-}
-
-body[data-page="admin-system-flash"] .modal p > label.btn.alert-message {
-	--uf-btn-bg: rgba(var(--uf-red-rgb), .08);
-	--uf-btn-line: rgba(var(--uf-red-rgb), .35);
-	padding: 12px 16px 12px 44px;
-}
-
-body[data-page="admin-system-flash"] .modal p > label.btn.alert-message::before {
-	content: none;
-}
-
-body[data-page="admin-system-flash"] .modal p > label.btn.alert-message > input {
-	top: 14px;
-	left: 16px;
 }
 
 /* The image check's log lines are newline-separated; keep them apart. The
@@ -8744,16 +8811,6 @@ body[data-page="admin-system-package-manager"] .modal > h5 + textarea {
 		padding: 14px;
 	}
 
-	/* A list's "add" field keeps its + button beside it (NTP servers,
-	 * rebuilders) rather than dropping it to a line of its own. */
-	body[data-page^="admin-system-"] .cbi-dynlist > .add-item {
-		flex-wrap: nowrap;
-	}
-
-	body[data-page^="admin-system-"] .cbi-dynlist > .add-item > input {
-		min-width: 0;
-	}
-
 	/* The theme thumbnail goes under the full-width picker. */
 	body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value^="/luci-static/unifi"]:checked) {
 		grid-template-columns: minmax(0, 1fr);
@@ -8778,12 +8835,6 @@ body[data-page="admin-system-package-manager"] .modal > h5 + textarea {
 
 	body[data-page="admin-system-startup"] .td .cbi-button-action {
 		flex: 1 1 0;
-	}
-
-	body[data-page="admin-system-startup"] .table .tr:not(.table-titles):hover > .td,
-	body[data-page="admin-system-mounts"] #cbi-fstab-global .table .tr:not(.table-titles):hover > .td,
-	body[data-page="admin-system-package-manager"] #packages .tr:not(.cbi-section-table-titles):not(.placeholder):hover > .td {
-		background-color: transparent;
 	}
 
 	body[data-page="admin-system-startup"] .table .td:first-child {
