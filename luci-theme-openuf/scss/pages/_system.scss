@@ -1,31 +1,68 @@
-/* ==== page: system ==== */
+// System pages: System, Administration, Software, Startup, Scheduled Tasks,
+// Mount Points, LED Configuration, Attended Sysupgrade, Backup / Flash
+// Firmware and Reboot. Rules are scoped to those pages' data-page, or to
+// markup only their views render.
+@use 'sass:map';
+@use '../abstracts' as *;
 
-/* System pages
- * ------------
- * System, Administration, Software, Startup, Scheduled Tasks, Mount
- * Points, LED Configuration, Attended Sysupgrade, Backup / Flash Firmware
- * and Reboot. Rules are scoped to those pages' data-page, or to markup
- * only their views render. */
+// Which design the Language and Style picker holds: any of openUF's, the
+// automatic one (light and dark), or the dark one.
+$openuf: ':has(option[value^="/luci-static/openuf"]:checked)';
+$openuf-auto: ':has(option[value="/luci-static/openuf"]:checked)';
+$openuf-dark: ':has(option[value="/luci-static/openuf-dark"]:checked)';
+
+// The design thumbnails' colours. A thumbnail pictures a design, not the
+// current scheme, so its colours are its own and do not flip in dark.
+$thumb: (
+	light: (bar: #f4f5f6, canvas: #eceef0, card: #ffffff, line: #dee0e3, accent: #006fff),
+	dark: (bar: #0e0f11, canvas: #131416, card: #232528, line: #3a3d43, accent: #5aa2ff),
+);
+
+@mixin thumb($scheme) {
+	@each $part, $color in map.get($thumb, $scheme) {
+		--#{$part}: var(--uf-system-thumb-#{$scheme}-#{$part});
+	}
+}
+
+@mixin primary-button {
+	--uf-btn-fg: var(--uf-on-accent);
+	--uf-btn-bg: var(--uf-blue-fill);
+	--uf-btn-line: var(--uf-blue-fill);
+	&:hover { --uf-btn-bg: var(--uf-blue-fill-hover); --uf-btn-line: var(--uf-blue-fill-hover); }
+}
+
+// A secondary action in blue: blue text and outline, tinted on hover.
+@mixin blue-button($bg: null) {
+	--uf-btn-fg: var(--uf-blue);
+	@if $bg { --uf-btn-bg: #{$bg}; }
+	--uf-btn-line: var(--uf-blue-line);
+	@content;
+	&:hover { --uf-btn-bg: var(--uf-blue-soft); --uf-btn-line: var(--uf-blue); }
+}
+
+// Phones: a table row as a list item, wrapped into two lines at this order.
+@mixin line-break($order) {
+	content: "";
+	order: $order;
+	flex: 0 0 100%;
+}
 
 :root {
-	/* The badge on an SSH key. */
+	// The badge on an SSH key.
 	--uf-system-i-key: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><circle cx='8' cy='15.5' r='4.25'/><path d='m11 12.5 8.5-8.5M16.5 7l2.5 2.5M14.5 9l2 2'/></svg>");
 }
 
-/* Views that are not forms put their content straight on the canvas;
- * give it the card a form section gets. */
+// Views that are not forms put their content straight on the canvas; give it
+// the card a form section gets.
 body[data-page="admin-system-startup"] #view [data-tab-active="true"],
 body[data-page="admin-system-admin-sshkeys"] #view .cbi-section-node {
 	margin: 0 0 16px;
-	padding: 18px 20px;
-	background: var(--uf-surface);
-	border: 1px solid var(--uf-border);
-	border-radius: var(--uf-radius);
+	@include card(18px 20px);
 }
 
-/* Code-like text (crontab, rc.local, the backup list) is edited in the
- * mono face with room for a screenful of lines. A line is a command, so
- * it scrolls sideways rather than wrap into what reads as two. */
+// Code-like text (crontab, rc.local, the backup list) is edited in the mono
+// face with room for a screenful of lines. A line is a command, so it scrolls
+// sideways rather than wrap into what reads as two.
 body[data-page="admin-system-crontab"] #view textarea,
 body[data-page="admin-system-startup"] #view textarea,
 body[data-page="admin-system-flash"] textarea.cbi-input-textarea {
@@ -39,1372 +76,1014 @@ body[data-page="admin-system-flash"] textarea.cbi-input-textarea {
 	resize: vertical;
 }
 
-/* A form whose one action is Save (the router password, the crontab,
- * rc.local, the backup list): that Save is the primary. */
-body[data-page^="admin-system-"] .cbi-page-actions > .cbi-button-save:only-of-type {
-	--uf-btn-fg: var(--uf-on-accent);
-	--uf-btn-bg: var(--uf-blue-fill);
-	--uf-btn-line: var(--uf-blue-fill);
+// A form whose one action is Save (the router password, the crontab,
+// rc.local, the backup list): that Save is the primary.
+body[data-page^="admin-system-"] .cbi-page-actions > .cbi-button-save:only-of-type { @include primary-button; }
+
+// System
+// ------
+body[data-page="admin-system-system"] {
+	// Local Time is a read-only field: show the clock as the row's value, with
+	// the sync buttons beside it rather than under it.
+	.cbi-value[data-name="_systime"] {
+		.cbi-value-field {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 8px 16px;
+		}
+
+		br { display: none; }
+	}
+
+	#localtime {
+		field-sizing: content;
+		width: auto;
+		min-width: 12ch;
+		padding: 0;
+		background: none;
+		border-color: transparent;
+		color: var(--uf-text-1);
+		font-weight: 500;
+		font-variant-numeric: tabular-nums;
+		cursor: default;
+
+		// Without field-sizing (Firefox ESR, Safari before 26.2) the field
+		// keeps its 20 characters and cuts the clock off; give it the row, the
+		// buttons wrap under it.
+		@supports not (field-sizing: content) { width: 100%; }
+	}
+
+	.cbi-value[data-name="_systime"] .cbi-button { height: 28px; padding: 0 12px; }
 }
 
-body[data-page^="admin-system-"] .cbi-page-actions > .cbi-button-save:only-of-type:hover {
-	--uf-btn-bg: var(--uf-blue-fill-hover);
-	--uf-btn-line: var(--uf-blue-fill-hover);
-}
-
-/* System
- * ------
- * Local Time is a read-only field: show the clock as the row's value,
- * with the sync buttons beside it rather than under it. */
-body[data-page="admin-system-system"] .cbi-value[data-name="_systime"] .cbi-value-field {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 8px 16px;
-}
-
-body[data-page="admin-system-system"] .cbi-value[data-name="_systime"] br {
-	display: none;
-}
-
-body[data-page="admin-system-system"] #localtime {
-	field-sizing: content;
-	width: auto;
-	min-width: 12ch;
-	padding: 0;
-	background: none;
-	border-color: transparent;
-	color: var(--uf-text-1);
-	font-weight: 500;
-	font-variant-numeric: tabular-nums;
-	cursor: default;
-}
-
-/* Fallback: without field-sizing (Firefox ESR, Safari before 26.2) the
- * field keeps its 20 characters and cuts the clock off; give it the row,
- * the buttons wrap under it. */
-@supports not (field-sizing: content) {
-	body[data-page="admin-system-system"] #localtime {
-		width: 100%;
+// Language and Style: a thumbnail of the chosen UniFi design beside the
+// picker, as UniFi previews its appearance setting. The automatic design is
+// both, split on the diagonal.
+:root {
+	@each $scheme, $colors in $thumb {
+		@each $part, $color in $colors { --uf-system-thumb-#{$scheme}-#{$part}: #{$color}; }
 	}
 }
 
-body[data-page="admin-system-system"] .cbi-value[data-name="_systime"] .cbi-button {
-	height: 28px;
-	padding: 0 12px;
+body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field {
+	&#{$openuf} {
+		display: grid;
+		grid-template-columns: auto auto;
+		justify-content: start;
+		align-items: center;
+		gap: 12px 20px;
+	}
+
+	> div { grid-area: 1 / 1; }
+
+	&#{$openuf}::before, &#{$openuf-auto}::after {
+		@include thumb(light);
+		content: "";
+		grid-area: 1 / 2;
+		@include size(120px, 76px);
+		border: 1px solid var(--uf-border-strong);
+		border-radius: var(--uf-radius-sm);
+		// App bar and its tab, icon rail, and two cards with a line of text,
+		// the first with a switch.
+		background:
+			linear-gradient(var(--accent), var(--accent)) 8px 4px / 16px 3px no-repeat,
+			linear-gradient(var(--accent), var(--accent)) 28px 33px / 12px 5px no-repeat,
+			linear-gradient(var(--line), var(--line)) 28px 25px / 44px 3px no-repeat,
+			linear-gradient(var(--line), var(--line)) 28px 56px / 60px 3px no-repeat,
+			linear-gradient(var(--line), var(--line)) 28px 62px / 36px 3px no-repeat,
+			linear-gradient(var(--card), var(--card)) 22px 19px / 88px 25px no-repeat,
+			linear-gradient(var(--card), var(--card)) 22px 50px / 88px 19px no-repeat,
+			linear-gradient(var(--card), var(--card)) 0 11px / 13px 100% no-repeat,
+			linear-gradient(var(--bar), var(--bar)) 0 0 / 100% 11px no-repeat,
+			var(--canvas);
+	}
+
+	&#{$openuf-dark}::before, &#{$openuf-auto}::after { @include thumb(dark); }
+	&#{$openuf-auto}::after { clip-path: polygon(100% 0, 100% 100%, 0 100%); }
 }
 
-/* Language and Style: a thumbnail of the chosen UniFi design beside the
- * picker, as UniFi previews its appearance setting. The automatic design
- * is both, split on the diagonal. A thumbnail pictures a design, not the
- * current scheme, so its colours are its own and do not flip in dark. */
-:root {
-	--uf-system-thumb-light-bar: #f4f5f6;
-	--uf-system-thumb-light-canvas: #eceef0;
-	--uf-system-thumb-light-card: #ffffff;
-	--uf-system-thumb-light-line: #dee0e3;
-	--uf-system-thumb-light-accent: #006fff;
-	--uf-system-thumb-dark-bar: #0e0f11;
-	--uf-system-thumb-dark-canvas: #131416;
-	--uf-system-thumb-dark-card: #232528;
-	--uf-system-thumb-dark-line: #3a3d43;
-	--uf-system-thumb-dark-accent: #5aa2ff;
-}
+// Administration
+// --------------
 
-body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value^="/luci-static/openuf"]:checked) {
-	display: grid;
-	grid-template-columns: auto auto;
-	justify-content: start;
-	align-items: center;
-	gap: 12px 20px;
-}
-
-body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field > div {
-	grid-area: 1 / 1;
-}
-
-body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value^="/luci-static/openuf"]:checked)::before,
-body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value="/luci-static/openuf"]:checked)::after {
-	--bar: var(--uf-system-thumb-light-bar);
-	--canvas: var(--uf-system-thumb-light-canvas);
-	--card: var(--uf-system-thumb-light-card);
-	--line: var(--uf-system-thumb-light-line);
-	--accent: var(--uf-system-thumb-light-accent);
-	content: "";
-	grid-area: 1 / 2;
-	width: 120px;
-	height: 76px;
-	border: 1px solid var(--uf-border-strong);
-	border-radius: var(--uf-radius-sm);
-	/* app bar and its tab, icon rail, and two cards with a line of text,
-	 * the first with a switch */
-	background:
-		linear-gradient(var(--accent), var(--accent)) 8px 4px / 16px 3px no-repeat,
-		linear-gradient(var(--accent), var(--accent)) 28px 33px / 12px 5px no-repeat,
-		linear-gradient(var(--line), var(--line)) 28px 25px / 44px 3px no-repeat,
-		linear-gradient(var(--line), var(--line)) 28px 56px / 60px 3px no-repeat,
-		linear-gradient(var(--line), var(--line)) 28px 62px / 36px 3px no-repeat,
-		linear-gradient(var(--card), var(--card)) 22px 19px / 88px 25px no-repeat,
-		linear-gradient(var(--card), var(--card)) 22px 50px / 88px 19px no-repeat,
-		linear-gradient(var(--card), var(--card)) 0 11px / 13px 100% no-repeat,
-		linear-gradient(var(--bar), var(--bar)) 0 0 / 100% 11px no-repeat,
-		var(--canvas);
-}
-
-body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value="/luci-static/openuf-dark"]:checked)::before,
-body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value="/luci-static/openuf"]:checked)::after {
-	--bar: var(--uf-system-thumb-dark-bar);
-	--canvas: var(--uf-system-thumb-dark-canvas);
-	--card: var(--uf-system-thumb-dark-card);
-	--line: var(--uf-system-thumb-dark-line);
-	--accent: var(--uf-system-thumb-dark-accent);
-}
-
-body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value="/luci-static/openuf"]:checked)::after {
-	clip-path: polygon(100% 0, 100% 100%, 0 100%);
-}
-
-/* Administration
- * -------------- */
-
-/* SSH-Keys: one row per key, as in a UniFi list. A key badge, the key's
- * comment in the primary colour, its type and fingerprint in grey under
- * it, and the remove cross at the end of the row. */
+// SSH-Keys: one row per key, as in a UniFi list. A key badge, the key's
+// comment in the primary colour, its type and fingerprint in grey under it,
+// and the remove cross at the end of the row.
 body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist {
 	display: flex;
 	gap: 0;
 	width: 100%;
-}
 
-body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .item {
-	display: block;
-	padding: 10px 44px 10px 54px;
-	/* The badge's disc; its glyph is the ::before below. */
-	background: radial-gradient(circle 15px at 26px 28px, var(--uf-blue-soft) 14.5px, transparent 15px) no-repeat;
-	border: 0;
-	border-bottom: 1px solid var(--uf-divider);
-	border-radius: 0;
-	line-height: 18px;
-	word-break: normal;
-	cursor: pointer;
-	transition: background-color .15s;
-}
+	> .item {
+		display: block;
+		padding: 10px 44px 10px 54px;
+		// The badge's disc; its glyph is the ::before below.
+		background: radial-gradient(circle 15px at 26px 28px, var(--uf-blue-soft) 14.5px, transparent 15px) no-repeat;
+		border: 0;
+		border-bottom: 1px solid var(--uf-divider);
+		border-radius: 0;
+		line-height: 18px;
+		word-break: normal;
+		cursor: pointer;
+		transition: background-color .15s;
+		&:hover { background-color: var(--uf-hover); }
 
-body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .item:hover {
-	background-color: var(--uf-hover);
-}
+		&::before {
+			content: "";
+			position: absolute;
+			top: 19px;
+			left: 17px;
+			@include size(18px);
+			background: var(--uf-blue);
+			@include mask(var(--uf-system-i-key) center / contain no-repeat);
+		}
 
-body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .item::before {
-	content: "";
-	position: absolute;
-	top: 19px;
-	left: 17px;
-	width: 18px;
-	height: 18px;
-	background: var(--uf-blue);
-	-webkit-mask: var(--uf-system-i-key) center / contain no-repeat;
-	mask: var(--uf-system-i-key) center / contain no-repeat;
-}
+		> strong { color: var(--uf-text-1); }
+		> br { display: none; }
 
-body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .item > strong {
-	color: var(--uf-text-1);
-}
+		> small {
+			display: block;
+			color: var(--uf-text-3);
+			font-size: 12px;
 
-body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .item > br {
-	display: none;
-}
+			> code {
+				display: block;
+				padding: 0;
+				overflow: hidden;
+				background: none;
+				color: var(--uf-text-3);
+				font-size: 11px;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+		}
+	}
 
-body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .item > small {
-	display: block;
-	color: var(--uf-text-3);
-	font-size: 12px;
-}
+	> p {
+		margin: 0;
+		padding: 20px 0;
+		border-bottom: 1px solid var(--uf-divider);
+		color: var(--uf-text-3);
+		text-align: center;
+	}
 
-body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .item > small > code {
-	display: block;
-	padding: 0;
-	overflow: hidden;
-	background: none;
-	color: var(--uf-text-3);
-	font-size: 11px;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > p {
-	margin: 0;
-	padding: 20px 0;
-	border-bottom: 1px solid var(--uf-divider);
-	color: var(--uf-text-3);
-	text-align: center;
-}
-
-body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .add-item {
-	padding-top: 14px;
-}
-
-body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .add-item > .cbi-button {
-	--uf-btn-fg: var(--uf-blue);
-	--uf-btn-line: var(--uf-blue-line);
-}
-
-body[data-page="admin-system-admin-sshkeys"] .cbi-dynlist > .add-item > .cbi-button:hover {
-	--uf-btn-bg: var(--uf-blue-soft);
-	--uf-btn-line: var(--uf-blue);
-}
-
-/* Repository keys: the key is read-only text, drawn as a code block as
- * tall as its lines. The "add" form's output wraps it, so let it take
- * the row's width. */
-body[data-page="admin-system-admin-repokeys"] .table textarea[readonly] {
-	field-sizing: content;
-	width: 100%;
-	padding: 8px 12px;
-	background: var(--uf-field);
-	border-color: transparent;
-	color: var(--uf-text-2);
-	font-size: 11px;
-	line-height: 17px;
-	resize: none;
-}
-
-/* Fallback: without field-sizing (Firefox ESR, Safari before 26.2) the
- * box keeps LuCI's five rows and a longer key scrolls inside it; let it
- * be pulled taller. */
-@supports not (field-sizing: content) {
-	body[data-page="admin-system-admin-repokeys"] .table textarea[readonly] {
-		resize: vertical;
+	> .add-item {
+		padding-top: 14px;
+		> .cbi-button { @include blue-button; }
 	}
 }
 
-body[data-page="admin-system-admin-repokeys"] .cbi-value[data-name="_newkey"] > output {
-	display: block;
-	width: 100%;
+// Repository keys: the key is read-only text, drawn as a code block as tall
+// as its lines. The "add" form's output wraps it, so let it take the row's
+// width.
+body[data-page="admin-system-admin-repokeys"] {
+	.table textarea[readonly] {
+		field-sizing: content;
+		width: 100%;
+		padding: 8px 12px;
+		background: var(--uf-field);
+		border-color: transparent;
+		color: var(--uf-text-2);
+		font-size: 11px;
+		line-height: 17px;
+		resize: none;
+
+		// Without field-sizing (Firefox ESR, Safari before 26.2) the box keeps
+		// LuCI's five rows and a longer key scrolls inside it; let it be
+		// pulled taller.
+		@supports not (field-sizing: content) { resize: vertical; }
+	}
+
+	.cbi-value[data-name="_newkey"] {
+		> output { display: block; width: 100%; }
+
+		// LuCI spaces the intro from the field with an empty 20px div.
+		.cbi-section-descr { margin-bottom: 12px; }
+		.cbi-section-descr + div[style*="height"] { display: none; }
+
+		.right {
+			display: flex;
+			justify-content: flex-end;
+			margin-top: 12px;
+			> .cbi-button { --uf-btn-fg: var(--uf-blue); --uf-btn-line: var(--uf-blue-line); }
+		}
+	}
 }
 
-/* LuCI spaces the intro from the field with an empty 20px div. */
-body[data-page="admin-system-admin-repokeys"] .cbi-value[data-name="_newkey"] .cbi-section-descr {
-	margin-bottom: 12px;
+// Startup
+// -------
+// The init scripts as a UniFi table: the start order in grey, and a switch
+// for "enabled at boot" in place of a button that reads "Enabled".
+// Start/Restart/Reload/Stop are one segmented control, so the column is one
+// quiet group rather than four blue outlines. The base sizes the rows and
+// insets the edge columns.
+body[data-page="admin-system-startup"] {
+	.table {
+		.th:first-child, .td:first-child { width: 1%; padding-right: 32px; white-space: nowrap; }
+		.td:first-child { color: var(--uf-text-3); font-variant-numeric: tabular-nums; }
+		.td:nth-child(2) { color: var(--uf-text-1); font-weight: 500; }
+		.td.cbi-section-actions > div { flex-wrap: nowrap; align-items: center; gap: 0; }
+	}
+
+	.td {
+		.btn { flex: 0 0 auto; }
+
+		// The switch: a track and a knob drawn before the state's name.
+		.cbi-button-positive, .cbi-button-negative {
+			--uf-btn-fg: var(--uf-text-2);
+			--uf-btn-bg: transparent;
+			--uf-btn-line: transparent;
+			position: relative;
+			justify-content: flex-start;
+			min-width: 112px;
+			margin-right: 12px;
+			padding: 0 10px 0 46px;
+			font-weight: 400;
+		}
+
+		.cbi-button-positive { --uf-btn-fg: var(--uf-text-1); }
+
+		.cbi-button-positive, .cbi-button-negative {
+			&:hover {
+				--uf-btn-fg: var(--uf-text-1);
+				--uf-btn-bg: var(--uf-hover);
+				--uf-btn-line: transparent;
+			}
+
+			&:not(.spinning)::before {
+				content: "";
+				position: absolute;
+				top: calc(50% - 9px);
+				left: 6px;
+				@include size(32px, 18px);
+				border-radius: 9px;
+				background: var(--uf-border-strong);
+				transition: background-color .15s;
+			}
+
+			&:not(.spinning)::after {
+				content: "";
+				position: absolute;
+				top: calc(50% - 7px);
+				left: 8px;
+				@include size(14px);
+				border-radius: 50%;
+				background: var(--uf-knob);
+				box-shadow: var(--uf-shadow-sm);
+				transition: transform .15s;
+			}
+		}
+
+		.cbi-button-positive:not(.spinning) {
+			&::before { background: var(--uf-blue); }
+			&:hover::before { background: var(--uf-blue-strong); }
+		}
+
+		.cbi-button-negative:not(.spinning):hover::before { background: var(--uf-text-4); }
+		.cbi-button-positive:not(.spinning)::after { transform: translateX(14px); }
+
+		// The segmented actions.
+		.cbi-button-action {
+			--uf-btn-fg: var(--uf-text-1);
+			--uf-btn-line: var(--uf-border-strong);
+			position: relative;
+			margin-left: -1px;
+			padding: 0 11px;
+			border-radius: 0;
+
+			&:hover {
+				--uf-btn-fg: var(--uf-blue);
+				--uf-btn-bg: var(--uf-blue-soft);
+				--uf-btn-line: var(--uf-blue-line);
+				z-index: 1;
+			}
+
+			&:nth-child(2) {
+				margin-left: 0;
+				border-radius: var(--uf-radius-sm) 0 0 var(--uf-radius-sm);
+			}
+
+			&:last-child { border-radius: 0 var(--uf-radius-sm) var(--uf-radius-sm) 0; }
+		}
+	}
+
+	// Local Startup: rc.local, a script in a card.
+	#view [data-tab="rc"] > p:has(> textarea) { margin: 0; }
+	#view textarea { min-height: 360px; }
 }
 
-body[data-page="admin-system-admin-repokeys"] .cbi-value[data-name="_newkey"] .cbi-section-descr + div[style*="height"] {
-	display: none;
+// Scheduled Tasks: the crontab is the whole page, an editor card, then the
+// Save bar.
+body[data-page="admin-system-crontab"] #view {
+	> p:has(> textarea) { margin: 0 0 16px; }
+
+	textarea {
+		min-height: max(360px, 55vh);
+		padding: 14px 16px;
+		background-color: var(--uf-surface);
+		border-color: var(--uf-border);
+		border-radius: var(--uf-radius);
+		&:hover { border-color: var(--uf-border-strong); }
+		&:focus { border-color: var(--uf-blue); }
+	}
 }
 
-body[data-page="admin-system-admin-repokeys"] .cbi-value[data-name="_newkey"] .right {
-	display: flex;
-	justify-content: flex-end;
-	margin-top: 12px;
-}
-
-body[data-page="admin-system-admin-repokeys"] .cbi-value[data-name="_newkey"] .right > .cbi-button {
-	--uf-btn-fg: var(--uf-blue);
-	--uf-btn-line: var(--uf-blue-line);
-}
-
-/* Startup
- * -------
- * The init scripts as a UniFi table: the start order in grey, and a
- * switch for "enabled at boot" in place of a button that reads
- * "Enabled". Start/Restart/Reload/Stop are one segmented control, so the
- * column is one quiet group rather than four blue outlines. The base
- * sizes the rows and insets the edge columns. */
-body[data-page="admin-system-startup"] .table .th:first-child,
-body[data-page="admin-system-startup"] .table .td:first-child {
-	width: 1%;
-	padding-right: 32px;
-	white-space: nowrap;
-}
-
-body[data-page="admin-system-startup"] .table .td:first-child {
-	color: var(--uf-text-3);
-	font-variant-numeric: tabular-nums;
-}
-
-body[data-page="admin-system-startup"] .table .td:nth-child(2) {
-	color: var(--uf-text-1);
-	font-weight: 500;
-}
-
-body[data-page="admin-system-startup"] .table .td.cbi-section-actions > div {
-	flex-wrap: nowrap;
-	align-items: center;
-	gap: 0;
-}
-
-body[data-page="admin-system-startup"] .td .btn {
-	flex: 0 0 auto;
-}
-
-/* The switch: a track and a knob drawn before the state's name. */
-body[data-page="admin-system-startup"] .td .cbi-button-positive,
-body[data-page="admin-system-startup"] .td .cbi-button-negative {
-	--uf-btn-fg: var(--uf-text-2);
-	--uf-btn-bg: transparent;
-	--uf-btn-line: transparent;
-	position: relative;
-	justify-content: flex-start;
-	min-width: 112px;
-	margin-right: 12px;
-	padding: 0 10px 0 46px;
-	font-weight: 400;
-}
-
-body[data-page="admin-system-startup"] .td .cbi-button-positive {
-	--uf-btn-fg: var(--uf-text-1);
-}
-
-body[data-page="admin-system-startup"] .td .cbi-button-positive:hover,
-body[data-page="admin-system-startup"] .td .cbi-button-negative:hover {
-	--uf-btn-fg: var(--uf-text-1);
-	--uf-btn-bg: var(--uf-hover);
-	--uf-btn-line: transparent;
-}
-
-body[data-page="admin-system-startup"] .td .cbi-button-positive:not(.spinning)::before,
-body[data-page="admin-system-startup"] .td .cbi-button-negative:not(.spinning)::before {
-	content: "";
-	position: absolute;
-	top: calc(50% - 9px);
-	left: 6px;
-	width: 32px;
-	height: 18px;
-	border-radius: 9px;
-	background: var(--uf-border-strong);
-	transition: background-color .15s;
-}
-
-body[data-page="admin-system-startup"] .td .cbi-button-positive:not(.spinning)::after,
-body[data-page="admin-system-startup"] .td .cbi-button-negative:not(.spinning)::after {
-	content: "";
-	position: absolute;
-	top: calc(50% - 7px);
-	left: 8px;
-	width: 14px;
-	height: 14px;
-	border-radius: 50%;
-	background: var(--uf-knob);
-	box-shadow: var(--uf-shadow-sm);
-	transition: transform .15s;
-}
-
-body[data-page="admin-system-startup"] .td .cbi-button-positive:not(.spinning)::before {
-	background: var(--uf-blue);
-}
-
-body[data-page="admin-system-startup"] .td .cbi-button-positive:not(.spinning):hover::before {
-	background: var(--uf-blue-strong);
-}
-
-body[data-page="admin-system-startup"] .td .cbi-button-negative:not(.spinning):hover::before {
-	background: var(--uf-text-4);
-}
-
-body[data-page="admin-system-startup"] .td .cbi-button-positive:not(.spinning)::after {
-	transform: translateX(14px);
-}
-
-/* The segmented actions. */
-body[data-page="admin-system-startup"] .td .cbi-button-action {
-	--uf-btn-fg: var(--uf-text-1);
-	--uf-btn-line: var(--uf-border-strong);
-	position: relative;
-	margin-left: -1px;
-	padding: 0 11px;
-	border-radius: 0;
-}
-
-body[data-page="admin-system-startup"] .td .cbi-button-action:hover {
-	--uf-btn-fg: var(--uf-blue);
-	--uf-btn-bg: var(--uf-blue-soft);
-	--uf-btn-line: var(--uf-blue-line);
-	z-index: 1;
-}
-
-body[data-page="admin-system-startup"] .td .cbi-button-action:nth-child(2) {
-	margin-left: 0;
-	border-radius: var(--uf-radius-sm) 0 0 var(--uf-radius-sm);
-}
-
-body[data-page="admin-system-startup"] .td .cbi-button-action:last-child {
-	border-radius: 0 var(--uf-radius-sm) var(--uf-radius-sm) 0;
-}
-
-/* Local Startup: rc.local, a script in a card. */
-body[data-page="admin-system-startup"] #view [data-tab="rc"] > p:has(> textarea) {
-	margin: 0;
-}
-
-body[data-page="admin-system-startup"] #view textarea {
-	min-height: 360px;
-}
-
-/* Scheduled Tasks
- * ---------------
- * The crontab is the whole page: an editor card, then the Save bar. */
-body[data-page="admin-system-crontab"] #view > p:has(> textarea) {
-	margin: 0 0 16px;
-}
-
-body[data-page="admin-system-crontab"] #view textarea {
-	min-height: max(360px, 55vh);
-	padding: 14px 16px;
-	background-color: var(--uf-surface);
-	border-color: var(--uf-border);
-	border-radius: var(--uf-radius);
-}
-
-body[data-page="admin-system-crontab"] #view textarea:hover {
-	border-color: var(--uf-border-strong);
-}
-
-body[data-page="admin-system-crontab"] #view textarea:focus {
-	border-color: var(--uf-blue);
-}
-
-/* Reboot and Attended Sysupgrade
- * ------------------------------
- * Both are a title, a few lines and one button, straight in the view.
- * A grid puts the title above a card drawn by a pseudo-element that sits
- * behind the rest, so the page reads like the others: title, then card. */
+// Reboot and Attended Sysupgrade
+// ------------------------------
+// Both are a title, a few lines and one button, straight in the view. A grid
+// puts the title above a card drawn by a pseudo-element that sits behind the
+// rest, so the page reads like the others: title, then card.
 body[data-page="admin-system-reboot"] #view,
 body[data-page="admin-system-attendedsysupgrade-overview"] #view > p {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr);
 	justify-items: start;
 	margin: 0;
+
+	&::before {
+		content: "";
+		grid-column: 1;
+		grid-row: 2 / 6;
+		justify-self: stretch;
+		@include card;
+	}
+
+	> * { grid-column: 1; margin-left: 20px; margin-right: 20px; }
+
+	> h2 {
+		grid-row: 1;
+		margin: 0 0 20px;
+		font-size: 20px;
+		line-height: 28px;
+	}
 }
 
-body[data-page="admin-system-reboot"] #view::before,
-body[data-page="admin-system-attendedsysupgrade-overview"] #view > p::before {
-	content: "";
-	grid-column: 1;
-	grid-row: 2 / 6;
-	justify-self: stretch;
-	background: var(--uf-surface);
-	border: 1px solid var(--uf-border);
-	border-radius: var(--uf-radius);
+body[data-page="admin-system-reboot"] #view {
+	> p { grid-row: 2; margin-top: 18px; margin-bottom: 0; }
+
+	> hr {
+		grid-row: 3;
+		justify-self: stretch;
+		margin-top: 14px;
+		margin-bottom: 16px;
+		border-color: var(--uf-divider);
+	}
+
+	> .cbi-button { grid-row: 4; margin-bottom: 20px; }
 }
 
-body[data-page="admin-system-reboot"] #view > *,
-body[data-page="admin-system-attendedsysupgrade-overview"] #view > p > * {
-	grid-column: 1;
-	margin-left: 20px;
-	margin-right: 20px;
+body[data-page="admin-system-attendedsysupgrade-overview"] {
+	#view > p {
+		> p {
+			margin-top: 0;
+			margin-bottom: 4px;
+			&:nth-child(2) { grid-row: 2; margin-top: 18px; }
+			&:nth-child(3) { grid-row: 3; }
+
+			// "Currently running: …" is the one fact on the page.
+			&:nth-child(4) {
+				grid-row: 4;
+				justify-self: stretch;
+				margin-top: 12px;
+				margin-bottom: 0;
+				padding-top: 12px;
+				border-top: 1px solid var(--uf-divider);
+				color: var(--uf-text-1);
+				font-weight: 500;
+			}
+		}
+
+		> .btn { grid-row: 5; margin-top: 16px; margin-bottom: 20px; }
+	}
+
+	// The upgrade dialogs: long server output scrolls, the image's facts are
+	// label/value rows with the checksum free to wrap, and "Copy error data"
+	// is a secondary action, not a second primary; LuCI squeezes its padding
+	// inline.
+	.modal {
+		pre { max-height: 40vh; }
+		.table .td { overflow-wrap: anywhere; }
+
+		> .btn.important[style] {
+			@include blue-button(var(--uf-surface)) { padding: 0 14px !important; }
+		}
+
+		> b {
+			margin-bottom: 6px;
+			color: var(--uf-text-2);
+			font-size: 12px;
+			font-weight: 600;
+		}
+	}
 }
 
-body[data-page="admin-system-reboot"] #view > h2,
-body[data-page="admin-system-attendedsysupgrade-overview"] #view > p > h2 {
-	grid-row: 1;
-	margin: 0 0 20px;
-	font-size: 20px;
-	line-height: 28px;
+// Mount Points
+// ------------
+// The live mounts sit under Global Settings in the same card: set them off
+// with a rule and a sub-heading, the mount point in the primary colour and
+// Unmount a quiet button, so a column of them is not a column of red. The
+// base sizes the rows.
+body[data-page="admin-system-mounts"] #cbi-fstab-global {
+	.cbi-section-node > h3 {
+		margin: 10px 0 6px;
+		padding-top: 20px;
+		border-top: 1px solid var(--uf-border);
+		font-size: 14px;
+		line-height: 20px;
+	}
+
+	.table .td {
+		font-variant-numeric: tabular-nums;
+		&:nth-child(2) { color: var(--uf-text-1); }
+		// "-" where a mount cannot be unmounted.
+		&:last-child { color: var(--uf-text-3); }
+	}
+
+	.table .btn:not(:hover) { --uf-btn-line: var(--uf-border-strong); }
 }
 
-body[data-page="admin-system-reboot"] #view > p {
-	grid-row: 2;
-	margin-top: 18px;
-	margin-bottom: 0;
-}
-
-body[data-page="admin-system-reboot"] #view > hr {
-	grid-row: 3;
-	justify-self: stretch;
-	margin-top: 14px;
-	margin-bottom: 16px;
-	border-color: var(--uf-divider);
-}
-
-body[data-page="admin-system-reboot"] #view > .cbi-button {
-	grid-row: 4;
-	margin-bottom: 20px;
-}
-
-body[data-page="admin-system-attendedsysupgrade-overview"] #view > p > p {
-	margin-top: 0;
-	margin-bottom: 4px;
-}
-
-body[data-page="admin-system-attendedsysupgrade-overview"] #view > p > p:nth-child(2) {
-	grid-row: 2;
-	margin-top: 18px;
-}
-
-body[data-page="admin-system-attendedsysupgrade-overview"] #view > p > p:nth-child(3) {
-	grid-row: 3;
-}
-
-/* "Currently running: …" is the one fact on the page. */
-body[data-page="admin-system-attendedsysupgrade-overview"] #view > p > p:nth-child(4) {
-	grid-row: 4;
-	justify-self: stretch;
-	margin-top: 12px;
-	margin-bottom: 0;
-	padding-top: 12px;
-	border-top: 1px solid var(--uf-divider);
-	color: var(--uf-text-1);
-	font-weight: 500;
-}
-
-body[data-page="admin-system-attendedsysupgrade-overview"] #view > p > .btn {
-	grid-row: 5;
-	margin-top: 16px;
-	margin-bottom: 20px;
-}
-
-/* The upgrade dialogs: long server output scrolls, the image's facts are
- * label/value rows with the checksum free to wrap, and "Copy error data"
- * is a secondary action, not a second primary; LuCI squeezes its padding
- * inline. */
-body[data-page="admin-system-attendedsysupgrade-overview"] .modal pre {
-	max-height: 40vh;
-}
-
-body[data-page="admin-system-attendedsysupgrade-overview"] .modal .table .td {
-	overflow-wrap: anywhere;
-}
-
-body[data-page="admin-system-attendedsysupgrade-overview"] .modal > .btn.important[style] {
-	--uf-btn-fg: var(--uf-blue);
-	--uf-btn-bg: var(--uf-surface);
-	--uf-btn-line: var(--uf-blue-line);
-	padding: 0 14px !important;
-}
-
-body[data-page="admin-system-attendedsysupgrade-overview"] .modal > .btn.important[style]:hover {
-	--uf-btn-bg: var(--uf-blue-soft);
-	--uf-btn-line: var(--uf-blue);
-}
-
-body[data-page="admin-system-attendedsysupgrade-overview"] .modal > b {
-	margin-bottom: 6px;
-	color: var(--uf-text-2);
-	font-size: 12px;
-	font-weight: 600;
-}
-
-/* Mount Points
- * ------------
- * The live mounts sit under Global Settings in the same card: set them
- * off with a rule and a sub-heading, the mount point in the primary
- * colour and Unmount a quiet button, so a column of them is not a column
- * of red. The base sizes the rows. */
-body[data-page="admin-system-mounts"] #cbi-fstab-global .cbi-section-node > h3 {
-	margin: 10px 0 6px;
-	padding-top: 20px;
-	border-top: 1px solid var(--uf-border);
-	font-size: 14px;
-	line-height: 20px;
-}
-
-body[data-page="admin-system-mounts"] #cbi-fstab-global .table .td {
-	font-variant-numeric: tabular-nums;
-}
-
-body[data-page="admin-system-mounts"] #cbi-fstab-global .table .td:nth-child(2) {
-	color: var(--uf-text-1);
-}
-
-/* "-" where a mount cannot be unmounted. */
-body[data-page="admin-system-mounts"] #cbi-fstab-global .table .td:last-child {
-	color: var(--uf-text-3);
-}
-
-body[data-page="admin-system-mounts"] #cbi-fstab-global .table .btn:not(:hover) {
-	--uf-btn-line: var(--uf-border-strong);
-}
-
-/* LED Configuration
- * -----------------
- * "LED" is an <abbr>; in a title or a column title it is a word, not a
- * dotted link. */
+// LED Configuration: "LED" is an <abbr>; in a title or a column title it is
+// a word, not a dotted link.
 body[data-page="admin-system-leds"] :is(h2, .th, .modal h4) abbr {
 	border-bottom: 0;
 	text-decoration: none;
 }
 
-/* Backup / Flash Firmware
- * -----------------------
- * Backup, Restore and Flash are three tiles side by side, like UniFi's
- * settings tiles, each a title, a line of text and its button. None of
- * them is the page's one primary action, so their buttons are outlined. */
-body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] {
-	padding: 0;
-	background: none;
-	border: 0;
-}
-
-body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] > .cbi-section-node {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-	gap: 16px;
-}
-
-body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] > .cbi-section-node > .cbi-value {
-	display: flex;
-	padding: 18px 20px 20px;
-	background: var(--uf-surface);
-	border: 1px solid var(--uf-border);
-	border-radius: var(--uf-radius);
-}
-
-body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] > .cbi-section-node > .cbi-value > .cbi-section {
-	display: flex;
-	flex-direction: column;
-}
-
-body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] h3 {
-	margin-bottom: 6px;
-	font-size: 14px;
-	line-height: 20px;
-}
-
-body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] .cbi-section-descr {
-	margin: 0 0 16px;
-}
-
-/* In a tile the row's label is a caption over its button. */
-body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] .cbi-section-node .cbi-section-node > .cbi-value {
-	display: block;
-	padding: 0;
-	border: 0;
-}
-
-body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] .cbi-section-node .cbi-section-node > .cbi-value + .cbi-value {
-	margin-top: 14px;
-}
-
-body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] .cbi-section-node .cbi-section-node > .cbi-value > .cbi-value-title {
-	display: block;
-	padding: 0 0 6px;
-	color: var(--uf-text-3);
-	font-size: 12px;
-	font-weight: 500;
-}
-
-body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] .cbi-button-action.important {
-	--uf-btn-fg: var(--uf-blue);
-	--uf-btn-bg: var(--uf-surface);
-	--uf-btn-line: var(--uf-blue-line);
-}
-
-body[data-page="admin-system-flash"] .cbi-section[data-tab="Actions"] .cbi-button-action.important:hover {
-	--uf-btn-fg: var(--uf-blue);
-	--uf-btn-bg: var(--uf-blue-soft);
-	--uf-btn-line: var(--uf-blue);
-}
-
-/* The dialogs. File facts (size, checksums) and the backup file list are
- * mono text on a quiet field; the long list scrolls. */
-body[data-page="admin-system-flash"] .modal > ul {
-	max-height: 50vh;
-	margin: 0 0 16px;
-	padding: 10px 14px;
-	overflow: auto;
-	background: var(--uf-field);
-	border-radius: var(--uf-radius);
-	color: var(--uf-text-1);
-	font-family: var(--uf-mono);
-	font-size: 12px;
-	list-style: none;
-	overflow-wrap: anywhere;
-}
-
-body[data-page="admin-system-flash"] .modal > ul > li {
-	line-height: 20px;
-}
-
-/* "Apply backup?" lists the archive's files: keep its Continue in view. */
-body[data-page="admin-system-flash"] .modal > pre {
-	max-height: 45vh;
-}
-
-/* The image check's log lines are newline-separated; keep them apart. The
- * log ends in a newline already, so one of the two breaks after it is
- * enough. */
-body[data-page="admin-system-flash"] .modal > p.alert-message {
-	white-space: pre-line;
-}
-
-body[data-page="admin-system-flash"] .modal > p.alert-message > br:first-of-type {
-	display: none;
-}
-
-/* Configuration: the list of files a backup keeps. */
-body[data-page="admin-system-flash"] .cbi-value[data-name="editlist"] {
-	display: block;
-}
-
-body[data-page="admin-system-flash"] textarea.cbi-input-textarea {
-	min-height: 360px;
-}
-
-/* Software
- * --------
- * The toolbar (disk space, filter, manual install, actions, translations)
- * is one card and the package list another; the pagers are quiet
- * "1-100 of 146  ‹ ›" rows, the way UniFi pages a table. The view's own
- * stylesheet lays these out as a wrapping flexbox; this replaces it. */
-body[data-page="admin-system-package-manager"] .controls:not(:has(> .pager)) {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, auto);
-	gap: 18px 24px;
-	margin: 0 0 20px;
-	padding: 18px 20px;
-	background: var(--uf-surface);
-	border: 1px solid var(--uf-border);
-	border-radius: var(--uf-radius);
-}
-
-body[data-page="admin-system-package-manager"] .controls:not(:has(> .pager)) > * {
-	display: flex;
-	flex-direction: column;
-	align-items: stretch;
-	gap: 6px;
-	min-width: 0;
-	padding: 0;
-	white-space: normal;
-}
-
-body[data-page="admin-system-package-manager"] .controls:not(:has(> .pager)) > * > * {
-	flex: 0 0 auto;
-	align-self: auto;
-	min-width: 0;
-}
-
-/* Disk space and the translation filter span the card. */
-body[data-page="admin-system-package-manager"] .controls:not(:has(> .pager)) > :first-child,
-body[data-page="admin-system-package-manager"] .controls:not(:has(> .pager)) > :last-child {
-	grid-column: 1 / -1;
-}
-
-body[data-page="admin-system-package-manager"] .controls > * > label {
-	color: var(--uf-text-3);
-	font-size: 12px;
-	font-weight: 500;
-	line-height: 16px;
-}
-
-body[data-page="admin-system-package-manager"] .controls .control-group {
-	flex-wrap: nowrap;
-	width: 100%;
-}
-
-body[data-page="admin-system-package-manager"] .controls .control-group > input {
-	flex: 1 1 auto;
-	width: auto;
-	min-width: 0;
-}
-
-body[data-page="admin-system-package-manager"] .controls .control-group > .btn {
-	flex: 0 0 auto;
-}
-
-/* "Configure apk" is one of the three actions, drawn like the other two. */
-body[data-page="admin-system-package-manager"] .controls:not(:has(> .pager)) .btn.cbi-button-neutral {
-	--uf-btn-fg: var(--uf-blue);
-	--uf-btn-line: var(--uf-blue-line);
-}
-
-body[data-page="admin-system-package-manager"] .controls:not(:has(> .pager)) .btn.cbi-button-neutral:hover {
-	--uf-btn-bg: var(--uf-blue-soft);
-	--uf-btn-line: var(--uf-blue);
-}
-
-body[data-page="admin-system-package-manager"] .controls > :nth-child(4) .control-group {
-	flex-wrap: wrap;
-}
-
-/* Disk space: its label on the left and the usage on the right of one
- * line, the bar under both, as UniFi draws "TX Retries  Low (13%)". */
-body[data-page="admin-system-package-manager"] .controls > :first-child {
-	position: relative;
-	gap: 0;
-}
-
-body[data-page="admin-system-package-manager"] .controls .cbi-progressbar {
-	min-width: 0;
-	margin: 8px 0 0;
-}
-
-body[data-page="admin-system-package-manager"] .controls .cbi-progressbar::before {
-	top: -26px;
-	left: auto;
-	right: 0;
-	max-width: 75%;
-	color: var(--uf-text-1);
-	text-align: right;
-}
-
-/* The translation filter: three radios in a row. */
-body[data-page="admin-system-package-manager"] .controls > :last-child > div {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 4px 20px;
-	font-size: 0; /* the non-breaking spaces between the radios */
-}
-
-body[data-page="admin-system-package-manager"] .controls > :last-child > div > label {
-	display: inline-flex;
-	align-items: center;
-	gap: 8px;
-	min-height: 24px;
-	color: var(--uf-text-1);
-	font-size: 13px;
-}
-
-body[data-page="admin-system-package-manager"] .controls > :last-child > div > label > input {
-	margin: 0;
-}
-
-/* Pagers: right-aligned, the count first, then the two arrows. */
-body[data-page="admin-system-package-manager"] .controls:has(> .pager) {
-	display: flex;
-	justify-content: flex-end;
-	margin: 0 0 8px;
-}
-
-body[data-page="admin-system-package-manager"] #packages + .controls:has(> .pager) {
-	margin: 8px 0 0;
-}
-
-body[data-page="admin-system-package-manager"] .controls > .pager {
-	flex: 0 1 auto;
-	display: flex;
-	flex-wrap: nowrap;
-	align-items: center;
-	gap: 4px;
-	min-width: 0;
-	padding: 0;
-}
-
-body[data-page="admin-system-package-manager"] .controls > .pager > .text {
-	flex: 0 1 auto;
-	order: -1;
-	margin-right: 8px;
-	color: var(--uf-text-3);
-	font-size: 12px;
-	font-variant-numeric: tabular-nums;
-}
-
-body[data-page="admin-system-package-manager"] .controls > .pager > .btn {
-	flex: 0 0 auto;
-	width: 28px;
-	height: 28px;
-	padding: 0 0 2px;
-	font-size: 16px;
-}
-
-/* The package list: a table card with single-line rows. Descriptions
- * run to one line and end in an ellipsis rather than stretch a row to
- * five; the details dialog has them in full. */
-body[data-page="admin-system-package-manager"] #packages {
-	border-collapse: separate;
-	border-spacing: 0;
-	padding: 4px 12px 8px;
-	background: var(--uf-surface);
-	border: 1px solid var(--uf-border);
-	border-radius: var(--uf-radius);
-}
-
-body[data-page="admin-system-package-manager"] #packages .th,
-body[data-page="admin-system-package-manager"] #packages .td {
-	padding: 6px 10px;
-}
-
-body[data-page="admin-system-package-manager"] #packages .th {
-	padding-top: 10px;
-	padding-bottom: 9px;
-	white-space: nowrap;
-}
-
-/* Separate borders (for the rounded card) would draw the header rule
- * twice: the titles' and the first row's. */
-body[data-page="admin-system-package-manager"] #packages .cbi-section-table-titles + .tr > .td {
-	border-top: 0;
-}
-
-body[data-page="admin-system-package-manager"] #packages .tr:not(.cbi-section-table-titles):not(.placeholder):hover > .td {
-	background-color: var(--uf-hover);
-}
-
-body[data-page="admin-system-package-manager"] #packages .td:first-child {
-	color: var(--uf-text-1);
-	font-weight: 500;
-	white-space: nowrap;
-}
-
-body[data-page="admin-system-package-manager"] #packages .td.version {
-	font-variant-numeric: tabular-nums;
-	white-space: nowrap;
-}
-
-body[data-page="admin-system-package-manager"] #packages .td.size {
-	color: var(--uf-text-3);
-	font-variant-numeric: tabular-nums;
-	white-space: nowrap;
-}
-
-body[data-page="admin-system-package-manager"] #packages .th:nth-child(4),
-body[data-page="admin-system-package-manager"] #packages .td:nth-child(4) {
-	width: 100%;
-	max-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-body[data-page="admin-system-package-manager"] #packages .td:nth-child(4) {
-	color: var(--uf-text-3);
-}
-
-/* What the filter matched, marked as a search highlight. */
-body[data-page="admin-system-package-manager"] #packages ins {
-	padding: 0 1px;
-	border-radius: 2px;
-	background: rgba(var(--uf-blue-rgb), .16);
-	color: var(--uf-text-1);
-	text-decoration: none;
-}
-
-/* A row with a button is as low as one without. */
-body[data-page="admin-system-package-manager"] #packages .td.cbi-section-actions {
-	padding-top: 4px;
-	padding-bottom: 4px;
-}
-
-/* Row actions: the verb in its colour on a neutral outline, so a page of
- * "Remove…" is not a column of red. */
-body[data-page="admin-system-package-manager"] #packages .td .btn {
-	justify-content: center;
-	min-width: 92px;
-	height: 24px;
-	padding: 0 12px;
-	font-size: 12px;
-}
-
-body[data-page="admin-system-package-manager"] #packages .td .btn:not(:hover) {
-	--uf-btn-line: var(--uf-border-strong);
-}
-
-/* "Installed" is a state, not a button: grey text behind a green dot, as
- * UniFi marks a device that is online. */
-body[data-page="admin-system-package-manager"] #packages .td .btn[disabled] {
-	--uf-btn-fg: var(--uf-text-3);
-	--uf-btn-bg: transparent;
-	--uf-btn-line: transparent;
-	justify-content: flex-start;
-	gap: 8px;
-	padding: 0 12px;
-	font-weight: 400;
-	opacity: 1;
-	cursor: default;
-}
-
-body[data-page="admin-system-package-manager"] #packages .td .btn[disabled]::before {
-	content: "";
-	width: 6px;
-	height: 6px;
-	border-radius: 50%;
-	background: var(--uf-green);
-}
-
-/* Loading, empty and "no match" states sit in the card's middle; the
- * view marks that cell .left, which is an !important utility. */
-body[data-page="admin-system-package-manager"] #packages .tr.placeholder > .td {
-	padding: 22px 0;
-	color: var(--uf-text-3);
-	font-weight: 400;
-	text-align: center !important;
-}
-
-body[data-page="admin-system-package-manager"] #packages .tr.placeholder .spinning {
-	display: inline-block;
-}
-
-/* The package dialogs: facts as label/value rows, the dependency tree
- * under its label, and problems in red. */
-body[data-page="admin-system-package-manager"] .modal > ul:not(.deps):not(.errors) {
-	margin: 0 0 16px;
-	list-style: none;
-}
-
-body[data-page="admin-system-package-manager"] .modal > ul:not(.deps):not(.errors) > li {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 2px 16px;
-	padding: 7px 0;
-	border-top: 1px solid var(--uf-divider);
-	color: var(--uf-text-1);
-	overflow-wrap: anywhere;
-}
-
-body[data-page="admin-system-package-manager"] .modal > ul:not(.deps):not(.errors) > li:first-child {
-	border-top: 0;
-}
-
-body[data-page="admin-system-package-manager"] .modal > ul:not(.deps):not(.errors) > li > strong:first-child {
-	flex: 0 0 140px;
-	color: var(--uf-text-3);
-	font-weight: 400;
-}
-
-body[data-page="admin-system-package-manager"] .modal ul.deps {
-	flex: 1 1 280px;
-	margin: 0 0 0 1em;
-	color: var(--uf-text-2);
-	font-size: 12px;
-}
-
-body[data-page="admin-system-package-manager"] .modal ul.deps ul {
-	margin: 0 0 0 1.25em;
-}
-
-body[data-page="admin-system-package-manager"] .modal ul.deps li {
-	line-height: 22px;
-}
-
-body[data-page="admin-system-package-manager"] .modal ul.deps li::before {
-	color: var(--uf-text-4);
-}
-
-body[data-page="admin-system-package-manager"] .modal ul.deps .label {
-	height: 18px;
-	padding: 0 7px;
-	font-size: 10px;
-}
-
-/* "Installed" is green, as the list's dot beside an installed package. */
-body[data-page="admin-system-package-manager"] .modal ul.deps .label.notice {
-	background: rgba(var(--uf-green-rgb), .16);
-	color: var(--uf-green-text);
-}
-
-body[data-page="admin-system-package-manager"] .modal > div > h5 {
-	margin: 0 0 4px;
-	color: var(--uf-text-3);
-	font-size: 12px;
-	font-weight: 500;
-}
-
-body[data-page="admin-system-package-manager"] .modal > div > h5 + p {
-	color: var(--uf-text-1);
-}
-
-body[data-page="admin-system-package-manager"] .modal ul.errors {
-	margin: 0 0 12px;
-	padding: 10px 12px 10px 36px;
-	background: rgba(var(--uf-red-rgb), .08);
-	border: 1px solid rgba(var(--uf-red-rgb), .3);
-	border-radius: var(--uf-radius);
-}
-
-body[data-page="admin-system-package-manager"] .modal ul.errors li {
-	padding-left: 0;
-	color: var(--uf-red-text);
-	font-size: 12px;
-	font-weight: 500;
-}
-
-body[data-page="admin-system-package-manager"] .modal ul.errors li::before {
-	width: 24px;
-	margin-left: -24px;
-}
-
-body[data-page="admin-system-package-manager"] .modal p > label.cbi-checkbox {
-	color: var(--uf-text-1);
-}
-
-/* The dialog's confirming action (Install, Upgrade, Save) is its primary,
- * and Remove, which is destructive, is solid red. LuCI marks neither as
- * important. */
-body[data-page="admin-system-package-manager"] .modal .right > .btn.cbi-button-action:last-child,
-body[data-page="admin-system-package-manager"] .modal .button-row > .btn.cbi-button-positive:last-child {
-	--uf-btn-fg: var(--uf-on-accent);
-	--uf-btn-bg: var(--uf-blue-fill);
-	--uf-btn-line: var(--uf-blue-fill);
-}
-
-body[data-page="admin-system-package-manager"] .modal .right > .btn.cbi-button-action:last-child:hover,
-body[data-page="admin-system-package-manager"] .modal .button-row > .btn.cbi-button-positive:last-child:hover {
-	--uf-btn-bg: var(--uf-blue-fill-hover);
-	--uf-btn-line: var(--uf-blue-fill-hover);
-}
-
-body[data-page="admin-system-package-manager"] .modal .right > .btn.cbi-button-negative:last-child {
-	--uf-btn-fg: var(--uf-on-accent);
-	--uf-btn-bg: var(--uf-red-fill);
-	--uf-btn-line: var(--uf-red-fill);
-}
-
-body[data-page="admin-system-package-manager"] .modal .right > .btn.cbi-button-negative:last-child:hover {
-	--uf-btn-bg: var(--uf-red-fill);
-	background-image: linear-gradient(rgba(0, 0, 0, .12), rgba(0, 0, 0, .12));
-}
-
-/* The package manager's output: the command, what it printed, and its
- * errors tinted red and kept to a scrollable height. */
-body[data-page="admin-system-package-manager"] .modal > pre {
-	max-height: 40vh;
-	margin-bottom: 12px;
-}
-
-body[data-page="admin-system-package-manager"] .modal > pre.errors {
-	background: rgba(var(--uf-red-rgb), .06);
-	border-color: rgba(var(--uf-red-rgb), .3);
-}
-
-body[data-page="admin-system-package-manager"] .modal > h5 {
-	margin: 16px 0 6px;
-	color: var(--uf-text-2);
-	font-size: 12px;
-}
-
-body[data-page="admin-system-package-manager"] .modal > h5:has(+ pre.errors) {
-	color: var(--uf-red-text);
-}
-
-/* Configure apk: each file's path over its editor. */
-body[data-page="admin-system-package-manager"] .modal > h5:has(+ textarea) {
-	font-family: var(--uf-mono);
-	font-weight: 500;
-}
-
-/* A feed is a URL per line; wrapped, one URL reads as two feeds. */
-body[data-page="admin-system-package-manager"] .modal > h5 + textarea {
-	margin-bottom: 4px;
-	white-space: pre;
-}
-
-/* Phones
- * ------ */
-@media screen and (max-width: 640px) {
-	body[data-page="admin-system-startup"] #view [data-tab-active="true"],
-	body[data-page="admin-system-admin-sshkeys"] #view .cbi-section-node {
-		padding: 14px;
+// Backup / Flash Firmware
+// -----------------------
+// Backup, Restore and Flash are three tiles side by side, like UniFi's
+// settings tiles, each a title, a line of text and its button. None of them
+// is the page's one primary action, so their buttons are outlined.
+body[data-page="admin-system-flash"] {
+	.cbi-section[data-tab="Actions"] {
+		padding: 0;
+		background: none;
+		border: 0;
+
+		> .cbi-section-node {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+			gap: 16px;
+
+			> .cbi-value {
+				display: flex;
+				@include card(18px 20px 20px);
+				> .cbi-section { display: flex; flex-direction: column; }
+			}
+		}
+
+		h3 { margin-bottom: 6px; font-size: 14px; line-height: 20px; }
+		.cbi-section-descr { margin: 0 0 16px; }
+
+		// In a tile the row's label is a caption over its button.
+		.cbi-section-node .cbi-section-node > .cbi-value {
+			display: block;
+			padding: 0;
+			border: 0;
+			& + .cbi-value { margin-top: 14px; }
+
+			> .cbi-value-title {
+				display: block;
+				padding: 0 0 6px;
+				color: var(--uf-text-3);
+				font-size: 12px;
+				font-weight: 500;
+			}
+		}
+
+		.cbi-button-action.important {
+			--uf-btn-fg: var(--uf-blue);
+			--uf-btn-bg: var(--uf-surface);
+			--uf-btn-line: var(--uf-blue-line);
+
+			&:hover {
+				--uf-btn-fg: var(--uf-blue);
+				--uf-btn-bg: var(--uf-blue-soft);
+				--uf-btn-line: var(--uf-blue);
+			}
+		}
 	}
 
-	/* A repository key wraps anywhere rather than scroll inside its box. */
+	// The dialogs. File facts (size, checksums) and the backup file list are
+	// mono text on a quiet field; the long list scrolls.
+	.modal {
+		> ul {
+			max-height: 50vh;
+			margin: 0 0 16px;
+			padding: 10px 14px;
+			overflow: auto;
+			background: var(--uf-field);
+			border-radius: var(--uf-radius);
+			color: var(--uf-text-1);
+			font-family: var(--uf-mono);
+			font-size: 12px;
+			list-style: none;
+			overflow-wrap: anywhere;
+			> li { line-height: 20px; }
+		}
+
+		// "Apply backup?" lists the archive's files: keep its Continue in view.
+		> pre { max-height: 45vh; }
+
+		// The image check's log lines are newline-separated; keep them apart.
+		// The log ends in a newline already, so one of the two breaks after it
+		// is enough.
+		> p.alert-message {
+			white-space: pre-line;
+			> br:first-of-type { display: none; }
+		}
+	}
+
+	// Configuration: the list of files a backup keeps.
+	.cbi-value[data-name="editlist"] { display: block; }
+	textarea.cbi-input-textarea { min-height: 360px; }
+}
+
+// Software
+// --------
+// The toolbar (disk space, filter, manual install, actions, translations) is
+// one card and the package list another; the pagers are quiet
+// "1-100 of 146  ‹ ›" rows, the way UniFi pages a table. The view's own
+// stylesheet lays these out as a wrapping flexbox; this replaces it.
+body[data-page="admin-system-package-manager"] {
+	.controls {
+		&:not(:has(> .pager)) {
+			display: grid;
+			grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, auto);
+			gap: 18px 24px;
+			margin: 0 0 20px;
+			@include card(18px 20px);
+
+			> * {
+				display: flex;
+				flex-direction: column;
+				align-items: stretch;
+				gap: 6px;
+				min-width: 0;
+				padding: 0;
+				white-space: normal;
+				> * { flex: 0 0 auto; align-self: auto; min-width: 0; }
+			}
+
+			// Disk space and the translation filter span the card.
+			> :first-child, > :last-child { grid-column: 1 / -1; }
+		}
+
+		> * > label {
+			color: var(--uf-text-3);
+			font-size: 12px;
+			font-weight: 500;
+			line-height: 16px;
+		}
+
+		.control-group {
+			flex-wrap: nowrap;
+			width: 100%;
+			> input { flex: 1 1 auto; width: auto; min-width: 0; }
+			> .btn { flex: 0 0 auto; }
+		}
+
+		// "Configure apk" is one of the three actions, drawn like the other two.
+		&:not(:has(> .pager)) .btn.cbi-button-neutral { @include blue-button; }
+		> :nth-child(4) .control-group { flex-wrap: wrap; }
+
+		// Disk space: its label on the left and the usage on the right of one
+		// line, the bar under both, as UniFi draws "TX Retries  Low (13%)".
+		> :first-child { position: relative; gap: 0; }
+
+		.cbi-progressbar {
+			min-width: 0;
+			margin: 8px 0 0;
+
+			&::before {
+				top: -26px;
+				left: auto;
+				right: 0;
+				max-width: 75%;
+				color: var(--uf-text-1);
+				text-align: right;
+			}
+		}
+
+		// The translation filter: three radios in a row.
+		> :last-child > div {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 4px 20px;
+			font-size: 0; // the non-breaking spaces between the radios
+
+			> label {
+				display: inline-flex;
+				align-items: center;
+				gap: 8px;
+				min-height: 24px;
+				color: var(--uf-text-1);
+				font-size: 13px;
+				> input { margin: 0; }
+			}
+		}
+
+		// Pagers: right-aligned, the count first, then the two arrows.
+		&:has(> .pager) { display: flex; justify-content: flex-end; margin: 0 0 8px; }
+	}
+
+	#packages + .controls:has(> .pager) { margin: 8px 0 0; }
+
+	.controls > .pager {
+		flex: 0 1 auto;
+		display: flex;
+		flex-wrap: nowrap;
+		align-items: center;
+		gap: 4px;
+		min-width: 0;
+		padding: 0;
+
+		> .text {
+			flex: 0 1 auto;
+			order: -1;
+			margin-right: 8px;
+			color: var(--uf-text-3);
+			font-size: 12px;
+			font-variant-numeric: tabular-nums;
+		}
+
+		> .btn {
+			flex: 0 0 auto;
+			@include size(28px);
+			padding: 0 0 2px;
+			font-size: 16px;
+		}
+	}
+
+	// The package list: a table card with single-line rows. Descriptions run
+	// to one line and end in an ellipsis rather than stretch a row to five;
+	// the details dialog has them in full.
+	#packages {
+		border-collapse: separate;
+		border-spacing: 0;
+		@include card(4px 12px 8px);
+		.th, .td { padding: 6px 10px; }
+		.th { padding-top: 10px; padding-bottom: 9px; white-space: nowrap; }
+
+		// Separate borders (for the rounded card) would draw the header rule
+		// twice: the titles' and the first row's.
+		.cbi-section-table-titles + .tr > .td { border-top: 0; }
+		.tr:not(.cbi-section-table-titles):not(.placeholder):hover > .td { background-color: var(--uf-hover); }
+		.td:first-child { color: var(--uf-text-1); font-weight: 500; white-space: nowrap; }
+		.td.version { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+		.td.size {
+			color: var(--uf-text-3);
+			font-variant-numeric: tabular-nums;
+			white-space: nowrap;
+		}
+
+		.th:nth-child(4), .td:nth-child(4) {
+			width: 100%;
+			max-width: 0;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.td:nth-child(4) { color: var(--uf-text-3); }
+
+		// What the filter matched, marked as a search highlight.
+		ins {
+			padding: 0 1px;
+			border-radius: 2px;
+			background: rgba(var(--uf-blue-rgb), .16);
+			color: var(--uf-text-1);
+			text-decoration: none;
+		}
+
+		// A row with a button is as low as one without.
+		.td.cbi-section-actions { padding-top: 4px; padding-bottom: 4px; }
+
+		// Row actions: the verb in its colour on a neutral outline, so a page
+		// of "Remove…" is not a column of red.
+		.td .btn {
+			justify-content: center;
+			min-width: 92px;
+			height: 24px;
+			padding: 0 12px;
+			font-size: 12px;
+			&:not(:hover) { --uf-btn-line: var(--uf-border-strong); }
+
+			// "Installed" is a state, not a button: grey text behind a green
+			// dot, as UniFi marks a device that is online.
+			&[disabled] {
+				--uf-btn-fg: var(--uf-text-3);
+				--uf-btn-bg: transparent;
+				--uf-btn-line: transparent;
+				justify-content: flex-start;
+				gap: 8px;
+				padding: 0 12px;
+				font-weight: 400;
+				opacity: 1;
+				cursor: default;
+
+				&::before {
+					content: "";
+					@include size(6px);
+					border-radius: 50%;
+					background: var(--uf-green);
+				}
+			}
+		}
+
+		// Loading, empty and "no match" states sit in the card's middle; the
+		// view marks that cell .left, which is an !important utility.
+		.tr.placeholder {
+			> .td {
+				padding: 22px 0;
+				color: var(--uf-text-3);
+				font-weight: 400;
+				text-align: center !important;
+			}
+
+			.spinning { display: inline-block; }
+		}
+	}
+
+	// The package dialogs: facts as label/value rows, the dependency tree
+	// under its label, and problems in red.
+	.modal {
+		> ul:not(.deps):not(.errors) {
+			margin: 0 0 16px;
+			list-style: none;
+
+			> li {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 2px 16px;
+				padding: 7px 0;
+				border-top: 1px solid var(--uf-divider);
+				color: var(--uf-text-1);
+				overflow-wrap: anywhere;
+				&:first-child { border-top: 0; }
+				> strong:first-child { flex: 0 0 140px; color: var(--uf-text-3); font-weight: 400; }
+			}
+		}
+
+		ul.deps {
+			flex: 1 1 280px;
+			margin: 0 0 0 1em;
+			color: var(--uf-text-2);
+			font-size: 12px;
+			ul { margin: 0 0 0 1.25em; }
+			li { line-height: 22px; }
+			li::before { color: var(--uf-text-4); }
+
+			.label {
+				height: 18px;
+				padding: 0 7px;
+				font-size: 10px;
+
+				// "Installed" is green, as the list's dot beside an installed
+				// package.
+				&.notice {
+					background: rgba(var(--uf-green-rgb), .16);
+					color: var(--uf-green-text);
+				}
+			}
+		}
+
+		> div > h5 {
+			margin: 0 0 4px;
+			color: var(--uf-text-3);
+			font-size: 12px;
+			font-weight: 500;
+			& + p { color: var(--uf-text-1); }
+		}
+
+		ul.errors {
+			margin: 0 0 12px;
+			padding: 10px 12px 10px 36px;
+			background: rgba(var(--uf-red-rgb), .08);
+			border: 1px solid rgba(var(--uf-red-rgb), .3);
+			border-radius: var(--uf-radius);
+
+			li {
+				padding-left: 0;
+				color: var(--uf-red-text);
+				font-size: 12px;
+				font-weight: 500;
+				&::before { width: 24px; margin-left: -24px; }
+			}
+		}
+
+		p > label.cbi-checkbox { color: var(--uf-text-1); }
+
+		// The dialog's confirming action (Install, Upgrade, Save) is its
+		// primary, and Remove, which is destructive, is solid red. LuCI marks
+		// neither as important.
+		.right > .btn.cbi-button-action:last-child, .button-row > .btn.cbi-button-positive:last-child { @include primary-button; }
+
+		.right > .btn.cbi-button-negative:last-child {
+			--uf-btn-fg: var(--uf-on-accent);
+			--uf-btn-bg: var(--uf-red-fill);
+			--uf-btn-line: var(--uf-red-fill);
+
+			&:hover {
+				--uf-btn-bg: var(--uf-red-fill);
+				background-image: linear-gradient(rgba(0, 0, 0, .12), rgba(0, 0, 0, .12));
+			}
+		}
+
+		// The package manager's output: the command, what it printed, and its
+		// errors tinted red and kept to a scrollable height.
+		> pre {
+			max-height: 40vh;
+			margin-bottom: 12px;
+
+			&.errors {
+				background: rgba(var(--uf-red-rgb), .06);
+				border-color: rgba(var(--uf-red-rgb), .3);
+			}
+		}
+
+		> h5 {
+			margin: 16px 0 6px;
+			color: var(--uf-text-2);
+			font-size: 12px;
+			&:has(+ pre.errors) { color: var(--uf-red-text); }
+
+			// Configure apk: each file's path over its editor.
+			&:has(+ textarea) { font-family: var(--uf-mono); font-weight: 500; }
+
+			// A feed is a URL per line; wrapped, one URL reads as two feeds.
+			& + textarea { margin-bottom: 4px; white-space: pre; }
+		}
+	}
+}
+
+// Phones
+// ------
+@include phone {
+	body[data-page="admin-system-startup"] #view [data-tab-active="true"],
+	body[data-page="admin-system-admin-sshkeys"] #view .cbi-section-node { padding: 14px; }
+
+	// A repository key wraps anywhere rather than scroll inside its box.
 	body[data-page="admin-system-admin-repokeys"] .table textarea[readonly] {
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
 	}
 
-	/* The theme thumbnail goes under the full-width picker. */
-	body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value^="/luci-static/openuf"]:checked) {
-		grid-template-columns: minmax(0, 1fr);
+	// The theme thumbnail goes under the full-width picker.
+	body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field {
+		&#{$openuf} { grid-template-columns: minmax(0, 1fr); }
+		&#{$openuf}::before, &#{$openuf-auto}::after { grid-area: 2 / 1; }
 	}
 
-	body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value^="/luci-static/openuf"]:checked)::before,
-	body[data-page="admin-system-system"] .cbi-value[data-name="_mediaurlbase"] .cbi-value-field:has(option[value="/luci-static/openuf"]:checked)::after {
-		grid-area: 2 / 1;
+	// Startup: a script is a list item, its start order and name on the first
+	// line with the switch at the end, the four actions sharing the second.
+	// The actions cell steps aside (display: contents) so the switch can join
+	// the first line.
+	body[data-page="admin-system-startup"] {
+		.table {
+			.tr {
+				align-items: center;
+				padding: 10px 0;
+				&::after { @include line-break(2); }
+			}
+
+			.td:first-child, .td:nth-child(2) { align-self: center; padding: 0; }
+			.td:first-child { flex: 0 0 auto; width: auto; padding-right: 10px; }
+			.td:nth-child(2) { flex: 1 1 0; min-width: 0; }
+			.td:first-child::before, .td:nth-child(2)::before { display: none; }
+			.td.cbi-section-actions, .td.cbi-section-actions > div { display: contents; }
+		}
+
+		.td .cbi-button-positive, .td .cbi-button-negative {
+			order: 1;
+			min-width: 0;
+			margin-right: 0;
+			padding-right: 0;
+		}
+
+		.td .cbi-button-action { order: 3; flex: 1 1 0; margin-top: 8px; }
 	}
 
-	/* Startup: a script is a list item, its start order and name on the
-	 * first line with the switch at the end, the four actions sharing the
-	 * second. The actions cell steps aside (display: contents) so the
-	 * switch can join the first line. */
-	body[data-page="admin-system-startup"] .table .tr {
-		align-items: center;
-		padding: 10px 0;
+	// Mount Points: a live mount is a list item too, its mount point and
+	// filesystem on the first line with Unmount at the end (none when it has
+	// none), space and use under them.
+	body[data-page="admin-system-mounts"] #cbi-fstab-global .table {
+		.tr {
+			align-items: center;
+			padding: 8px 0;
+			&::after { @include line-break(-1); }
+		}
+
+		.td:nth-child(2) {
+			order: -3;
+			flex: 0 1 auto;
+			font-weight: 500;
+			overflow-wrap: anywhere;
+		}
+
+		.td:first-child {
+			order: -2;
+			flex: 1 1 0;
+			min-width: 0;
+			color: var(--uf-text-3);
+			font-size: 12px;
+		}
+
+		.td:last-child {
+			order: -1;
+			flex: 0 0 auto;
+			&:not(:has(.btn)) { display: none; }
+		}
+
+		.td:is(:first-child, :nth-child(2), :last-child) {
+			align-self: center;
+			&::before { display: none; }
+		}
+
+		.td:is(:nth-child(3), :nth-child(4)) { flex: 1 1 50%; font-size: 12px; }
 	}
 
-	/* The break between the two lines. */
-	body[data-page="admin-system-startup"] .table .tr::after {
-		content: "";
-		order: 2;
-		flex: 0 0 100%;
-	}
+	body[data-page="admin-system-package-manager"] {
+		// Software: the toolbar stacks.
+		.controls:not(:has(> .pager)) { grid-template-columns: minmax(0, 1fr); padding: 14px; }
+		#packages { padding: 4px 10px; }
 
-	body[data-page="admin-system-startup"] .table .td:first-child,
-	body[data-page="admin-system-startup"] .table .td:nth-child(2) {
-		align-self: center;
-		padding: 0;
-	}
+		// Disk usage goes under the bar, where it has the full width.
+		.controls .cbi-progressbar {
+			margin-bottom: 22px;
 
-	body[data-page="admin-system-startup"] .table .td:first-child {
-		flex: 0 0 auto;
-		width: auto;
-		padding-right: 10px;
-	}
+			&::before {
+				top: 12px;
+				left: 0;
+				max-width: none;
+				color: var(--uf-text-2);
+				text-align: left;
+			}
+		}
 
-	body[data-page="admin-system-startup"] .table .td:nth-child(2) {
-		flex: 1 1 0;
-		min-width: 0;
-	}
+		// A package is a list item: its name with the action at the end of the
+		// first line, version and size in grey under it, then two lines of
+		// description. No column labels; the base's column classes size the
+		// cells with !important.
+		#packages {
+			.tr {
+				align-items: center;
+				padding: 8px 0;
+				&::after { @include line-break(1); }
+			}
 
-	body[data-page="admin-system-startup"] .table .td:first-child::before,
-	body[data-page="admin-system-startup"] .table .td:nth-child(2)::before {
-		display: none;
-	}
+			.td {
+				padding: 0 4px;
+				&::before { display: none; }
+			}
 
-	body[data-page="admin-system-startup"] .table .td.cbi-section-actions,
-	body[data-page="admin-system-startup"] .table .td.cbi-section-actions > div {
-		display: contents;
-	}
+			.td:first-child {
+				flex: 1 1 0 !important;
+				align-self: center;
+				min-width: 0;
+				white-space: normal;
+				overflow-wrap: anywhere;
+			}
 
-	body[data-page="admin-system-startup"] .td .cbi-button-positive,
-	body[data-page="admin-system-startup"] .td .cbi-button-negative {
-		order: 1;
-		min-width: 0;
-		margin-right: 0;
-		padding-right: 0;
-	}
+			.td.cbi-section-actions {
+				flex: 0 0 auto;
+				align-self: center;
+				max-width: none;
+				padding: 0 0 0 8px;
+				> .btn { display: inline-flex; }
+			}
 
-	body[data-page="admin-system-startup"] .td .cbi-button-action {
-		order: 3;
-		flex: 1 1 0;
-		margin-top: 8px;
-	}
+			.td.version, .td.size {
+				order: 2;
+				flex: 0 1 auto !important;
+				margin-top: 2px;
+				color: var(--uf-text-3);
+				font-size: 12px;
+				white-space: normal;
+				overflow-wrap: anywhere;
+			}
 
-	/* Mount Points: a live mount is a list item too, its mount point and
-	 * filesystem on the first line with Unmount at the end (none when it
-	 * has none), space and use under them. */
-	body[data-page="admin-system-mounts"] #cbi-fstab-global .table .tr {
-		align-items: center;
-		padding: 8px 0;
-	}
+			.td.size::before {
+				content: "·";
+				display: inline;
+				margin-right: 8px;
+				color: var(--uf-text-4);
+				font-size: inherit;
+			}
 
-	/* The break between the two lines. */
-	body[data-page="admin-system-mounts"] #cbi-fstab-global .table .tr::after {
-		content: "";
-		order: -1;
-		flex: 0 0 100%;
-	}
-
-	body[data-page="admin-system-mounts"] #cbi-fstab-global .table .td:nth-child(2) {
-		order: -3;
-		flex: 0 1 auto;
-		font-weight: 500;
-		overflow-wrap: anywhere;
-	}
-
-	body[data-page="admin-system-mounts"] #cbi-fstab-global .table .td:first-child {
-		order: -2;
-		flex: 1 1 0;
-		min-width: 0;
-		color: var(--uf-text-3);
-		font-size: 12px;
-	}
-
-	body[data-page="admin-system-mounts"] #cbi-fstab-global .table .td:last-child {
-		order: -1;
-		flex: 0 0 auto;
-	}
-
-	body[data-page="admin-system-mounts"] #cbi-fstab-global .table .td:last-child:not(:has(.btn)) {
-		display: none;
-	}
-
-	body[data-page="admin-system-mounts"] #cbi-fstab-global .table .td:is(:first-child, :nth-child(2), :last-child) {
-		align-self: center;
-	}
-
-	body[data-page="admin-system-mounts"] #cbi-fstab-global .table .td:is(:first-child, :nth-child(2), :last-child)::before {
-		display: none;
-	}
-
-	body[data-page="admin-system-mounts"] #cbi-fstab-global .table .td:is(:nth-child(3), :nth-child(4)) {
-		flex: 1 1 50%;
-		font-size: 12px;
-	}
-
-	/* Software: the toolbar stacks. */
-	body[data-page="admin-system-package-manager"] .controls:not(:has(> .pager)) {
-		grid-template-columns: minmax(0, 1fr);
-		padding: 14px;
-	}
-
-	body[data-page="admin-system-package-manager"] #packages {
-		padding: 4px 10px;
-	}
-
-	/* Disk usage goes under the bar, where it has the full width. */
-	body[data-page="admin-system-package-manager"] .controls .cbi-progressbar {
-		margin-bottom: 22px;
-	}
-
-	body[data-page="admin-system-package-manager"] .controls .cbi-progressbar::before {
-		top: 12px;
-		left: 0;
-		max-width: none;
-		color: var(--uf-text-2);
-		text-align: left;
-	}
-
-	/* A package is a list item: its name with the action at the end of
-	 * the first line, version and size in grey under it, then two lines
-	 * of description. No column labels; the base's column classes size
-	 * the cells with !important. */
-	body[data-page="admin-system-package-manager"] #packages .tr {
-		align-items: center;
-		padding: 8px 0;
-	}
-
-	body[data-page="admin-system-package-manager"] #packages .tr::after {
-		content: "";
-		order: 1;
-		flex: 0 0 100%;
-	}
-
-	body[data-page="admin-system-package-manager"] #packages .td {
-		padding: 0 4px;
-	}
-
-	body[data-page="admin-system-package-manager"] #packages .td::before {
-		display: none;
-	}
-
-	body[data-page="admin-system-package-manager"] #packages .td:first-child {
-		flex: 1 1 0 !important;
-		align-self: center;
-		min-width: 0;
-		white-space: normal;
-		overflow-wrap: anywhere;
-	}
-
-	body[data-page="admin-system-package-manager"] #packages .td.cbi-section-actions {
-		flex: 0 0 auto;
-		align-self: center;
-		max-width: none;
-		padding: 0 0 0 8px;
-	}
-
-	body[data-page="admin-system-package-manager"] #packages .td.cbi-section-actions > .btn {
-		display: inline-flex;
-	}
-
-	body[data-page="admin-system-package-manager"] #packages .td.version,
-	body[data-page="admin-system-package-manager"] #packages .td.size {
-		order: 2;
-		flex: 0 1 auto !important;
-		margin-top: 2px;
-		color: var(--uf-text-3);
-		font-size: 12px;
-		white-space: normal;
-		overflow-wrap: anywhere;
-	}
-
-	body[data-page="admin-system-package-manager"] #packages .td.size::before {
-		content: "·";
-		display: inline;
-		margin-right: 8px;
-		color: var(--uf-text-4);
-		font-size: inherit;
-	}
-
-	body[data-page="admin-system-package-manager"] #packages .td:nth-child(4) {
-		order: 3;
-		flex: 1 1 100% !important;
-		display: -webkit-box;
-		width: auto;
-		max-width: none;
-		margin-top: 4px;
-		white-space: normal;
-		-webkit-box-orient: vertical;
-		-webkit-line-clamp: 2;
+			.td:nth-child(4) {
+				order: 3;
+				flex: 1 1 100% !important;
+				display: -webkit-box;
+				width: auto;
+				max-width: none;
+				margin-top: 4px;
+				white-space: normal;
+				-webkit-box-orient: vertical;
+				-webkit-line-clamp: 2;
+			}
+		}
 	}
 }
-
-/* ==== end page: system ==== */

@@ -1,0 +1,22 @@
+// Helpers shared by the System, Usteer, uHTTPd, Switch, Ports and theme
+// settings partials.
+
+// A card: the surface, a hairline border and the card radius (padding first,
+// when given).
+@mixin card($padding: null) {
+	padding: $padding;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+@mixin size($width, $height: $width) {
+	width: $width;
+	height: $height;
+}
+
+// Both spellings, as `mask` does for the shorthand.
+@mixin mask-image($value) {
+	-webkit-mask-image: $value;
+	mask-image: $value;
+}
