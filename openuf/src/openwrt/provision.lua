@@ -18,6 +18,22 @@ local is_mac, is_hex32 = wire.is_mac, wire.is_hex32
 
 local M = {}
 
+-- One blocking off-channel sweep on an AP netdev: `iw dev <if> scan
+-- ap-force`. `ap-force` is not optional: the netdev is a beaconing AP, and
+-- mac80211 refuses a scan there with EOPNOTSUPP unless the request carries
+-- NL80211_SCAN_FLAG_AP -- a plain `scan` returns at once having swept
+-- nothing, and since _popen drops stderr that looked exactly like success.
+-- The scan output itself is discarded (the caller reads the kernel's
+-- `survey dump`); only iw's exit status is kept. Returns true when the sweep
+-- ran; logs and returns false when iw refused it.
+local function force_scan(ufuci, ifname, who)
+	local out = ufuci._popen("iw dev " .. ifname
+		.. " scan ap-force >/dev/null 2>&1 && echo scan-ok") or ""
+	if out:find("scan-ok", 1, true) then return true end
+	io.stderr:write("inform: " .. who .. ": iw refused to scan " .. ifname .. "\n")
+	return false
+end
+
 function M.handle(ctx, json_str, st, cfg)
 	-- Tracks the config rather than latching on: a caller that stops passing
 	-- debug_dump_file stops getting dropped-key reports too.
@@ -679,7 +695,10 @@ function M.handle(ctx, json_str, st, cfg)
 									end
 								end
 							end
-							ufuci._popen("iw dev " .. ifname .. " scan")
+							-- A refused sweep still leaves the operating
+							-- channel's survey, so the table is built either
+							-- way; force_scan has logged the refusal.
+							force_scan(ufuci, ifname, cmd)
 							local ok_rs, stats = pcall(ctx._sysinfo.radio_stats, ifname)
 							if ok_rs then
 								local width = wlan.width_from_htmode(radio.ht)
