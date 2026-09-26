@@ -47,7 +47,7 @@ return view.extend({
 		flag(s, 'features', 'use_only_unifi_wlan', _('Controller WLANs only'),
 			_('Take SSIDs the controller did not create off the air. With "Controller owns interfaces and SSIDs" they are removed (a copy of the original wireless config is kept in /etc/openuf); otherwise they are disabled and come back when this is switched off.'), true);
 		flag(s, 'features', 'sta_events', _('Connection events'),
-			_('Report clients connecting and leaving, for the controller\'s client history and connectivity view.'), true);
+			_('Report clients connecting and leaving, and time each connection, for the controller\'s client history and WiFi Connectivity view.'), true);
 		flag(s, 'features', 'system_timezone', _('Controller timezone'),
 			_('Use the site timezone set in the controller.'), true);
 		flag(s, 'features', 'system_ntp', _('Controller NTP servers'),
