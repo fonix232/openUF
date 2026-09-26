@@ -9,6 +9,8 @@
 //
 // Everything is scoped by .Dashboard, the class only this module renders,
 // so it holds on every route that shows the view (the landing page too).
+// The dashboard as it was before its rework has a partial of its own
+// (_dashboard-classic).
 
 // A legend's colour key.
 @mixin swatch {
