@@ -20,6 +20,14 @@ const RAIL_FOOT = [ 'system', 'logout' ];
 
 const SCHEMES = [ 'auto', 'light', 'dark' ];
 
+/* Pages drawn in a design of the user's choosing (System > UniFi Theme):
+ * header.ut puts the choice on <html> and links its stylesheet; its script
+ * is view/unifi/network/<page>-<design>.js. */
+const DESIGNED = {
+	'admin/network/network': 'interfaces',
+	'admin/network/wireless': 'wireless'
+};
+
 function pref(key, value) {
 	try {
 		if (value === undefined)
@@ -39,6 +47,23 @@ function pref(key, value) {
 return baseclass.extend({
 	__init__() {
 		ui.menu.load().then((tree) => this.render(tree));
+		this.loadDesign();
+	},
+
+	/* The design's script names what its stylesheet needs in LuCI's rows.
+	 * Without one (or with an unknown design) the rows stay as LuCI drew
+	 * them. */
+	loadDesign() {
+		const page = DESIGNED[L.env.dispatchpath.slice(0, 3).join('/')];
+		const design = page ? document.documentElement.getAttribute('data-uf-' + page) : null;
+
+		if (!design || !/^[a-z]+$/.test(design))
+			return;
+
+		L.resolveDefault(L.require('view.unifi.network.%s-%s'.format(page, design)), null).then((mod) => {
+			if (mod && typeof(mod.enhance) == 'function')
+				mod.enhance();
+		});
 	},
 
 	render(tree) {
@@ -59,13 +84,16 @@ return baseclass.extend({
 
 		this.bindChrome();
 
-		if (L.env.dispatchpath.join('/') == 'admin/network/network')
+		if (L.env.dispatchpath.slice(0, 3).join('/') == 'admin/network/network' &&
+		    document.documentElement.getAttribute('data-uf-port-manager') != '0')
 			this.renderPorts();
 	},
 
-	/* Network > Interfaces: the router's ports as UniFi's port strip, in a
-	 * card above LuCI's view (never inside it, which LuCI redraws), with
-	 * the Port Manager list while the Devices tab is open. */
+	/* Network > Interfaces: UniFi's Port Manager, the router's ports as a
+	 * strip of squares over a list of each port's link, networks, VLANs
+	 * and traffic. A card above LuCI's view (never inside it, which LuCI
+	 * redraws), so it sits the same over every design; LuCI's poll updates
+	 * it in place. */
 	renderPorts() {
 		const view = document.querySelector('#view');
 
@@ -77,42 +105,21 @@ return baseclass.extend({
 		const loaded = L.loaded ? Promise.resolve() : new Promise((resolve) => document.addEventListener('luci-loaded', resolve, { once: true }));
 
 		Promise.all([ L.require('view.unifi.ports'), L.require('poll'), loaded ]).then(([ ports, poll ]) => {
-			const devicesTab = () => document.querySelector('#view .cbi-map-tabbed > [data-tab="device"][data-tab-active="true"]');
 			let card = null;
-			let data = null;
 
-			const draw = () => {
-				const full = !!devicesTab();
-				const body = ports.render(data, { mode: full ? 'full' : 'strip', clickable: true });
+			const update = () => ports.load().then((data) => {
+				const body = ports.render(data, { mode: 'full', clickable: true });
 
 				card = ports.patch(card, body ? ports.card(body, {
-					title: _('Ports'),
-					desc: ports.summary(data),
-					actions: full ? null : [ E('button', { 'type': 'button', 'class': 'cbi-button cbi-button-action uf-ports-manager' }, [ _('Port Manager') ]) ]
+					title: _('Port Manager'),
+					desc: ports.summary(data)
 				}) : null);
 
 				if (card && !card.parentNode) {
-					card.addEventListener('click', (ev) => {
-						if (ev.target.closest('.uf-ports-manager'))
-							this.openPort(null);
-					});
 					card.addEventListener('uf-port-select', (ev) => this.openPort(ev.detail.port));
 					view.parentNode.insertBefore(card, view);
 				}
-			};
-
-			const update = () => ports.load().then((d) => {
-				data = d;
-				draw();
 			});
-
-			/* Tab panes announce themselves without bubbling, so listen in the
-			 * capture phase; LuCI marks the other panes inactive only after
-			 * the event, so look once it has done. */
-			document.addEventListener('cbi-tab-active', () => {
-				if (data)
-					window.setTimeout(draw, 0);
-			}, true);
 
 			return update().then(() => poll.add(update, 5));
 		}).catch((err) => console.warn('luci-theme-unifi: no port panel:', err));
@@ -120,8 +127,7 @@ return baseclass.extend({
 
 	/* Show a port's settings: the Devices tab, and on it the dialog of the
 	 * port's bridge (its VLAN tab, if it filters) or of the port itself.
-	 * With no port, just the Devices tab. swconfig ports live on the
-	 * Switch page. */
+	 * swconfig ports live on the Switch page. */
 	openPort(port) {
 		if (port && port.switch) {
 			window.location.href = L.url('admin/network/switch');

@@ -15,11 +15,22 @@
 	const darkpref = (theme == 'unifi-dark' ? 'true' : (theme == 'unifi-light' ? 'false' : null));
 	const user = ctx.authuser ?? '';
 
+	/* The Interfaces and Wireless designs and the Port Manager, from
+	 * System > UniFi Theme (luci.unifi); anything unknown is the default. */
+	const designs = [ 'list', 'settings', 'cards' ];
+	const design = (v) => (type(v) == 'string' && index(designs, v) > -1) ? v : 'list';
+	const uf = {
+		interfaces: design(uci.get('luci', 'unifi', 'interfaces')),
+		wireless: design(uci.get('luci', 'unifi', 'wireless')),
+		port_manager: (uci.get('luci', 'unifi', 'port_manager') == '0') ? '0' : '1'
+	};
+	const route = join('/', slice(ctx.path ?? [], 0, 3));
+
 	http.prepare_content('text/html; charset=UTF-8');
 -%}
 
 <!DOCTYPE html>
-<html lang="{{ dispatcher.lang }}" {{ darkpref ? `data-darkmode="${darkpref}" data-scheme-locked="true"` : '' }}>
+<html lang="{{ dispatcher.lang }}" {{ darkpref ? `data-darkmode="${darkpref}" data-scheme-locked="true"` : '' }} data-uf-interfaces="{{ uf.interfaces }}" data-uf-wireless="{{ uf.wireless }}" data-uf-port-manager="{{ uf.port_manager }}">
 	<head>
 		<meta charset="utf-8">
 		<title>{{ striptags(`${hostname}${dispatched?.title ? ` | ${_(dispatched.title)}` : ''}`) }}</title>
@@ -56,6 +67,11 @@
 		<meta name="darkreader-lock">
 		<meta name="color-scheme" content="{{ darkpref ? (darkpref == 'true' ? 'dark' : 'light') : 'light dark' }}">
 		<link rel="stylesheet" href="{{ media }}/cascade.css">
+		{% if (route == 'admin/network/network'): %}
+		<link rel="stylesheet" href="{{ media }}/network/interfaces-{{ uf.interfaces }}.css">
+		{% elif (route == 'admin/network/wireless'): %}
+		<link rel="stylesheet" href="{{ media }}/network/wireless-{{ uf.wireless }}.css">
+		{% endif %}
 		<link rel="icon" href="{{ media }}/logo.svg" sizes="any">
 		{% if (node?.css): %}
 		<link rel="stylesheet" href="{{ resource }}/{{ node.css }}">
