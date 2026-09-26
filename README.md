@@ -114,7 +114,7 @@ Most rows below marked ✅ were verified by driving the real controller UI again
 | L2 hardening (`ebtables.*`) | ✅ The controller's BPDU and VLAN-tag drops for Wi-Fi clients, re-expressed as an nftables bridge table on the VAPs (`l2guard`; needs `kmod-nft-bridge`) |
 | Board radio policy | ✅ `local.lua` can floor or cap the pushed channel width and keep ACS off DFS channels (`dev.conf.radio.<band>`), and `country_override` programs a different regulatory domain while still reporting the controller's — for drivers that cannot run DFS |
 | LuCI pages | ✅ **Services → openUF** (`luci-app-openuf`): **Status** (daemon and heartbeat, adoption and applied-config state, the identity presented — catalogue model, sysid, firmware — the port map, network ownership and upgrade survival), **Settings** (every option in `/etc/config/openuf`, a standard LuCI form with Save & Apply and rollback; a change restarts the daemon, a switched-off feature drops its nft table or cron job, and a setting that changes what the controller provisions has it send its configuration again) and **Unhandled messages** (the ledger). Served by a ucode rpcd backend that never returns the adoption key |
-| Packaging and updates | ✅ OpenWrt packages (`openuf`, `luci-app-openuf`, and the optional `luci-theme-openuf`; architecture-independent) for OpenWrt 25.12 and later, from a signed apk feed built by CI with the official SDK; updates arrive with `apk upgrade`; the package reinstalls itself after a firmware upgrade that keeps settings; `tools/deploy.sh` installs a local build on test APs |
+| Packaging and updates | ✅ OpenWrt packages (`openuf`, `luci-app-openuf`, architecture-independent) for OpenWrt 25.12 and later, from a signed apk feed built by CI with the official SDK; updates arrive with `apk upgrade`; the package reinstalls itself after a firmware upgrade that keeps settings; `tools/deploy.sh` installs a local build on test APs |
 | Set Replacement Device / Load Configuration | ✅ Working — both are controller-side clones; no device-side protocol involved |
 | Power / PoE reporting | Not applicable — the flagged UI field belongs to the upstream parent device, not the AP |
 | Speed test | Not applicable — gateway-only feature in current UniFi Network |
@@ -205,7 +205,7 @@ service across upgrades that keep settings (`/lib/upgrade/keep.d/openuf`); on th
 first boot the bootstrap reinstalls openUF from the feed, and the AP comes back still
 adopted. The controller's Upgrade button (`upgrade_mode owut`) leaves openUF's packages out
 of the ASU request by itself; when you run `owut upgrade` by hand, add
-`-r openuf,luci-app-openuf` (and `luci-theme-openuf` if it is installed).
+`-r openuf,luci-app-openuf`.
 
 **Coming from a tarball install** (`install.sh`, `/opt/openuf`): install the package over
 it. It stops the old service, moves `conf.lua`'s settings into `/etc/config/openuf`

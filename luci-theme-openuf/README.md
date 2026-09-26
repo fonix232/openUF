@@ -96,18 +96,18 @@ Bootstrap. The package is architecture-independent, and needs only
 `luci-base`: it works with or without openUF.
 
 **Updates and firmware upgrades.** With openUF installed, its package already
-lists the feed, so `apk upgrade` updates the theme too, and after a firmware
-upgrade that keeps settings openUF's bootstrap reinstalls the theme along with
-itself (and its owut integration leaves the theme out of the ASU image
-request, which the ASU server could not build). Without openUF, add the feed to
-your own feed list so `apk upgrade` sees it:
+lists the feed, so `apk upgrade` updates the theme too. Without openUF, add the
+feed to your own feed list so `apk upgrade` sees it:
 
 ```sh
 echo https://fonix232.github.io/openUF/apk/packages.adb >> /etc/apk/repositories.d/customfeeds.list
 ```
 
-and reinstall the theme after a firmware upgrade (`apk update && apk add
-luci-theme-openuf`); until then LuCI falls back to Bootstrap on its own.
+A firmware upgrade replaces the image, and the theme with it: reinstall it
+afterwards (`apk update && apk add luci-theme-openuf`); until then LuCI falls
+back to Bootstrap on its own. When you run `owut upgrade` by hand, leave it out
+of the image request (`-r luci-theme-openuf`), as the ASU server cannot build
+packages from this feed.
 
 ### Building it
 
