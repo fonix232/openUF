@@ -47,6 +47,10 @@ endef
 define Package/luci-theme-unifi/description
   A LuCI theme modelled on the UniFi Network Application, with light, dark
   and follow-the-system colour schemes, and styling for luci-mod-dashboard.
+  Network > Interfaces and Network > Wireless each come in three designs
+  (device list, settings list, device cards), and Interfaces opens with a
+  UniFi Port Manager of the router's ports; both are chosen on its own
+  settings page, System > UniFi Theme.
 endef
 
 define Build/Prepare

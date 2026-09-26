@@ -25,20 +25,56 @@ It covers the core LuCI pages, **luci-mod-dashboard** and **luci-app-uhttpd**,
 in light and dark, down to phone width, where the rail and the secondary
 column become a drawer.
 
-The router's own ports get UniFi's port strip, the one in a device's panel: a
-square per port, green with link (lime at Fast Ethernet, blue from 2.5 GbE),
-grey without, outlined when disabled, a chevron on the uplink and a bolt on a
-port giving PoE, with a legend and each port's details on hover. It sits at
-the top of *Network → Interfaces* (choosing a port opens its bridge's VLAN
-settings) and, on the *Devices* tab, adds a *Port Manager* list: link, speed
-and duplex, the native VLAN and its network in the zone's colour, tagged VLANs
-and traffic. The dashboard gets a *Ports* card with the strip and a short
+The router's own ports get UniFi's *Port Manager*, the port panel of a
+device: a strip with a square per port, green with link (lime at Fast
+Ethernet, blue from 2.5 GbE), grey without, outlined when disabled, a chevron
+on the uplink and a bolt on a port giving PoE, with a legend and each port's
+details on hover; under it a list of the ports with their link, speed and
+duplex, the native VLAN and its network in the zone's colour, tagged VLANs and
+traffic. It sits at the top of *Network → Interfaces* whichever design that
+page has (choosing a port opens its bridge's VLAN settings) and can be
+switched off. The dashboard gets a *Ports* card with the strip and a short
 list, and the Status overview's own *Port status* is drawn the same way. It
-reads DSA ports (`board.json`, netifd) and swconfig switches alike, with
-their VLANs from `bridge-vlan` or `switch_vlan`; the code is
+reads DSA ports (`board.json`, netifd) and swconfig switches alike, with their
+VLANs from `bridge-vlan` or `switch_vlan`; the code is
 `htdocs/luci-static/resources/view/unifi/ports.js`, reusable by any view.
 
-Three entries appear under *System → System → Language and Style*:
+### Network designs
+
+*Network → Interfaces* and *Network → Wireless* each come in three designs,
+chosen independently (Interfaces as a list and Wireless as cards, say):
+
+- **Device list** (`list`, the default): a compact row per interface, device
+  or wireless network, as UniFi lists devices and clients: a state dot, the
+  name in bold, aligned columns under titles, row actions as icons on hover.
+- **Settings list** (`settings`): UniFi's *Settings → Networks* and *WiFi*: a
+  card per list with *Create New* at its top right, a line per entry with its
+  facts as chips (protocol, zone, security, band, channel) and quiet icon
+  actions.
+- **Device cards** (`cards`): a card per interface or radio like UniFi's
+  device panel: an icon on a tile, a status chip, label/value rows and the
+  traffic as a split bar.
+
+### Settings
+
+*System → UniFi Theme* (also *Theme settings* in the avatar menu) holds the
+theme's own settings, each choice a card with a small drawing of it:
+
+| Setting | UCI (in `/etc/config/luci`) | Values |
+|---|---|---|
+| Interfaces layout | `luci.unifi.interfaces` | `list` (default), `settings`, `cards` |
+| Wireless layout | `luci.unifi.wireless` | `list` (default), `settings`, `cards` |
+| Port Manager on Interfaces | `luci.unifi.port_manager` | `1` (default), `0` |
+| Colour scheme | `luci.main.mediaurlbase` | `/luci-static/unifi` (follow the system), `/luci-static/unifi-light`, `/luci-static/unifi-dark` |
+
+*Save & Apply* reloads the page, and every page reads the settings as it
+loads, so a change shows at once. From a shell, `uci set
+luci.unifi.wireless=cards && uci commit luci` does the same. The package's
+uci-defaults hook adds the `unifi` section (type `internal`) with the defaults
+where it is missing and leaves existing choices alone.
+
+The colour scheme is also the three entries under *System → System →
+Language and Style*:
 
 - **UniFi** follows the browser's colour scheme, and the button in the app bar
   cycles *follow system → light → dark*; the choice is remembered per browser.
@@ -116,7 +152,11 @@ which is how the feed's CI tests exactly what it publishes. Then it drives
 LuCI in headless Chromium: it signs in, visits every page the menu offers,
 and fails on any script error, failed asset, page that never finishes
 loading, or layout wider than the window, and checks that the port panel
-shows the five ports, with and without link. Screenshots of the main views,
+shows the five ports, with and without link. It then saves designs on *System
+→ UniFi Theme* until each has been on Interfaces and on Wireless, and checks
+both pages in each, wide and at phone width: only that design's stylesheet
+loaded, its script's marks on LuCI's rows, no sideways scroll, and the Port
+Manager there, or gone once switched off. Screenshots of the main views,
 in light, dark and at phone width, land in `test/out/`. It then walks the
 menu again with the CSS that only Chromium ships (`field-sizing`,
 `scroll-initial-target`, scroll-driven animations, `scrollbar-color`) taken
@@ -133,6 +173,24 @@ UF_PORT=8080 sh test/run.sh --setup
 UF_REMOTE_SHELL="docker exec -i" sh install.sh luci-theme-unifi-test
 NODE_PATH=$(npm root -g) node test/shoot.cjs --schemes light,dark,phone admin/network/firewall
 ```
+
+## Where things live
+
+| Path | What |
+|---|---|
+| `ucode/template/themes/unifi/header.ut` | The page frame. Reads `luci.unifi`, puts the choices on `<html>` (`data-uf-interfaces`, `data-uf-wireless`, `data-uf-port-manager`; anything unknown reads as the default) and, on Interfaces or Wireless, links that page's design stylesheet after `cascade.css` |
+| `htdocs/luci-static/unifi/cascade.css` | Everything shared: the tokens and components (the base), then a section per page (`/* ==== page: NAME ==== */`); `network` there holds only what Routing, DHCP, DNS and Diagnostics need |
+| `htdocs/luci-static/unifi/network/interfaces-DESIGN.css`, `wireless-DESIGN.css` | A design, one page each: the interface list, the Devices and global tabs and the interface, device and bridge VLAN dialogs; or the radios, their networks, the associated stations and the wireless and scan dialogs |
+| `htdocs/luci-static/resources/view/unifi/network/interfaces-DESIGN.js`, `wireless-DESIGN.js` | Each design's script: it only marks LuCI's nodes (which fact a row holds, column titles, a state) for its stylesheet, again after every redraw. `menu-unifi.js` loads the chosen one and calls its `enhance()`; without it the page keeps LuCI's rows |
+| `htdocs/luci-static/resources/menu-unifi.js` | Navigation (app bar, rail, secondary column, tabs), the design loader, and the Port Manager card above the Interfaces view |
+| `htdocs/luci-static/resources/view/unifi/ports.js` | The port model (DSA and swconfig) and the strip and list |
+| `htdocs/luci-static/resources/view/dashboard/include/25_ports.js` | The dashboard's Ports card |
+| `htdocs/luci-static/resources/view/unifi/settings.js` | *System → UniFi Theme*; its menu entry is `root/usr/share/luci/menu.d/luci-theme-unifi.json` |
+| `root/usr/share/rpcd/acl.d/luci-theme-unifi.json` | What the port panel reads, and the settings page's access to `luci` |
+| `root/etc/uci-defaults/30_luci-theme-unifi` | Registers the three theme entries and the settings' defaults |
+
+A new design is a pair of stylesheets and a pair of scripts under those
+names, its name in `header.ut`'s list, and a card on the settings page.
 
 ## For LuCI application authors
 
