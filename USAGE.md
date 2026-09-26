@@ -829,7 +829,11 @@ the reports (hostapd delivers them as ubus *notifications*, so `ubus listen` sho
 — only `ubus subscribe` works), `logread | grep BEACON-REQ-TX-STATUS` shows requests going
 out, and `/tmp/openuf-rrm.jsonl` is the spool, drained on every inform.
 
-Use the controller's RF scan (`spectrum-scan`) when you want a real full sweep.
+Use the controller's RF scan (`spectrum-scan`) when you want a real full sweep. It runs
+`iw dev <if> scan ap-force` on every radio. (`ap-force` sweeps the same channels as a plain
+scan on both tested boards, and it guards against a driver that refuses to scan on a
+beaconing AP.) A radio where iw refuses logs `spectrum-scan: iw refused to scan <if>`, and
+reports only the survey counters it already had.
 
 The **Multicast and Broadcast Blocker** has no hostapd or OpenWrt equivalent — hostapd
 can suppress group-addressed frames wholesale but has no notion of an allow-list — so

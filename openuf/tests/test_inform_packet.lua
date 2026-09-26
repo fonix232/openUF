@@ -2469,11 +2469,12 @@ return {
 				assert_true(cached.table[1].width == 40, "width derived from radio's HT40 htmode")
 				assert_true(cached.table[1].utilization == 37, "utilization = channel_time_busy/channel_time * 100")
 				assert_true(cached.table[1].interference == -95, "interference is best-effort noise-floor passthrough")
-				-- mac80211 refuses a plain scan on a beaconing AP interface
-				-- (EOPNOTSUPP without NL80211_SCAN_FLAG_AP), so the sweep the
-				-- whole table depends on never ran.
+				-- One sweep, forced: ap-force guards against a driver that
+				-- refuses to scan on a beaconing AP (ours do not; see
+				-- provision.lua's force_scan), and its exit status is what is
+				-- judged.
 				assert_eq(#popens, 1, "one sweep")
-				assert_contains(popens[1], "iw dev wlan0 scan ap-force", "forced, or mac80211 refuses it")
+				assert_contains(popens[1], "iw dev wlan0 scan ap-force", "forced")
 			end)
 			inform._ucihelper, inform._sysinfo.radio_stats = orig_uci, orig_stats
 			inform._spectrum_cache = orig_cache
