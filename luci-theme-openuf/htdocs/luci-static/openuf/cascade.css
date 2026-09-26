@@ -9996,6 +9996,27 @@ body[data-page="admin-network-switch"] .cbi-tblsection > .table > .tbody > .tr >
 	gap: 8px;
 }
 
+/* "Details" folds the per-port list away on phones (menu-openuf.js);
+ * wider screens always show the list, and never the button. */
+.uf-ports-card .uf-ports-toggle {
+	display: none;
+}
+
+.uf-ports-card .uf-ports-toggle::after {
+	content: "";
+	width: 16px;
+	height: 16px;
+	margin: 0 -4px 0 4px;
+	background: currentColor;
+	-webkit-mask: var(--uf-i-chevron) center / 16px no-repeat;
+	mask: var(--uf-i-chevron) center / 16px no-repeat;
+	transition: transform .15s ease;
+}
+
+.uf-ports-card .uf-ports-toggle[aria-expanded="true"]::after {
+	transform: rotate(180deg);
+}
+
 /* The dashboard's row sizes suit charts; the port map and its list want
  * the whole width. */
 .Dashboard .dashboard-charts > .uf-ports-card {
@@ -10579,6 +10600,15 @@ body[data-page="admin-status-overview"] div[style*="grid-template-columns"] > .i
 @media screen and (max-width: 640px) {
 	.uf-ports-card > .uf-ports-head {
 		flex-wrap: wrap;
+	}
+
+	.uf-ports-card .uf-ports-toggle {
+		display: inline-flex;
+		align-items: center;
+	}
+
+	.uf-ports-card[data-list="closed"] .uf-ports-list {
+		display: none;
 	}
 
 	.uf-ports-list {

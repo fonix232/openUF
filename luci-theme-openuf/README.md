@@ -33,7 +33,8 @@ details on hover; under it a list of the ports with their link, speed and
 duplex, the native VLAN and its network in the zone's colour, tagged VLANs and
 traffic. It sits at the top of *Network → Interfaces* whichever design that
 page has (choosing a port opens its bridge's VLAN settings) and can be
-switched off. The dashboard gets a *Ports* card with the strip and a short
+switched off; on a phone the list folds away behind *Details*, leaving the
+squares. The dashboard gets a *Ports* card with the strip and a short
 list, and the Status overview's own *Port status* is drawn the same way. It
 reads DSA ports (`board.json`, netifd) and swconfig switches alike, with their
 VLANs from `bridge-vlan` or `switch_vlan`; the code is

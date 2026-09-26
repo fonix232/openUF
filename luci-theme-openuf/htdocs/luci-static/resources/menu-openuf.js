@@ -113,16 +113,44 @@ return baseclass.extend({
 		Promise.all([ L.require('view.openuf-theme.ports'), L.require('poll'), loaded ]).then(([ ports, poll ]) => {
 			let card = null;
 
+			/* On a phone the per-port list would push the interfaces a
+			 * screen down, so there it folds away behind "Details" (the
+			 * squares stay); the choice is remembered. Each poll draws the
+			 * card afresh, so the state goes into every drawing. */
+			let open = pref('ports-list') == 'open';
+
+			const toggle = () => E('button', {
+				'type': 'button',
+				'class': 'cbi-button uf-ports-toggle',
+				'aria-expanded': open ? 'true' : 'false'
+			}, [ _('Details') ]);
+
 			const update = () => ports.load().then((data) => {
 				const body = ports.render(data, { mode: 'full', clickable: true });
-
-				card = ports.patch(card, body ? ports.card(body, {
+				const fresh = body ? ports.card(body, {
 					title: _('Port Manager'),
-					desc: ports.summary(data)
-				}) : null);
+					desc: ports.summary(data),
+					actions: [ toggle() ]
+				}) : null;
+
+				if (fresh)
+					fresh.setAttribute('data-list', open ? 'open' : 'closed');
+
+				card = ports.patch(card, fresh);
 
 				if (card && !card.parentNode) {
 					card.addEventListener('uf-port-select', (ev) => this.openPort(ev.detail.port));
+					card.addEventListener('click', (ev) => {
+						const button = ev.target.closest('.uf-ports-toggle');
+
+						if (!button)
+							return;
+
+						open = !open;
+						pref('ports-list', open ? 'open' : null);
+						card.setAttribute('data-list', open ? 'open' : 'closed');
+						button.setAttribute('aria-expanded', open ? 'true' : 'false');
+					});
 					view.parentNode.insertBefore(card, view);
 				}
 			});
