@@ -6,6 +6,22 @@ on:
   pull_request:
 
 jobs:
+  theme-css:
+    name: Theme stylesheets match their SCSS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the stylesheets and compare with the committed ones
+        working-directory: luci-theme-openuf
+        run: |
+          npm ci
+          npm run build
+          git diff --exit-code --stat -- htdocs/luci-static/openuf \
+            || { echo "::error::luci-theme-openuf/htdocs stylesheets are stale: run npm run build in luci-theme-openuf and commit"; exit 1; }
+
   lua-tests:
     name: Lua unit tests
     runs-on: ubuntu-latest
@@ -84,6 +100,16 @@ jobs:
           for f in openuf/tools/strip-tree.sh openuf/tools/deploy.sh openuf/tools/globals-check.sh \
                    openuf/files/openuf.uci-defaults openuf/files/openuf.init \
                    openuf/files/openuf-bootstrap.init openuf/src/hook/*.sh \
-                   .github/scripts/sdk-build.sh; do
+                   .github/scripts/sdk-build.sh \
+                   luci-theme-openuf/install.sh luci-theme-openuf/test/*.sh \
+                   luci-theme-openuf/root/etc/uci-defaults/*; do
             sh -n "$f" || exit 1
+          done
+          for f in luci-theme-openuf/test/*.cjs; do
+            node --check "$f" || exit 1
+          done
+          # LuCI evaluates its modules as function bodies (they end in a
+          # top-level return), so parse them the same way.
+          for f in $(find luci-theme-openuf/htdocs -name '*.js'); do
+            node -e 'new Function(require("fs").readFileSync(process.argv[1], "utf8"))' "$f" || exit 1
           done

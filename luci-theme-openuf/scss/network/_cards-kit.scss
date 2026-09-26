@@ -1,0 +1,234 @@
+// What the cards design's pages (Interfaces, Wireless) both draw. LuCI lays
+// out interfaces, devices and radios as table rows; the rows become cards
+// like UniFi's device panel, laid out in their section's card.
+@forward 'cards-icons';
+@use 'sass:list';
+@use 'sass:map';
+@use '../abstracts' as *;
+
+// A section as a card of cards: its title on top, with whatever @content puts
+// beside it ($beside), then the cards in a grid, each at least $min wide.
+// It does not scroll sideways as the base's wide grids do, nor clip once
+// $shown (a selector on the section) holds.
+@mixin section($shown, $min, $gap, $align: null, $beside: ()) {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 0 16px;
+
+	&#{$shown} { overflow: visible; }
+	> h3 { position: static; grid-column: 1; margin: 0 0 14px; }
+	@content;
+	> :not(#{list.join(h3, $beside, comma)}) { position: static; grid-column: 1 / -1; }
+	> .table { display: block; margin: 0; }
+
+	> .table > :is(.tbody, .thead) {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(min(100%, $min), 1fr));
+		align-items: $align;
+		gap: $gap;
+	}
+}
+
+// A card: the row itself. Cells lose the table's rules and padding, and the
+// row actions the base pins for scrolling grids.
+@mixin card($padding, $gap) {
+	.tr.cbi-section-table-row {
+		--uf-network-state: var(--uf-text-4);
+		--uf-network-chip: var(--uf-field);
+		--uf-network-chip-text: var(--uf-text-2);
+
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: start;
+		gap: 0 12px;
+		margin: 0;
+		padding: $padding;
+		background: var(--uf-surface);
+		border: 1px solid var(--uf-border);
+		border-radius: var(--uf-radius);
+
+		> :where(.td) {
+			display: block;
+			width: auto;
+			min-width: 0;
+			padding: 0;
+			border: 0;
+			border-radius: 0;
+			background: none;
+			overflow: visible;
+			text-align: left;
+			white-space: normal;
+		}
+
+		> .td.cbi-section-actions {
+			position: static;
+			width: auto !important; // over LuCI's inline width, measured for a row of text buttons
+			min-width: 0 !important;
+			background: none;
+			box-shadow: none;
+			animation: none;
+
+			> div {
+				display: flex;
+				align-items: center;
+				justify-content: flex-end;
+				gap: $gap;
+			}
+		}
+	}
+
+	// (Kept weak, so the icon buttons and switches can reshape them.)
+	:where(.tr.cbi-section-table-row > .td.cbi-section-actions) .cbi-button { flex: none; height: 28px; padding: 0 12px; }
+}
+
+// The icon on a tile at the start of a card's first line.
+@mixin tile($background) {
+	content: "";
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 40px;
+	height: 40px;
+	border-radius: 10px;
+	background: $background;
+}
+
+// UniFi's quiet icon buttons, grey until hovered. The label stays the
+// button's accessible name, LuCI's title its tooltip.
+@mixin icon-button($height: null) {
+	--uf-btn-fg: var(--uf-text-3);
+	--uf-btn-bg: transparent;
+	--uf-btn-line: transparent;
+
+	width: 28px;
+	height: $height;
+	padding: 0;
+	font-size: 0;
+}
+
+// An icon drawn in the text's colour, as a button's ::before (the base's
+// spinner takes its place while the button works).
+@mixin icon($icon, $size: 18px) {
+	content: "";
+	flex: none;
+	width: $size;
+	height: $size;
+	background: currentColor;
+	@include mask($icon center / contain no-repeat);
+}
+
+// The status chip: a dot and a word, tinted by the state; with no word to
+// show (no script), the dot alone.
+@mixin chip {
+	&::after {
+		content: attr(data-uf-state-label);
+		flex: none;
+		display: inline-flex;
+		align-items: center;
+		height: 18px;
+		padding: 0 8px 0 17px;
+		border-radius: 9px;
+		background: radial-gradient(circle at 9px 50%, var(--uf-network-state) 3px, transparent 3.5px), var(--uf-network-chip);
+		color: var(--uf-network-chip-text);
+		font-size: 11px;
+		font-weight: 500;
+		line-height: 18px;
+		white-space: nowrap;
+	}
+
+	&:not([data-uf-state-label])::after {
+		width: 8px;
+		height: 8px;
+		margin: 0 2px;
+		padding: 0;
+		background: var(--uf-network-state);
+	}
+}
+
+// A state's colours on a card: the dot, the chip's tint and its word.
+$-tints: (green: .13, orange: .15, red: .1);
+
+@mixin state($color) {
+	--uf-network-state: var(--uf-#{$color});
+	--uf-network-chip: rgba(var(--uf-#{$color}-rgb), #{map.get($-tints, $color)});
+	--uf-network-chip-text: var(--uf-#{$color}-text);
+}
+
+// A label as the script words it ("Protocol", not LuCI's "Protocol: "); its
+// own text stays for screen readers.
+@mixin labels($gap: null) {
+	.nowrap > strong[data-uf-label] {
+		font-size: 0;
+
+		&::before {
+			content: attr(data-uf-label);
+			content: attr(data-uf-label) / "";
+			margin-right: $gap;
+			font-size: 13px;
+		}
+	}
+}
+
+// The status at the top of an interface's or a network's dialog: the card's
+// body in a tinted block, the icon beside label/value rows.
+@mixin dialog {
+	display: flex;
+	align-items: flex-start;
+	gap: 14px;
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
+	padding: 12px 16px;
+	background: var(--uf-field);
+	border: 0;
+	border-radius: var(--uf-radius);
+	color: var(--uf-text-1);
+	font-weight: 400;
+	line-height: 18px;
+	white-space: normal;
+}
+
+// The dialog's rows, two to a line where there is room.
+@mixin dialog-facts {
+	> span {
+		flex: 1 1 auto;
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+		gap: 0 24px;
+		min-width: 0;
+		font-size: 0; // the " | " LuCI puts between facts
+
+		> br { display: none; }
+
+		> :is(.nowrap, em) {
+			display: flex;
+			justify-content: space-between;
+			align-items: baseline;
+			gap: 12px;
+			padding: 5px 0;
+			border-bottom: 1px solid var(--uf-border);
+			color: var(--uf-text-1);
+			font-size: 13px;
+			font-style: normal;
+			white-space: normal;
+			text-align: right;
+			overflow-wrap: anywhere;
+			font-variant-numeric: tabular-nums;
+		}
+
+		> .nowrap > strong {
+			flex: none;
+			color: var(--uf-text-3);
+			font-weight: 400;
+			text-align: left;
+		}
+
+		> em {
+			grid-column: 1 / -1;
+			justify-content: flex-start;
+			border-bottom: 0;
+			color: var(--uf-text-3);
+		}
+	}
+}

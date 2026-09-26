@@ -1,0 +1,155 @@
+// Services > uHTTPd (luci-app-uhttpd): one card per server instance, with
+// General, Full Web Server and Advanced tabs, then a card of certificate
+// parameters. The lists are long and their titles wordy, so, as on UniFi's
+// settings pages, titles get a wider column and every control one width, so
+// the controls line up down the card.
+@use '../abstracts' as *;
+@use '../abstracts/pages-b' as *;
+
+body[data-page="admin-services-uhttpd"] {
+	// The certificate and key pickers' glyphs, in place of LuCI's Tango file
+	// icon: a seal for the certificate, a key for the key.
+	--uf-uhttpd-i-cert: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='9.5' r='6'/><circle cx='12' cy='9.5' r='2.5'/><path d='M8.5 14.4 7.5 21.25l4.5-2.5 4.5 2.5-1-6.85'/></svg>");
+	--uf-uhttpd-i-key: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><circle cx='8' cy='15.5' r='4.25'/><path d='m11 12.5 8.5-8.5M16.5 7l2.5 2.5M14.5 9l2 2'/></svg>");
+	--uf-uhttpd-control-w: 320px;
+
+	#cbi-uhttpd-uhttpd {
+		// LuCI prints the instance's name (a UCI section name) in capitals,
+		// which read better opened up a little.
+		> h3 { letter-spacing: .02em; }
+
+		// Each instance after the first starts under a rule across the card,
+		// as UniFi separates groups.
+		> .cbi-section-node:has(+ .cbi-section-remove, + h3) {
+			margin: 0 -20px 20px;
+			padding: 0 20px 18px;
+			border-bottom: 1px solid var(--uf-border);
+		}
+
+		// Adding an instance is the card's footer, under a row rule, not one
+		// more field of the last tab.
+		> .cbi-section-create {
+			display: flex;
+			flex-wrap: nowrap;
+			width: 100%;
+			margin-top: 8px;
+			padding-top: 16px;
+			border-top: 1px solid var(--uf-divider);
+			> div { flex: 0 1 220px; min-width: 0; }
+			> .cbi-button { flex: 0 0 auto; }
+		}
+	}
+
+	// Timeouts, limits, key size and validity are figures.
+	.cbi-value-field input, .cbi-dynlist > .item { font-variant-numeric: tabular-nums; }
+
+	// The certificate and the key: a picker that looks like the fields around
+	// it, with its glyph, the chosen file and its size, and a chevron, since
+	// it opens the file browser under it. With nothing chosen ("Select
+	// file…") its label reads as a placeholder.
+	.open-file-browser {
+		--uf-btn-bg: var(--uf-field);
+		--uf-btn-line: transparent;
+		--uf-uhttpd-glyph: var(--uf-uhttpd-i-cert);
+		position: relative;
+		display: block;
+		width: var(--uf-uhttpd-control-w);
+		max-width: 100%;
+		padding: 0 32px 0 10px;
+		font-weight: 400;
+		line-height: 30px;
+		text-align: left;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.cbi-value[data-name="key"] .open-file-browser { --uf-uhttpd-glyph: var(--uf-uhttpd-i-key); }
+
+	.open-file-browser {
+		&:hover { --uf-btn-bg: var(--uf-field); --uf-btn-line: var(--uf-border-strong); }
+		&:not(:has(img)) { color: var(--uf-text-3); }
+		> img { display: none; }
+
+		&::before, &::after {
+			content: "";
+			display: inline-block;
+			@include size(16px);
+			background: var(--uf-text-2);
+			@include mask(var(--uf-uhttpd-glyph) center / contain no-repeat);
+		}
+
+		&::before { margin: 0 4px 0 0; vertical-align: -3px; }
+
+		&::after {
+			position: absolute;
+			top: 7px;
+			right: 8px;
+			background: var(--uf-text-3);
+			@include mask-image(var(--uf-i-chevron));
+		}
+	}
+
+	// The file browser that replaces the picker: as wide as a short path and
+	// its date need, and a directory of /etc (some seventy entries) scrolls
+	// within it rather than stretch the card by a screenful and more.
+	.cbi-filebrowser.open {
+		width: 560px;
+		max-width: 100%;
+
+		> ul {
+			max-height: 340px;
+			overflow-y: auto;
+			overscroll-behavior: contain;
+			scrollbar-width: thin;
+		}
+	}
+
+	// "Upload file…" swaps in a row of Browse, a name and Upload inside the
+	// footer, beside Cancel: it takes the room left of Cancel (all of the
+	// line, stacked), without the rule it would draw as the browser's own
+	// row, and its buttons keep their labels whole.
+	.cbi-filebrowser .right > .upload {
+		flex: 1 1 320px;
+		padding: 0;
+		border: 0;
+		> .btn { flex: 0 0 auto; }
+		> div { min-width: 0; }
+	}
+
+	// "Remove old certificate and key" and "Remove configuration for
+	// certificate and key" are buttons that repeat their row's title word for
+	// word, in every language: the button stands in for the title.
+	.cbi-value[data-widget="CBI.ButtonValue"] > .cbi-value-title { visibility: hidden; }
+
+	// One width for text fields and lists: paths such as the Lua prefix
+	// ("/cgi-bin/luci=/usr/lib/lua/luci/sgi/uhttpd.lua") fit whole.
+	@include desktop {
+		.cbi-value-field :not(.add-item) > input.cbi-input-text, .cbi-value-field .cbi-dynlist {
+			width: var(--uf-uhttpd-control-w);
+			max-width: 100%;
+		}
+	}
+
+	// Beside the full rail and column, all but the four longest titles fit
+	// on one line, rather than a dozen wrapping in two or three.
+	@media screen and (min-width: 961px) {
+		.cbi-value label.cbi-value-title { flex-basis: 280px; }
+	}
+
+	@include phone {
+		#cbi-uhttpd-uhttpd {
+			> .cbi-section-node:has(+ .cbi-section-remove, + h3) {
+				margin: 0 -14px 16px;
+				padding: 0 14px 14px;
+			}
+
+			> .cbi-section-create > div { flex: 1 1 auto; }
+		}
+
+		// Stacked, a hidden title would leave a gap over the button.
+		.cbi-value[data-widget="CBI.ButtonValue"] > .cbi-value-title { display: none; }
+
+		// Full-width actions and pickers, as UniFi's app lays out a panel.
+		.cbi-value[data-widget="CBI.ButtonValue"] .cbi-button, .open-file-browser { width: 100%; }
+	}
+}

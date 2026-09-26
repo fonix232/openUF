@@ -175,6 +175,11 @@ Install `openuf` alone on a device without LuCI. The package pulls in what it ne
 starts the service. Settings are in `/etc/config/openuf`, and on **Services → openUF →
 Settings** in LuCI.
 
+**A LuCI theme to match.** The same feed carries `luci-theme-openuf`, a LuCI theme inspired
+by the UniFi Network look, with light, dark and follow-the-system schemes:
+`apk add luci-theme-openuf` after the two lines above. It works with or without openUF; see
+[luci-theme-openuf/README.md](luci-theme-openuf/README.md).
+
 Then adopt it:
 
 - **L2** (device and controller on the same subnet): it appears in the controller's
@@ -221,6 +226,7 @@ See [USAGE.md](USAGE.md) for every setting, dependency details and troubleshooti
 |---|---|
 | `openuf/` | The `openuf` package: `Makefile`, `src/` (the daemon, installed to `/usr/share/openuf`: `unifi/` is the controller's side — packets, crypto, identity, events — and `openwrt/` the device's — reading it and applying what the controller pushes), `files/` (init scripts, default UCI config, keep-list, feed key), `tests/`, `tools/`, `contrib/asu/` |
 | `luci-app-openuf/` | The `luci-app-openuf` package: the LuCI views and their rpcd backend |
+| `luci-theme-openuf/` | The `luci-theme-openuf` package: a LuCI theme inspired by the UniFi Network look, independent of the daemon, and its Docker/Playwright test lab (`test/`) |
 | `.github/` | CI: tests, the package feed (`feed.yml`, published to GitHub Pages), releases |
 | `docs/`, `USAGE.md`, `PROTOCOL-VALIDATION.md` | Documentation |
 

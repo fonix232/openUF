@@ -1,0 +1,41 @@
+@use '../abstracts' as *;
+
+// Busy states and motion.
+
+@keyframes flash {
+	0% { opacity: 1; }
+	50% { opacity: .5; }
+	100% { opacity: 1; }
+}
+
+.flash { animation: flash .35s; }
+
+#view > div.spinning:first-child {
+	display: table;
+	margin: 15vh auto;
+	color: var(--uf-text-3);
+}
+
+.spinning {
+	position: relative;
+	padding-left: 30px !important;
+	&::before {
+		content: "";
+		position: absolute;
+		top: calc(50% - 9px);
+		left: 6px;
+		@include icon(var(--uf-i-spinner), 18px, var(--uf-btn-fg, var(--uf-blue)));
+	}
+}
+
+@keyframes fade-in { 0% { opacity: 0; } 100% { opacity: 1; } }
+@keyframes fade-out { 0% { opacity: 1; } 100% { opacity: 0; } }
+.fade-in { animation: fade-in .3s ease; }
+.fade-out { animation: fade-out .3s ease; }
+
+@media (prefers-reduced-motion: reduce) {
+	*, *::before, *::after {
+		transition-duration: 0s !important;
+		animation-duration: 0s !important;
+	}
+}

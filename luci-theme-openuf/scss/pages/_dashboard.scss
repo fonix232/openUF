@@ -1,0 +1,559 @@
+@use '../abstracts' as *;
+@use '../abstracts/pages-a' as *;
+
+// luci-mod-dashboard, drawn as UniFi Network's Dashboard: KPI tiles with a
+// tinted icon, thin-line charts on a faint grid, and the detail tabs as
+// label/value rows. The module's custom.css lays out the grids and colours
+// its charts from --dashboard-* variables; it is loaded after this file, so
+// rules here carry one more class than the ones they replace.
+//
+// Everything is scoped by .Dashboard, the class only this module renders,
+// so it holds on every route that shows the view (the landing page too).
+
+// A legend's colour key.
+@mixin swatch {
+	width: 8px;
+	height: 8px;
+	border-radius: 2px;
+}
+
+:root {
+	--uf-dashboard-lime: #a4b81c;
+	--uf-dashboard-pink: #e0569f;
+	--uf-dashboard-area: .12;
+	--uf-dashboard-i-down: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'><path d='M12 4.5v15M6 13.5l6 6 6-6'/></svg>");
+	--uf-dashboard-i-up: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'><path d='M12 19.5v-15M6 10.5l6-6 6 6'/></svg>");
+	--uf-dashboard-i-grip: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='9' cy='6' r='1.6'/><circle cx='15' cy='6' r='1.6'/><circle cx='9' cy='12' r='1.6'/><circle cx='15' cy='12' r='1.6'/><circle cx='9' cy='18' r='1.6'/><circle cx='15' cy='18' r='1.6'/></svg>");
+}
+
+:root[data-darkmode="true"] {
+	--uf-dashboard-lime: #c3d84a;
+	--uf-dashboard-pink: #f07bbb;
+	--uf-dashboard-area: .2;
+}
+
+// The module sets its variables on .Dashboard, once more for dark mode and
+// again under prefers-color-scheme; setting them one level down wins over
+// all three without a specificity race. Series follow UniFi's palette:
+// CPU blue, memory green, then purple, cyan and the rest.
+.Dashboard > * {
+	--dashboard-text: var(--uf-text-1);
+	--dashboard-text-muted: var(--uf-text-3);
+	--dashboard-border: var(--uf-border);
+	--dashboard-surface-alt: var(--uf-field);
+	--dashboard-primary: var(--uf-blue);
+	--dashboard-success: var(--uf-green);
+	--dashboard-warn: var(--uf-orange);
+
+	@each $n, $color in (1: blue, 2: green, 3: purple, 4: cyan, 5: orange, 6: dashboard-lime, 7: dashboard-pink, 8: text-4) {
+		--dashboard-series-#{$n}: var(--uf-#{$color});
+	}
+}
+
+// A dashboard is a wall of widgets and, like UniFi's, uses a wide screen;
+// the base width suits forms, not charts.
+.uf-page:has(> #view > .Dashboard) { max-width: 1720px; }
+
+.Dashboard {
+	// KPI tiles with and without a sub-line share a row, so the content sits
+	// at the top and the labels and figures line up across it.
+	.dashboard-kpi-row > .dashboard-kpi {
+		align-items: flex-start;
+		gap: 14px;
+		min-height: 88px;
+		padding: 16px 20px;
+	}
+
+	.dashboard-kpi-icon {
+		width: 40px;
+		height: 40px;
+		border-radius: var(--uf-radius);
+		background: var(--uf-blue-soft);
+		color: var(--uf-blue);
+
+		&::after { inset: 9px; }
+
+		// Tints follow the charts (memory is green there) and the state.
+		&[style*="/memory.svg"],
+		&[style*="/internet.svg"] {
+			background: rgba(var(--uf-green-rgb), .14);
+			color: var(--uf-green-text);
+		}
+
+		&[style*="/not-internet.svg"] {
+			background: rgba(var(--uf-red-rgb), .12);
+			color: var(--uf-red-text);
+		}
+	}
+
+	.dashboard-kpi-text > small:first-child { display: block; @include small-caption(16px); }
+
+	.dashboard-kpi-value {
+		margin: 2px 0 1px;
+		color: var(--uf-text-1);
+		font-size: 22px;
+		font-weight: 600;
+		line-height: 28px;
+		letter-spacing: -.01em;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.dashboard-kpi-sub {
+		@include small-caption(16px);
+		font-variant-numeric: tabular-nums;
+
+		em { font-style: normal; }
+	}
+
+	.dashboard-charts > .cbi-section {
+		> h3 {
+			margin: 0;
+			font-size: 14px;
+			line-height: 20px;
+		}
+
+		> .cbi-section-descr { margin: 2px 0 16px; @include small-caption(16px); }
+	}
+
+	.dashboard-bars-axis,
+	.dashboard-lines-time,
+	.dashboard-bars-label {
+		color: var(--uf-text-3);
+		font-size: 11px;
+		font-variant-numeric: tabular-nums;
+	}
+
+	// Faint grid, a firmer baseline (the first tick is always the lowest).
+	.dashboard-bars-grid i {
+		border-top-color: var(--uf-border);
+
+		&:first-child { border-top-color: var(--uf-border-strong); }
+	}
+
+	.dashboard-lines-plot svg {
+		polyline { stroke-width: 1.5; }
+		polygon { opacity: var(--uf-dashboard-area); }
+	}
+
+	// The grid is positioned, so it would paint over static bars.
+	.dashboard-bars-col { position: relative; }
+	.dashboard-bars-stack i { max-width: 16px; border-radius: 3px 3px 0 0; }
+	.dashboard-bars-col:hover .dashboard-bars-stack i { filter: none; opacity: .8; }
+
+	.dashboard-legend-inline {
+		gap: 6px 16px;
+		margin-top: 14px;
+		@include small-caption(16px);
+
+		i { flex: 0 0 auto; @include swatch; }
+
+		b {
+			color: var(--uf-text-1);
+			font-weight: 500;
+			font-variant-numeric: tabular-nums;
+		}
+	}
+
+	// WAN traffic is a throughput chart: download cyan with a down arrow,
+	// upload purple with an up arrow. Line charts get that, and System load
+	// gets CPU blue and memory green back: it is the one that fills only its
+	// first series and draws memory as a bare line. Told apart by structure,
+	// not by title, so it holds in every language and while WAN is empty.
+	.dashboard-charts > .cbi-section {
+		&:has(.dashboard-lines-plot) {
+			--dashboard-series-1: var(--uf-cyan);
+			--dashboard-series-2: var(--uf-purple);
+
+			.dashboard-legend-inline {
+				i {
+					width: 10px;
+					height: 12px;
+					border-radius: 0;
+					@include mask(var(--uf-dashboard-i-down) center / contain no-repeat);
+
+					&.dashboard-series-2 {
+						-webkit-mask-image: var(--uf-dashboard-i-up);
+						mask-image: var(--uf-dashboard-i-up);
+					}
+				}
+
+				span:nth-child(1) b { color: var(--uf-cyan-text); }
+				span:nth-child(2) b { color: var(--uf-purple-text); }
+			}
+		}
+
+		&:has(polyline.dashboard-series-2):not(:has(polygon.dashboard-series-2)) {
+			--dashboard-series-1: var(--uf-blue);
+			--dashboard-series-2: var(--uf-green);
+
+			.dashboard-legend-inline {
+				i { @include swatch; @include mask(none); }
+				b { color: var(--uf-text-1); }
+			}
+		}
+	}
+
+	// Download is the figure people watch; upload's fill stays lighter.
+	.dashboard-lines-plot svg polygon.dashboard-series-2 { opacity: calc(var(--uf-dashboard-area) * .6); }
+
+	// Per-client data usage, same convention (the module draws up first).
+	.dashboard-charts > .cbi-section:has([data-chart="traffic"]) {
+		--dashboard-series-1: var(--uf-purple);
+		--dashboard-series-2: var(--uf-cyan);
+	}
+
+	// Empty states ("Not connected", "Collecting data..."): centred in the
+	// card under a faint chart glyph, the way UniFi leaves an idle widget.
+	// Centred on the whole card, so idle cards side by side line up whether
+	// or not they carry a caption.
+	.dashboard-charts > .cbi-section {
+		position: relative;
+		min-height: 220px;
+
+		> em {
+			position: absolute;
+			inset: 0;
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+			gap: 10px;
+			padding: 40px 20px 0;
+			color: var(--uf-text-3);
+			font-style: normal;
+			text-align: center;
+			pointer-events: none;
+
+			&::before { @include glyph(var(--uf-i-chart), var(--uf-text-4), 32px); }
+		}
+	}
+
+	// Donut (wireless client distribution): a thinner ring. In a narrow card
+	// the legend moves under the ring instead of being squeezed beside it
+	// down to a letter per line.
+	.dashboard-donut {
+		flex-wrap: wrap;
+		justify-content: center;
+
+		.dashboard-legend {
+			flex: 1 1 180px;
+			align-content: start;
+
+			// Stacked (the module's column layout), the basis would be a height.
+			@media screen and (max-width: 760px) { flex: 0 0 auto; }
+		}
+	}
+
+	.dashboard-donut-track,
+	.dashboard-donut-seg { stroke-width: 11; }
+	.dashboard-donut-track { stroke: var(--uf-field); }
+	.dashboard-donut-value { font-size: 20px; font-weight: 600; }
+
+	.dashboard-legend {
+		li { font-size: 12px; color: var(--uf-text-2); }
+		i { @include swatch; margin-top: calc((1.4em - 8px) / 2); }
+		b { color: var(--uf-text-1); font-weight: 500; }
+	}
+
+	.dashboard-legend-name small,
+	.dashboard-legend li > small { color: var(--uf-text-3); }
+
+	// Detail tabs
+
+	> .cbi-map { margin-top: 8px; }
+
+	.cbi-map-tabbed > .cbi-section h3 {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 4px;
+		margin-bottom: 8px;
+		font-size: 14px;
+		line-height: 20px;
+
+		> .label { margin: 0 0 0 4px; }
+	}
+
+	// Internet, System and Resources are UniFi's detail rows: the label at the
+	// left, the value at the right (the base colours both).
+	:is([data-tab="internet"], [data-tab="system"], [data-tab="resources"]) {
+		.table { display: block; }
+		.table > tbody { display: contents; }
+
+		.tr {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: baseline;
+			gap: 2px 16px;
+			min-height: 33px;
+			padding: 7px 0;
+			border-top: 1px solid var(--uf-divider);
+
+			&:first-child { border-top: 0; }
+		}
+
+		.td {
+			display: block;
+			width: auto;
+			padding: 0;
+			border: 0;
+
+			&:first-child { flex: 1 0 auto; }
+
+			// margin-left: auto keeps a value that wrapped under its label on
+			// the right.
+			+ .td {
+				flex: 0 1 auto;
+				min-width: 0;
+				margin-left: auto;
+				text-align: right;
+				overflow-wrap: anywhere;
+				font-variant-numeric: tabular-nums;
+			}
+		}
+	}
+
+	// A usage bar runs under its row, its figure at the right of the label
+	// ("TX Retries  Low (13%)" in UniFi's device panel).
+	[data-tab="resources"] {
+		.td:has(> .cbi-progressbar) { flex-basis: 100%; overflow: visible; }
+
+		.cbi-progressbar {
+			min-width: 0;
+			margin: 6px 0 2px;
+
+			&::before {
+				top: -26px;
+				left: auto;
+				color: var(--uf-text-1);
+				font-size: 13px;
+				line-height: 18px;
+			}
+		}
+
+		em { color: var(--uf-text-3); font-style: normal; }
+
+		// A hover tooltip hangs off the CPU labels.
+		[data-tooltip] { border-bottom: 1px dotted var(--uf-text-4); cursor: help; }
+	}
+
+	[data-tab="internet"] > div {
+		> div > em {
+			display: block;
+			padding: 7px 0;
+			color: var(--uf-text-3);
+			font-style: normal;
+		}
+
+		> div + div { margin-top: 16px; }
+	}
+
+	// Wide enough, the rows run in two columns: IPv4 beside IPv6, and the
+	// system and resource rows pairwise.
+	@media screen and (min-width: 800px) {
+		[data-tab="internet"] > div {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 16px 48px;
+
+			> div + div { margin-top: 0; }
+		}
+
+		:is([data-tab="system"], [data-tab="resources"]) > .table {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			column-gap: 48px;
+
+			> .tr:nth-child(2) { border-top: 0; }
+		}
+	}
+
+	// DHCP and wireless client lists: UniFi's client table, a status dot
+	// before the name and the MAC as secondary grey. The base pads and
+	// hovers them as lists.
+	:is([data-tab="dhcp"], [data-tab="wifi"]) .tr[class*="cbi-rowstyle"] > .td:first-child {
+		color: var(--uf-text-1);
+
+		&::before {
+			content: "";
+			display: inline-block;
+			width: 6px;
+			height: 6px;
+			margin: 0 10px 1px 0;
+			border-radius: 50%;
+			background: var(--uf-green);
+			vertical-align: middle;
+		}
+	}
+
+	// The signal chip opens its cell; the base's gap before a chip would
+	// push it off the column's edge.
+	[data-tab="wifi"] .td > span > .label:first-child { margin-left: 0; }
+
+	[data-tab="dhcp"] .tr[class*="cbi-rowstyle"] > .td {
+		&:nth-child(2) { font-variant-numeric: tabular-nums; }
+		&:nth-child(3) { color: var(--uf-text-3); font-variant-numeric: tabular-nums; }
+	}
+
+	// A wireless client's traffic, as in UniFi's client list and in the usage
+	// chart above: up in purple, down in cyan.
+	[data-tab="wifi"] .tr[class*="cbi-rowstyle"] > .td {
+		&:is(:nth-child(5), :nth-child(6)) { font-variant-numeric: tabular-nums; }
+		&:nth-child(5) { color: var(--uf-purple-text); }
+		&:nth-child(6) { color: var(--uf-cyan-text); }
+
+		// With an arrow before the figure; stacked on a phone, the cell's
+		// label takes that place.
+		@include desktop {
+			&:is(:nth-child(5), :nth-child(6))::before {
+				content: "";
+				display: inline-block;
+				width: 10px;
+				height: 12px;
+				margin-right: 4px;
+				background: currentColor;
+				vertical-align: -1px;
+				@include mask(var(--uf-dashboard-i-up) center / contain no-repeat);
+			}
+
+			&:nth-child(6)::before {
+				-webkit-mask-image: var(--uf-dashboard-i-down);
+				mask-image: var(--uf-dashboard-i-down);
+			}
+		}
+	}
+
+	:is([data-tab="dhcp"], [data-tab="wifi"]) {
+		// "Total 0" under "No active leases" says nothing more.
+		.tr.placeholder + .tr { display: none; }
+
+		// The closing "Total" row: a sum, not a client, so not hovered either.
+		.tr:last-child:not([class*="cbi-rowstyle"]):not(.table-titles):not(.placeholder) > .td {
+			border-top: 1px solid var(--uf-border);
+			background: none;
+			color: var(--uf-text-3);
+
+			+ .td { color: var(--uf-text-1); font-weight: 600; }
+		}
+	}
+
+	// Wireless networks: UniFi-style cards, a dot for the radio's state
+	// instead of a solid blue header.
+	.dashboard-net-grid {
+		.ifacebox {
+			display: flex;
+			border-color: var(--uf-border);
+			background: var(--uf-surface);
+			text-align: left;
+		}
+
+		.ifacebox-head {
+			&,
+			&.active {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				padding: 10px 14px;
+				background: none;
+				border-bottom: 1px solid var(--uf-divider);
+				color: var(--uf-text-1);
+			}
+
+			&::before {
+				content: "";
+				flex: 0 0 auto;
+				width: 8px;
+				height: 8px;
+				border-radius: 50%;
+				background: var(--uf-text-4);
+			}
+
+			&.active::before { background: var(--uf-green); }
+		}
+
+		// A disabled network is greyed, as UniFi greys an offline device.
+		.ifacebox-head:not(.active),
+		.ifacebox:has(> .ifacebox-head:not(.active)) .dashboard-net-count b { color: var(--uf-text-3); }
+	}
+
+	.dashboard-net-count b {
+		color: var(--uf-text-1);
+		font-size: 22px;
+		font-weight: 600;
+		line-height: 26px;
+	}
+
+	.dashboard-net-count small,
+	.dashboard-net-fields span,
+	.dashboard-net-note { @include small-caption; }
+
+	.dashboard-net-fields {
+		font-size: 13px;
+
+		b { color: var(--uf-text-1); font-weight: 500; }
+	}
+
+	[data-tab="wifi"] .dashboard-net-grid + h3 { margin-top: 8px; }
+
+	[data-tab="layout"] {
+		// The lists are reordered by dragging, so show a grip.
+		.cbi-dynlist > .item {
+			padding-left: 28px;
+
+			&::before {
+				content: "";
+				position: absolute;
+				top: 0;
+				bottom: 0;
+				left: 6px;
+				width: 16px;
+				background: var(--uf-text-4);
+				@include mask(var(--uf-dashboard-i-grip) center / 16px no-repeat);
+			}
+
+			&:hover::before { background: var(--uf-text-3); }
+		}
+
+		// The tab's actions (flattened by the base) are its footer, under a rule.
+		.cbi-page-actions {
+			margin-top: 12px;
+			padding-top: 12px;
+			border-top: 1px solid var(--uf-border);
+		}
+
+		.cbi-map { margin-bottom: 0; }
+	}
+
+	// Tablets: the module's rows (four tiles, then three) wrap into rows of
+	// mixed widths here; pairs are even.
+	@media screen and (min-width: 641px) and (max-width: 860px) {
+		.dashboard-kpi-row > .dashboard-kpi { flex-basis: calc(50% - var(--dashboard-gap)); }
+	}
+
+	// Phones: the KPI tiles pair up, icon above the figures.
+	@include phone {
+		.dashboard-kpi-row > .dashboard-kpi {
+			flex: 1 1 calc(50% - var(--dashboard-gap));
+			flex-direction: column;
+			gap: 10px;
+			min-width: calc(50% - var(--dashboard-gap));
+			padding: 14px;
+		}
+
+		.dashboard-kpi-icon {
+			width: 32px;
+			height: 32px;
+
+			&::after { inset: 7px; }
+		}
+
+		.dashboard-kpi-text { max-width: 100%; }
+		.dashboard-kpi-value { font-size: 19px; line-height: 24px; }
+
+		// A stacked client is headed by its name, its addresses paired below;
+		// a wireless client's signal takes a line, so up and down pair.
+		:is([data-tab="dhcp"], [data-tab="wifi"]) .tr[class*="cbi-rowstyle"] > .td:first-child,
+		[data-tab="wifi"] .tr[class*="cbi-rowstyle"] > .td:nth-child(4) { flex-basis: 100%; }
+		:is([data-tab="dhcp"], [data-tab="wifi"]) .tr[class*="cbi-rowstyle"] > .td:first-child { font-weight: 500; }
+	}
+}

@@ -1,0 +1,222 @@
+// What the settings design's pages share: a list on a card, with column
+// titles over rows laid out on a grid, a state dot and quiet icon actions,
+// and the status block atop an edit dialog. Each page places these in its
+// own order, on its own selectors.
+@use '../abstracts' as *;
+
+// LuCI's <em>, an unset value ("none", "unspecified", "any") or a note: grey,
+// as UniFi's "-" is, not italic.
+@mixin grey-em {
+	font-style: normal;
+	color: var(--uf-text-3);
+}
+
+// A list's card: its title on the top line, anything else full width under
+// it. @content adds to the card's own rule.
+@mixin list-card {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 14px 16px;
+	@content;
+
+	> * {
+		grid-column: 1 / -1;
+		min-width: 0;
+	}
+
+	// Nothing scrolls past the title here, so it need not stick.
+	> :not(.table) { position: static; }
+
+	> h3 {
+		grid-column: 1;
+		grid-row: 1;
+		margin: 0;
+	}
+}
+
+// Every row of $list is a grid of the same template (--uf-network-cols), so
+// its columns line up without a table; LuCI's cells step aside (display:
+// contents) for what they hold. A row is hovered as a whole, and the wide
+// grids' pinned action cell is a plain cell in every list on $cards.
+@mixin list-rows($list, $cards: $list) {
+	#{$list} {
+		> .table,
+		> .table > .tbody { display: block; }
+
+		> .table > .tbody > .tr {
+			position: relative;
+			display: grid;
+			grid-template-columns: var(--uf-network-cols);
+			grid-auto-flow: row dense;
+			align-items: center;
+			gap: 0 16px;
+			min-height: 52px;
+			padding: 9px 8px;
+			border-radius: var(--uf-radius-sm);
+			box-shadow: 0 -1px 0 var(--uf-divider);
+
+			&:first-child { box-shadow: 0 -1px 0 var(--uf-border); }
+			&:not(.placeholder):hover { background: var(--uf-hover); }
+		}
+	}
+
+	#{$cards} > .table .tr > .td.cbi-section-actions {
+		position: static;
+		background: none;
+		box-shadow: none;
+		animation: none;
+	}
+
+	#{$list} > .table > .tbody > .tr > .td.cbi-section-actions {
+		grid-column: actions;
+		grid-row: 1;
+		width: auto !important; // over LuCI's inline width, measured for one row of buttons
+		min-width: 0 !important;
+		padding: 0;
+		border: 0;
+	}
+
+	// The column titles (th-box) stand in the list's top padding.
+	@include desktop {
+		#{$list}[style*="--uf-th-name"] > .table > .tbody:has(> .tr:first-child[data-sid]) { padding-top: 30px; }
+	}
+}
+
+// Column titles, as UniFi's list header. LuCI gives the list none, so its
+// first row carries them above itself: th-box styles its ::before and
+// ::after as titles, th() puts one in each column, in the language the
+// page's script reads them in (--uf-th-*).
+@mixin th-box($font-size: null, $line-height: null) {
+	&::before,
+	&::after {
+		position: absolute;
+		bottom: 100%;
+		left: 0;
+		right: 0;
+		margin-bottom: 8px;
+		overflow: hidden;
+		color: var(--uf-text-1);
+		font-size: $font-size;
+		font-weight: 600;
+		line-height: $line-height;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+}
+
+@mixin th($before, $after) {
+	&::before {
+		content: var(--uf-th-#{$before}, none);
+		grid-column: $before;
+	}
+
+	&::after {
+		content: var(--uf-th-#{$after}, none);
+		grid-column: $after;
+	}
+}
+
+// A row action: a quiet grey icon (--uf-network-icon, a pencil unless set),
+// as in UniFi's lists, not a button. Its label stays its accessible name,
+// and LuCI's title its tooltip.
+@mixin icon-button {
+	@include btn(var(--uf-text-3), transparent, transparent);
+	flex: 0 0 auto;
+	@include size(30px);
+	padding: 0;
+	gap: 0;
+	font-size: 0;
+	line-height: 0;
+
+	&::before {
+		content: "";
+		@include size(18px);
+		background: currentColor;
+		@include mask(var(--uf-network-icon, var(--uf-network-i-edit)) center / contain no-repeat);
+	}
+}
+
+// Hovered, an action takes its colour (the page sets blue to edit, red to
+// remove) and a tint of it, which shows on a hovered row too, in either
+// scheme.
+@mixin icon-hover {
+	@include btn(var(--uf-text-1), color-mix(in srgb, currentColor 12%, transparent));
+}
+
+// Busy, the icon gives way to the spinner, in the same place.
+@mixin spinning {
+	--uf-network-icon: var(--uf-i-spinner);
+	padding-left: 0 !important; // over .spinning's room for its spinner
+
+	&::before { position: static; }
+}
+
+// The state dot before a row's name (--uf-network-state, grey unless set).
+// It stands beside the name, not in it, so a long name slides past it.
+@mixin state-dot($margin-left: null) {
+	content: "";
+	grid-column: name;
+	grid-row: 1;
+	justify-self: start;
+	flex: 0 0 auto;
+	@include size(8px);
+	margin-left: $margin-left;
+	border-radius: 50%;
+	background: var(--uf-network-state, var(--uf-text-4));
+}
+
+// On phones a row wraps into lines instead: its name and actions first, its
+// facts under them. It is spaced by margins, not gaps, which would also
+// space out what LuCI leaves between the facts and the empty boxes that
+// break the lines.
+@mixin phone-rows {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0;
+	min-height: 0;
+	margin: 0;
+	padding: 10px 2px;
+	border: 0;
+
+	&:first-child { box-shadow: none; }
+
+	// A touch would leave the hover tint stuck on a row.
+	&:not(.placeholder):hover { background: none; }
+
+	> .td.cbi-section-actions {
+		order: 3;
+		flex: 0 0 auto;
+		margin-left: auto;
+	}
+
+	// Line breaks: empty boxes a line wide.
+	&::before,
+	&::after {
+		content: "";
+		flex: 0 0 100%;
+		order: 4;
+		height: 0;
+		padding: 0;
+	}
+
+	&::after { order: 9; }
+}
+
+// The status atop an edit dialog, as the Status overview's cards: a tinted
+// block, an icon or meter beside the facts.
+@mixin status-block($gap) {
+	display: flex;
+	align-items: flex-start;
+	gap: $gap;
+	max-width: 100%;
+	padding: 8px 16px;
+	background: var(--uf-field);
+	border: 0;
+	border-radius: var(--uf-radius);
+	color: var(--uf-text-1);
+	font-weight: 400;
+	line-height: 20px;
+	white-space: normal;
+}
