@@ -6,6 +6,22 @@ on:
   pull_request:
 
 jobs:
+  theme-css:
+    name: Theme stylesheets match their SCSS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the stylesheets and compare with the committed ones
+        working-directory: luci-theme-openuf
+        run: |
+          npm ci
+          npm run build
+          git diff --exit-code --stat -- htdocs/luci-static/openuf \
+            || { echo "::error::luci-theme-openuf/htdocs stylesheets are stale: run npm run build in luci-theme-openuf and commit"; exit 1; }
+
   lua-tests:
     name: Lua unit tests
     runs-on: ubuntu-latest

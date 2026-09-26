@@ -64,9 +64,11 @@ endef
 define Build/Compile
 endef
 
-# The stylesheet ships as written: LuCI's csstidy rewrites selectors and
-# properties it does not know, and collapsed the Status overview's grid.
-# cp -R keeps the openuf-dark and openuf-light symlinks as links.
+# The stylesheets under htdocs/ are built from scss/ (npm run build, Dart
+# Sass, compressed) and committed, so the package builds without Node; CI
+# checks they match their sources. They skip LuCI's csstidy, which rewrites
+# selectors and properties it does not know. cp -R keeps the openuf-dark
+# and openuf-light symlinks as links.
 define Package/luci-theme-openuf/install
 	$(INSTALL_DIR) $(1)/www $(1)/usr/share/ucode/luci
 	$(CP) ./htdocs/. $(1)/www/

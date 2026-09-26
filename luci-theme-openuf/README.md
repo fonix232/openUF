@@ -111,6 +111,15 @@ packages from this feed.
 
 ### Building it
 
+The stylesheets are written in SCSS under `scss/` and compiled with Dart Sass
+into `htdocs/luci-static/openuf/` (compressed). The compiled files are
+committed, so the package itself builds without Node. After changing
+`scss/`, rebuild them and commit both; CI fails when they differ:
+
+```sh
+cd luci-theme-openuf && npm ci && npm run build   # or: npm run watch
+```
+
 The theme is a package in openUF's feed. In a buildroot or SDK with the feed
 added (see the top-level README), `make package/luci-theme-openuf/compile`;
 `.github/scripts/sdk-build.sh` builds it with openUF's other packages inside
@@ -161,7 +170,7 @@ Manager there, or gone once switched off. Screenshots of the main views,
 in light, dark and at phone width, land in `test/out/`. It then walks the
 menu again with the CSS that only Chromium ships (`field-sizing`,
 `scroll-initial-target`, scroll-driven animations, `scrollbar-color`) taken
-out of `cascade.css`, as Firefox and Safari see it, so the fallbacks for them
+out of the stylesheets, as Firefox and Safari see it, so the fallbacks for them
 are checked too (`test/compat.cjs`; `UF_COMPAT=0` skips it).
 
 `sh test/run.sh --setup` leaves the container running instead, and
@@ -180,8 +189,8 @@ NODE_PATH=$(npm root -g) node test/shoot.cjs --schemes light,dark,phone admin/ne
 | Path | What |
 |---|---|
 | `ucode/template/themes/openuf/header.ut` | The page frame. Reads `luci.openuf_theme`, puts the choices on `<html>` (`data-uf-interfaces`, `data-uf-wireless`, `data-uf-port-manager`; anything unknown reads as the default) and, on Interfaces or Wireless, links that page's design stylesheet after `cascade.css` |
-| `htdocs/luci-static/openuf/cascade.css` | Everything shared: the tokens and components (the base), then a section per page (`/* ==== page: NAME ==== */`); `network` there holds only what Routing, DHCP, DNS and Diagnostics need |
-| `htdocs/luci-static/openuf/network/interfaces-DESIGN.css`, `wireless-DESIGN.css` | A design, one page each: the interface list, the Devices and global tabs and the interface, device and bridge VLAN dialogs; or the radios, their networks, the associated stations and the wireless and scan dialogs |
+| `scss/cascade.scss` → `htdocs/luci-static/openuf/cascade.css` | Everything shared: `scss/base/` (the tokens and components) and a partial per page in `scss/pages/`; `pages/_network.scss` holds only what Routing, DHCP, DNS and Diagnostics need. `scss/abstracts/` is the build-time toolkit (breakpoints, mixins) |
+| `scss/network/interfaces-DESIGN.scss`, `wireless-DESIGN.scss` → `htdocs/luci-static/openuf/network/…css` | A design, one page each: the interface list, the Devices and global tabs and the interface, device and bridge VLAN dialogs; or the radios, their networks, the associated stations and the wireless and scan dialogs. What a design's two pages share is in its `scss/network/_DESIGN-*.scss` partials |
 | `htdocs/luci-static/resources/view/openuf-theme/network/interfaces-DESIGN.js`, `wireless-DESIGN.js` | Each design's script: it only marks LuCI's nodes (which fact a row holds, column titles, a state) for its stylesheet, again after every redraw. `menu-openuf.js` loads the chosen one and calls its `enhance()`; without it the page keeps LuCI's rows |
 | `htdocs/luci-static/resources/menu-openuf.js` | Navigation (app bar, rail, secondary column, tabs), the design loader, and the Port Manager card above the Interfaces view |
 | `htdocs/luci-static/resources/view/openuf-theme/ports.js` | The port model (DSA and swconfig) and the strip and list |
