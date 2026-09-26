@@ -17,20 +17,23 @@
 # Environment knobs:
 #   OPENWRT_IMAGE  image to test against      (openwrt/rootfs:x86-64-25.12.5)
 #   LUCI_BRANCH    LuCI branch for extras     (openwrt-25.12)
-#   LUCI_PACKAGES  extras, paths in LuCI      (modules/luci-mod-dashboard)
+#   LUCI_PACKAGES  extras, paths in LuCI      (modules/luci-mod-dashboard
+#                                              applications/luci-app-usteer)
 #   UF_NAME        container name             (luci-theme-unifi-test)
 #   UF_PORT        host port for LuCI         (8080)
 #   UF_OUT         screenshot directory       (test/out)
 #   UF_APK         a built luci-theme-unifi .apk to install instead of this
 #                  checkout's files (what the feed publishes)
 #   UF_COMPAT      0 skips the fallback pass  (1, test/compat.cjs)
+#   UF_FAKE_USTEER 0 leaves luci-app-usteer   (1)
+#                  without its fake daemon
 
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
 image=${OPENWRT_IMAGE:-openwrt/rootfs:x86-64-25.12.5}
 branch=${LUCI_BRANCH:-openwrt-25.12}
-packages=${LUCI_PACKAGES:-modules/luci-mod-dashboard}
+packages=${LUCI_PACKAGES:-modules/luci-mod-dashboard applications/luci-app-usteer}
 name=${UF_NAME:-luci-theme-unifi-test}
 port=${UF_PORT:-8080}
 out=${UF_OUT:-$here/out}
@@ -84,6 +87,12 @@ if [ -n "$packages" ]; then
 		done
 	fi
 fi
+
+# usteerd is not in the image: a fake "usteer" ubus object gives its page data.
+case " $packages " in
+*" applications/luci-app-usteer "*)
+	[ "${UF_FAKE_USTEER:-1}" = 0 ] || sh "$here/fake-usteer.sh" "$name" ;;
+esac
 
 if [ -n "${UF_APK:-}" ]; then
 	# The lab is offline: resolve luci-base from the installed packages.
