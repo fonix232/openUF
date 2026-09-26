@@ -1,0 +1,251 @@
+@use '../abstracts' as *;
+
+// The rail and the secondary column are sticky, one viewport tall, so they
+// stay put while a long page scrolls. The shell paints their backgrounds
+// as columns down its whole height as well, so below the fold (or in a
+// full-page capture) they still read as full-height columns.
+.uf-shell {
+	--uf-col-rail: var(--uf-rail-w);
+	--uf-col-subnav: 0px;
+	display: flex;
+	align-items: flex-start;
+	min-height: calc(100vh - var(--uf-topbar-h));
+	background: linear-gradient(to right,
+		var(--uf-surface) calc(var(--uf-col-rail) - 1px),
+		var(--uf-border) 0 var(--uf-col-rail),
+		var(--uf-surface) 0 calc(var(--uf-col-rail) + var(--uf-col-subnav) - 1px),
+		var(--uf-border) 0 calc(var(--uf-col-rail) + var(--uf-col-subnav)),
+		transparent 0) no-repeat;
+	.uf-rail-expanded & { --uf-col-rail: var(--uf-rail-w-open); }
+	.uf-has-subnav:not(.uf-subnav-collapsed) & { --uf-col-subnav: var(--uf-subnav-w); }
+	// Until the menu has rendered there is no rail to paint behind.
+	&:has(> .uf-rail[style*="none"]) { background: none; }
+}
+
+.uf-rail {
+	position: sticky;
+	top: var(--uf-topbar-h);
+	z-index: 700;
+	flex: 0 0 auto;
+	display: flex;
+	flex-direction: column;
+	justify-content: space-between;
+	width: var(--uf-rail-w);
+	height: calc(100vh - var(--uf-topbar-h));
+	padding: 12px 0 8px;
+	background: var(--uf-surface);
+	box-shadow: inset -1px 0 0 var(--uf-border);
+	// Animate the rail only while it is being toggled: a width transition
+	// that is always on also fires on any relayout, e.g. while a page is
+	// printed or captured, and leaves the rail caught half-open.
+	.uf-rail-animating & { transition: width .18s ease; }
+}
+
+.uf-rail-list {
+	margin: 0;
+	padding: 0 6px;
+	list-style: none;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.uf-rail-item {
+	position: relative;
+	--uf-icon: var(--uf-i-dot);
+	// luci-mod-dashboard's page is UniFi's Dashboard and takes its gauge;
+	// Status is live readings, so a pulse line.
+	@each $name, $icon in (
+		dashboard: dashboard, status: activity, system: gear, services: apps, network: topology,
+		vpn: shield, statistics: chart, nas: storage, docker: box, logout: power
+	) {
+		&[data-name="#{$name}"] { --uf-icon: var(--uf-i-#{$icon}); }
+	}
+	&.uf-rail-toggle { --uf-icon: var(--uf-i-panel-open); }
+	.uf-rail-expanded &.uf-rail-toggle { --uf-icon: var(--uf-i-panel-close); }
+	> a, > button {
+		@include row(12px, flex-start);
+		width: 100%;
+		height: 36px;
+		padding: 0 8px;
+		border: 0;
+		font-weight: 400;
+		border-radius: var(--uf-radius);
+		background: none;
+		color: var(--uf-text-3);
+		font: inherit;
+		white-space: nowrap;
+		overflow: hidden;
+		cursor: pointer;
+		transition: background-color .15s, color .15s;
+		&:hover { background: var(--uf-hover); color: var(--uf-text-1); }
+	}
+	&.active > a { color: var(--uf-blue); }
+}
+
+.uf-icon { flex: 0 0 auto; @include icon(var(--uf-icon), 20px); }
+.uf-rail-label { opacity: 0; transition: opacity .12s; }
+
+.uf-rail-expanded {
+	.uf-rail { width: var(--uf-rail-w-open); }
+	.uf-rail-label { opacity: 1; }
+	.uf-rail-item.active > a { background: var(--uf-blue-soft); }
+}
+
+// Flyout: a category's pages, or its name, beside the rail on hover.
+.uf-flyout {
+	position: absolute;
+	top: -6px;
+	left: calc(100% + 8px);
+	z-index: 10;
+	min-width: 180px;
+	padding: 6px;
+	@include popover;
+	opacity: 0;
+	visibility: hidden;
+	transform: translateX(-4px);
+	transition: opacity .12s, transform .12s, visibility 0s .12s;
+	// An invisible bridge, so the pointer can cross the gap to the flyout.
+	&::before {
+		content: "";
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		left: -12px;
+		width: 12px;
+	}
+	.uf-rail-foot &:not(.uf-tip) { top: auto; bottom: -6px; }
+	.uf-rail-item:hover > &, .uf-rail-item:focus-within > & {
+		opacity: 1;
+		visibility: visible;
+		transform: none;
+		transition: opacity .12s .08s, transform .12s .08s;
+	}
+	.uf-rail-expanded &.uf-tip, .uf-rail-item.uf-rail-toggle & { display: none; }
+}
+
+.uf-flyout-title {
+	padding: 6px 10px 8px;
+	color: var(--uf-text-1);
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.uf-flyout {
+	ul { margin: 0; list-style: none; }
+	li a {
+		@include menu-item(6px 10px, var(--uf-text-2));
+		white-space: nowrap;
+		&:hover { background: var(--uf-hover); color: var(--uf-text-1); }
+	}
+	li.active a { color: var(--uf-blue); }
+	&.uf-tip {
+		top: 50%;
+		min-width: 0;
+		padding: 5px 9px;
+		margin-top: -14px;
+		background: var(--uf-tip-bg);
+		border: 0;
+		color: var(--uf-tip-fg);
+		font-size: 12px;
+		white-space: nowrap;
+		pointer-events: none;
+	}
+}
+
+// Secondary navigation: UniFi's Settings column.
+.uf-subnav {
+	position: sticky;
+	top: var(--uf-topbar-h);
+	z-index: 600;
+	flex: 0 0 auto;
+	width: var(--uf-subnav-w);
+	height: calc(100vh - var(--uf-topbar-h));
+	overflow-y: auto;
+	padding: 14px 10px;
+	background: var(--uf-surface);
+	box-shadow: inset -1px 0 0 var(--uf-border);
+}
+
+.uf-subnav-head { @include row(8px, space-between); padding: 0 4px 10px 10px; }
+.uf-subnav-title { font-size: 15px; font-weight: 600; @include ellipsis; }
+
+.uf-subnav-collapse, .uf-subnav-expand {
+	--uf-icon: var(--uf-i-panel-close);
+	@include size(28px);
+	border-radius: var(--uf-radius-sm);
+	&::before { @include size(18px); }
+}
+
+.uf-subnav-list {
+	margin: 0;
+	list-style: none;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	a {
+		@include menu-item(7px 10px, var(--uf-text-2));
+		@include ellipsis;
+		&:hover { background: var(--uf-hover); color: var(--uf-text-1); }
+	}
+	.active a {
+		background: var(--uf-blue-soft);
+		color: var(--uf-blue);
+		font-weight: 500;
+	}
+}
+
+.uf-subnav-expand {
+	--uf-icon: var(--uf-i-panel-open);
+	display: none;
+	position: absolute;
+	top: 14px;
+	left: 8px;
+	z-index: 5;
+	background: var(--uf-surface);
+	box-shadow: inset 0 0 0 1px var(--uf-border);
+}
+
+.uf-subnav-collapsed {
+	.uf-subnav { display: none !important; }
+	&.uf-has-subnav {
+		.uf-subnav-expand { display: inline-flex; }
+		.uf-page, .uf-footer { padding-left: 52px; }
+	}
+}
+
+.uf-scrim { display: none; }
+
+.uf-main {
+	position: relative;
+	flex: 1 1 auto;
+	min-width: 0;
+	min-height: calc(100vh - var(--uf-topbar-h));
+	display: flex;
+	flex-direction: column;
+}
+
+.uf-page {
+	flex: 1 0 auto;
+	width: 100%;
+	max-width: 1280px;
+	padding: 20px 24px 8px;
+}
+
+// ui.addNotification() puts its alerts straight into #maincontent, ahead
+// of the page; line them up with the page's own column.
+.uf-main > .alert-message {
+	width: calc(100% - 48px);
+	max-width: calc(1280px - 48px);
+	margin: 16px 24px 0;
+	& + .uf-page, & + .uf-subnav-expand + .uf-page { padding-top: 16px; }
+}
+
+.uf-footer {
+	padding: 16px 24px 20px;
+	@include text(12px, $color: var(--uf-text-3));
+	a {
+		color: var(--uf-text-2);
+		&:hover { color: var(--uf-blue); }
+	}
+}

@@ -1,0 +1,5 @@
+// The shared toolkit every partial may `@use '../abstracts' as *;`: build-time
+// helpers only. Runtime tokens stay CSS custom properties (--uf-*, _tokens),
+// as dark mode and the scripts read them in the browser.
+@forward 'breakpoints';
+@forward 'mixins';

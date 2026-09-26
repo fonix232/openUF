@@ -1,0 +1,73 @@
+@use '../abstracts' as *;
+
+* { scroll-margin-top: calc(var(--uf-topbar-h) + 12px); }
+
+*, *::before, *::after {
+	margin: 0;
+	padding: 0;
+	border: 0;
+	box-sizing: border-box;
+}
+
+html {
+	height: 100%;
+	font-size: 100%;
+	-webkit-text-size-adjust: 100%;
+	text-size-adjust: 100%;
+	// Slim scrollbars in the scheme's own greys, not the platform's.
+	scrollbar-color: var(--uf-border-strong) transparent;
+}
+
+.uf-subnav, .uf-rail, .cbi-dropdown > ul.dropdown, #modal_overlay { scrollbar-width: thin; }
+
+body {
+	min-height: 100%;
+	background: var(--uf-canvas);
+	color: var(--uf-text-1);
+	font-family: var(--uf-font);
+	@include text(13px, 18px);
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+	&.uf-app { padding-top: var(--uf-topbar-h); }
+}
+
+a {
+	color: var(--uf-blue);
+	text-decoration: none;
+	line-height: inherit;
+	font-weight: inherit;
+	&:hover { color: var(--uf-blue-strong); }
+}
+
+a:focus-visible, button:focus-visible, [tabindex]:focus-visible { @include focus-ring; }
+
+// One dotted rule: the border, not also the browser's dotted underline.
+abbr[title], acronym[title] {
+	border-bottom: 1px dotted;
+	text-decoration: none;
+	font-weight: inherit;
+	cursor: help;
+}
+
+table { border-collapse: collapse; border-spacing: 0; }
+ol, ul { list-style: none; }
+
+sub, sup {
+	font-size: 75%;
+	line-height: 0;
+	position: relative;
+	vertical-align: baseline;
+}
+
+sup { top: -.5em; }
+sub { bottom: -.25em; }
+img { max-width: 100%; }
+::selection { background: rgba(var(--uf-blue-rgb), .22); }
+.container { width: 100%; max-width: 1180px; margin: 0 auto; }
+.pull-right { float: right; }
+.pull-left { float: left; }
+.hidden { display: none; }
+@each $align in left, right, center { .#{$align} { text-align: $align !important; } }
+@each $align in top, middle, bottom { .#{$align} { vertical-align: $align !important; } }
+form.inline { display: inline; margin-bottom: 0; }
+.nowrap:not(span) { white-space: nowrap; }

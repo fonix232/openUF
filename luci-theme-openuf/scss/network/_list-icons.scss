@@ -1,0 +1,28 @@
+// The list design's icons: 24px line drawings in black, for masks over the
+// current colour. A page sets the ones it uses as --uf-network-i-<name>.
+@use 'sass:map';
+
+@function -icon($stroke, $body, $round: cap join) {
+	$attrs: '';
+	@each $end in $round {
+		$attrs: "#{$attrs} stroke-line#{$end}='round'";
+	}
+	@return url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='#{$stroke}'#{$attrs}>#{$body}</svg>");
+}
+
+$-icons: (
+	restart: -icon(1.5, "<path d='M19.25 12a7.25 7.25 0 1 1-2.1-5.1'/><path d='M19.25 4.5v4.75H14.5'/>"),
+	stop: -icon(1.5, "<circle cx='12' cy='12' r='8.25'/><rect x='8.75' y='8.75' width='6.5' height='6.5' rx='1.25' fill='black' stroke='none'/>", ()),
+	edit: -icon(1.5, "<path d='M4.75 19.25h3.5L18.6 8.9a2.47 2.47 0 0 0-3.5-3.5L4.75 15.75Z'/><path d='m13.6 6.9 3.5 3.5'/>"),
+	trash: -icon(1.5, "<path d='M4.75 6.75h14.5M9.75 6.75v-2h4.5v2M6.75 6.75l.8 12.5h8.9l.8-12.5M10.25 10.5v5M13.75 10.5v5'/>"),
+	plus: -icon(2, "<path d='M12 5.5v13M5.5 12h13'/>", cap),
+	disconnect: -icon(1.5, "<circle cx='12' cy='12' r='8.25'/><path d='m9.25 9.25 5.5 5.5M14.75 9.25l-5.5 5.5'/>", cap),
+	down: -icon(2.25, "<path d='M12 4.5v15M6 13.5l6 6 6-6'/>"),
+	up: -icon(2.25, "<path d='M12 19.5v-15M6 10.5l6-6 6 6'/>"),
+);
+
+@mixin icons($names...) {
+	@each $name in $names {
+		--uf-network-i-#{$name}: #{map.get($-icons, $name)};
+	}
+}

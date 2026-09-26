@@ -1,0 +1,13 @@
+{
+	"admin/system/openuf-theme": {
+		"title": "openUF Theme",
+		"order": 3,
+		"action": {
+			"type": "view",
+			"path": "openuf-theme/settings"
+		},
+		"depends": {
+			"acl": [ "luci-theme-openuf-settings" ]
+		}
+	}
+}

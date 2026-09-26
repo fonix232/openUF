@@ -1,0 +1,130 @@
+// The list design's small parts, on both pages: its dots, tiles and icons,
+// figures, and the status block at the top of a dialog.
+@use 'sass:list';
+@use '../abstracts' as *;
+
+// The items the page's script names (data-uf-key): keys(rx, tx) is
+// :is([data-uf-key="rx"], [data-uf-key="tx"]).
+@function keys($keys...) {
+	$items: ();
+	@each $key in $keys {
+		$items: list.append($items, '[data-uf-key="#{$key}"]', comma);
+	}
+	@return ':is(#{$items})';
+}
+
+// LuCI's italic notes and unset values ("none", "any"): grey and upright,
+// as UniFi's "-" is.
+@mixin muted {
+	font-style: normal;
+	color: var(--uf-text-3);
+}
+
+// A label beside its value.
+@mixin label {
+	color: var(--uf-text-3);
+	font-weight: 400;
+}
+
+// A state dot; @content places it.
+@mixin list-dot($color) {
+	width: 8px;
+	height: 8px;
+	@content;
+	border-radius: 50%;
+	background: $color;
+}
+
+// The tile an icon sits in, as UniFi's client thumbnail.
+@mixin tile($background) {
+	width: 28px;
+	height: 28px;
+	@content;
+	border-radius: 6px;
+	background: $background;
+}
+
+// A device's icon (LuCI's image, coloured by --uf-device-color), grey for a
+// disabled device.
+@mixin device-icon($size: 18px) {
+	width: $size;
+	height: $size;
+	@content;
+	--uf-device-color: var(--uf-text-1);
+
+	&[src*="_disabled."] { --uf-device-color: var(--uf-text-3); }
+}
+
+// An icon drawn by a pseudo-element: the mask cuts it from the current colour.
+@mixin glyph($icon, $size: 18px) {
+	content: "";
+	@content;
+	width: $size;
+	height: $size;
+	background: currentColor;
+	@include mask($icon center / contain no-repeat);
+}
+
+// UniFi's download arrow before a figure; the upload one turns it over
+// (mask-image(var(--uf-network-i-up))).
+@mixin arrow {
+	content: "";
+	display: inline-block;
+	flex: 0 0 auto;
+	width: 10px;
+	height: 12px;
+	margin-right: 5px;
+	background: currentColor;
+	vertical-align: -1px;
+	@include mask(var(--uf-network-i-down) center / contain no-repeat);
+}
+
+// A figure the script formats (data-uf-value) in place of LuCI's text.
+@mixin figure {
+	display: flex;
+	align-items: center;
+	font-size: 0;
+
+	&::after {
+		content: attr(data-uf-value);
+		@content;
+	}
+}
+
+// Dialog status: the block at the top of a dialog, as the Status overview's
+// cards: an icon in a tile ($inset from the left), then label/value pairs.
+@mixin status-block($inset) {
+	display: flex;
+	align-items: flex-start;
+	gap: 14px;
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
+	padding: 8px 16px 10px $inset;
+	background: var(--uf-field);
+	border: 0;
+	border-radius: var(--uf-radius);
+	color: var(--uf-text-1);
+	font-weight: 400;
+	line-height: 20px;
+	white-space: normal;
+}
+
+// A pair: the label at the left, the value at the right, a hairline under
+// each; @content sizes it.
+@mixin pair {
+	display: flex;
+	align-items: baseline;
+	gap: 12px;
+	@content;
+	padding: 6px 0;
+	border-bottom: 1px solid var(--uf-border);
+	color: var(--uf-text-1);
+	font-size: 13px;
+	font-style: normal;
+	line-height: 20px;
+	white-space: normal;
+	text-align: right;
+	overflow-wrap: anywhere;
+	font-variant-numeric: tabular-nums;
+}
