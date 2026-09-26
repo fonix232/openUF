@@ -1,0 +1,212 @@
+// The list design's rows, on both pages: a LuCI section table as one of
+// UniFi's lists, a compact row per section, its actions as quiet icons at
+// the end and, where the card has room, aligned columns under titles the
+// page's script supplies (--uf-th-<column>). Each mixin goes in the rule of
+// the section it styles.
+@use 'sass:map';
+@use '../abstracts' as *;
+@use 'list-parts' as *;
+
+// Rows with a hover tint and a faint rule above each, drawn by the row (a
+// shadow: its cells are only containers in the wide list, and its
+// pseudo-elements carry the column titles there). $columns and a $gap or
+// $column-gap: the row's own grid.
+@mixin rows($columns: null, $gap: null, $column-gap: null) {
+	> .table {
+		&,
+		> .tbody { display: block; }
+
+		> .tbody > .tr.cbi-section-table-row {
+			position: relative;
+			display: grid;
+			grid-template-columns: $columns;
+			align-items: center;
+			gap: $gap;
+			column-gap: $column-gap;
+			padding: 7px 8px;
+			border-radius: var(--uf-radius-sm);
+
+			+ .tr { box-shadow: 0 -1px 0 var(--uf-divider); }
+
+			&:not(.placeholder):hover {
+				> .td { background: none; }
+
+				// No tint on a phone, where a touch would leave it on the row.
+				@include desktop { background: var(--uf-hover); }
+			}
+		}
+	}
+
+	// The row has the padding and the rule.
+	.tr > .td {
+		min-width: 0;
+		padding: 0;
+		border: 0;
+	}
+}
+
+// On a phone the list keeps its own rows: no stacked cells, no gap between
+// rows, and cells that do not clip a device's card.
+@mixin rows-phone {
+	> .table > .tbody > .tr.cbi-section-table-row {
+		margin: 0;
+		padding: 10px 4px;
+		border: 0;
+
+		> .td { overflow: visible; }
+	}
+}
+
+// Row actions: UniFi's quiet icons, always shown, each its button's
+// --uf-network-icon (Edit's by default). Grey, turning blue when hovered
+// ($blue: the buttons that edit or start) or red ($red: those that stop or
+// delete). The label stays the button's accessible name and LuCI's title
+// its tip. Not the base's pinned action cell: these lists fit their card.
+@mixin actions($width, $blue, $red, $align: null) {
+	.tr > .td.cbi-section-actions {
+		position: static;
+		width: auto !important; // over LuCI's inline width, measured for text buttons
+		min-width: 0 !important;
+		background: none;
+		box-shadow: none;
+		animation: none;
+
+		> div {
+			align-items: $align;
+			gap: 2px;
+		}
+
+		.cbi-button {
+			--uf-btn-fg: var(--uf-text-3);
+			--uf-btn-bg: transparent;
+			--uf-btn-line: transparent;
+			flex: 0 0 auto;
+			width: $width;
+			height: 30px;
+			padding: 0;
+			font-size: 0;
+
+			&::before { @include glyph(var(--uf-network-icon, var(--uf-network-i-edit))); }
+
+			&:not([disabled]):hover {
+				--uf-btn-fg: var(--uf-text-1);
+				--uf-btn-bg: var(--uf-border-strong);
+			}
+		}
+
+		:is(#{$blue}):not([disabled]):hover {
+			--uf-btn-fg: var(--uf-blue);
+			--uf-btn-bg: var(--uf-blue-soft);
+		}
+
+		:is(#{$red}):not([disabled]):hover {
+			--uf-btn-fg: var(--uf-red-text);
+			--uf-btn-bg: rgba(var(--uf-red-rgb), .1);
+		}
+
+		// Busy: the base's spinner in place of the icon.
+		.cbi-button.spinning {
+			--uf-network-icon: var(--uf-i-spinner);
+			padding-left: 0 !important; // over .spinning's room for its spinner
+
+			&::before {
+				position: static;
+				background: var(--uf-blue);
+			}
+		}
+	}
+}
+
+@mixin actions-phone {
+	.tr > .td.cbi-section-actions {
+		> div {
+			justify-content: flex-end;
+			gap: 0;
+		}
+
+		// As small as a touch allows: the name keeps the room.
+		.cbi-button {
+			width: 32px;
+			height: 32px;
+		}
+	}
+}
+
+// On the button that edits the row: a click on the row's name edits it
+// too. The button's ::after covers the name's part of the row ($width by
+// $height); the rest of the row stays plain text, to select and copy.
+@mixin name-click($width, $height) {
+	&:enabled::after {
+		content: "";
+		position: absolute;
+		top: 0;
+		left: 0;
+		width: $width;
+		height: $height;
+		border-radius: var(--uf-radius-sm) 0 0 var(--uf-radius-sm);
+	}
+
+	// Pressed, the base nudges a button down; a transform would make the
+	// button hold its hit area, and the click would miss.
+	&:active { transform: none; }
+}
+
+// Columns, where the card has room: each row a subgrid of the table, so the
+// columns line up down the list. $first: what marks the first row, which
+// carries the titles above itself, in the table's top padding.
+@mixin columns($template, $gap, $first, $display: null) {
+	> .table {
+		display: grid;
+		grid-template-columns: $template;
+		column-gap: $gap;
+
+		&:has(> .tbody > .tr:first-child#{$first}) { padding-top: 30px; }
+
+		> .tbody {
+			display: contents;
+
+			> .tr.cbi-section-table-row {
+				grid-column: 1 / -1;
+				display: $display;
+				grid-template-columns: subgrid;
+				grid-auto-flow: row dense;
+				align-items: start;
+				row-gap: 0;
+			}
+		}
+	}
+}
+
+// The column titles, in the first row: LuCI gives these lists none, so the
+// row carries them above itself, on the pseudo-elements its cells leave
+// free. $cells: each pseudo-element, from the row, and its column. $reset:
+// clear what those pseudo-elements draw in a row.
+@mixin titles($cells, $reset: false) {
+	#{map.keys($cells)} {
+		position: absolute;
+		bottom: 100%;
+		left: 0;
+		right: 0;
+		@if $reset { order: 0; }
+		margin-bottom: 8px;
+		@if $reset {
+			padding: 0;
+			background: none;
+		}
+		overflow: hidden;
+		color: var(--uf-text-1);
+		font-size: 13px;
+		font-weight: 600;
+		line-height: 20px;
+		text-align: left;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	@each $cell, $column in $cells {
+		#{$cell} {
+			content: var(--uf-th-#{$column}, none);
+			grid-column: $column;
+		}
+	}
+}

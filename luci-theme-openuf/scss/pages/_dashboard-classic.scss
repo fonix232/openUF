@@ -1,0 +1,577 @@
+@use 'sass:list';
+@use '../abstracts' as *;
+@use '../abstracts/pages-a' as *;
+
+// luci-mod-dashboard as it was before its rework (LuCI of early September
+// 2026 and older, which 24.10 and older 25.12 feeds ship), drawn like the
+// reworked one under this theme: white cards with a title row, UniFi's
+// label/value rows, chips for yes and no, and the client lists as the
+// theme's tables.
+//
+// That dashboard puts each include into a .section-content, in a
+// .cbi-section-N.Dashboard straight under #view; the reworked one renders
+// neither, so everything here hangs off that. Its custom.css, loaded after
+// this file, reaches seven classes deep; the id in the scope outweighs it.
+$classic: '#view > .Dashboard > .section-content';
+
+// The line drawings the tiles show, on the theme's 24px grid; the module's
+// own are 32px drawings with hairline strokes, too faint at tile size.
+$globe: "<circle cx='12' cy='12' r='8.75'/><path d='M3.25 12h17.5M12 3.25c2.3 2.4 3.5 5.3 3.5 8.75s-1.2 6.35-3.5 8.75c-2.3-2.4-3.5-5.3-3.5-8.75S9.7 5.65 12 3.25Z'/>";
+$tiles: (
+	internet: stroked(cap join, $globe),
+	not-internet: stroked(cap join, "#{$globe}<path d='m4.5 4.5 15 15'/>"),
+	router: stroked(cap join, "<rect x='3.25' y='13.25' width='17.5' height='6.5' rx='1.75'/><path d='M7 13.25 6 4.75M17 13.25l1-8.5M7.25 16.5h.01M10.25 16.5h.01'/>"),
+	devices: stroked(cap join, "<rect x='2.75' y='4.25' width='13.5' height='10' rx='1.5'/><path d='M6.5 19.25h6M9.5 14.25v5'/><rect x='17.75' y='8.75' width='4' height='10.5' rx='1'/>"),
+	wireless: var(--uf-i-wifi),
+);
+
+// The module writes every label as "Label：", with a full-width colon (one
+// em wide by definition). As a row's label the colon goes: the label keeps
+// to one line, so the colon is its last em, clipped off and given back.
+@mixin no-colon {
+	white-space: nowrap;
+	clip-path: inset(0 1em 0 0);
+	margin-right: -1em;
+}
+
+// A detail row, as on the reworked dashboard's Internet and System tabs:
+// the label at the left, the value at the right (under it, still at the
+// right, when it wraps), a hairline between rows.
+@mixin line {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 2px 16px;
+	min-height: 33px;
+	margin: 0;
+	padding: 7px 0;
+	border-top: 1px solid var(--uf-divider);
+	font-size: 13px;
+	line-height: 18px;
+}
+
+@mixin line-label {
+	flex: none;
+	width: auto;
+	margin-left: 0;
+	color: var(--uf-text-2);
+	font-size: 13px;
+	font-weight: 400;
+	text-align: left;
+	@include no-colon;
+}
+
+@mixin line-value {
+	flex: 0 1 auto;
+	min-width: 0;
+	max-width: none;
+	height: auto;
+	margin-left: auto;
+	overflow: visible;
+	color: var(--uf-text-1);
+	line-height: 18px;
+	text-align: right;
+	word-break: normal;
+	overflow-wrap: anywhere;
+	font-variant-numeric: tabular-nums;
+}
+
+// A client's state dot, as in the reworked dashboard's client lists.
+@mixin client-dot {
+	content: "";
+	display: inline-block;
+	@include dot(6px, var(--uf-green));
+	margin: 0 10px 1px 0;
+	vertical-align: middle;
+}
+
+// Every whole percentage from $from up to $to as the module writes a
+// station's signal bar ("width: 42.58%"), for its colour.
+@function widths($from, $to) {
+	$list: ();
+
+	@for $n from $from to $to {
+		$list: list.append($list, '[style^="width: #{$n}."]', comma);
+		$list: list.append($list, '[style^="width: #{$n}%"]', comma);
+	}
+
+	@return $list;
+}
+
+// The sections are containers: the cards sit side by side where there is
+// room for both, and the cards are containers for their own columns.
+#view > .Dashboard:has(> .section-content) { container: uf-dashboard-classic / inline-size; }
+
+#{$classic} {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	align-items: stretch;
+	gap: 16px;
+	margin-bottom: 16px;
+	padding: 0;
+
+	// An include's box is a card (the module gives it a grey panel); the
+	// Ports card (include/25_ports.js) is one already.
+	> .dashboard-bg,
+	> .uf-ports-card {
+		width: auto;
+		min-width: 0;
+		min-height: 0;
+		margin: 0;
+		@include surface-card(18px 20px);
+		container-type: inline-size;
+	}
+
+	// The client lists and the port strip want the whole width. The ports
+	// lead, under Internet and System, where the reworked dashboard shows
+	// them among its charts.
+	> :is(.router-status-lan, .router-status-wifi, .uf-ports-card) { grid-column: 1 / -1; }
+	> .uf-ports-card { order: -1; }
+
+	// The module narrows every table to its content.
+	.uf-ports-card .table { width: 100%; }
+
+	// The Ports card's title gets a tile too, beside its title and count.
+	> .uf-ports-card > .uf-ports-head > div:first-child {
+		display: grid;
+		grid-template-columns: 32px minmax(0, 1fr);
+		align-items: center;
+		column-gap: 12px;
+
+		&::before,
+		&::after {
+			content: "";
+			grid-area: 1 / 1 / 3 / 2;
+		}
+
+		&::before {
+			@include size(32px);
+			border-radius: var(--uf-radius);
+			background: var(--uf-blue-soft);
+		}
+
+		&::after {
+			justify-self: center;
+			@include icon(var(--uf-i-ethernet), 18px, var(--uf-blue));
+		}
+
+		> * { grid-column: 2; }
+	}
+
+	hr { display: none; }
+
+	// The title row: the module's big drawing becomes a tinted tile, as on
+	// the reworked dashboard's figures. The <img> keeps its size and title;
+	// its picture moves out of the box and the icon is painted in its place,
+	// over a tile drawn behind it.
+	.title {
+		--uf-tile: var(--uf-blue-soft);
+		display: grid;
+		grid-template-columns: 32px minmax(0, 1fr);
+		align-items: center;
+		column-gap: 12px;
+		height: auto;
+		margin: 0 0 12px;
+		text-align: left;
+
+		&::before {
+			content: "";
+			grid-area: 1 / 1;
+			@include size(32px);
+			border-radius: var(--uf-radius);
+			background: var(--uf-tile);
+		}
+
+		> img {
+			grid-area: 1 / 1;
+			justify-self: center;
+			@include size(18px);
+			object-position: -9999px 0;
+			background-color: var(--uf-blue);
+			filter: none;
+			@include mask(var(--uf-tile-icon) center / contain no-repeat);
+		}
+
+		> h3 {
+			grid-area: 1 / 2;
+			margin: 0;
+			color: var(--uf-text-1);
+			font-size: 14px;
+			line-height: 20px;
+		}
+
+		@each $name, $icon in $tiles {
+			> img[src*="/#{$name}.svg"] { --uf-tile-icon: #{$icon}; }
+		}
+
+		// Internet is green while connected and red while not, as the
+		// reworked dashboard's Internet figure.
+		> img[src*="/internet.svg"] { background-color: var(--uf-green-text); }
+		> img[src*="/not-internet.svg"] { background-color: var(--uf-red-text); }
+		&:has(> img[src*="/internet.svg"]) { --uf-tile: rgba(var(--uf-green-rgb), .14); }
+		&:has(> img[src*="/not-internet.svg"]) { --uf-tile: rgba(var(--uf-red-rgb), .12); }
+	}
+
+	.settings-info {
+		padding: 0;
+
+		p {
+			@include line;
+
+			// "IPv4 Internet": a heading, not a row.
+			> span:only-child {
+				width: auto;
+				color: var(--uf-text-1);
+				text-align: left;
+				font-size: 13px;
+				font-weight: 600;
+			}
+
+			> span:first-child:not(:only-child) { @include line-label; }
+			> span + span { @include line-value; }
+		}
+
+		// Yes and no: chips, as the reworked dashboard marks a connection.
+		.label {
+			display: inline-flex;
+			margin: 0 0 0 auto;
+			padding: 0 8px;
+			font-size: 11px;
+			line-height: 20px;
+			text-transform: capitalize;
+
+			&.label-success { background: rgba(var(--uf-green-rgb), .16); color: var(--uf-green-text); }
+			&.label-danger { background: rgba(var(--uf-orange-rgb), .16); color: var(--uf-orange-text); }
+		}
+
+		em { color: var(--uf-text-3); font-style: normal; }
+	}
+
+	// Internet: IPv4 beside IPv6 where the card is wide enough, each under
+	// its heading.
+	.internet-status-info > .settings-info {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: 20px 48px;
+
+		// (The module rules them apart on phones; the headings do that.)
+		> div {
+			margin: 0;
+			border: 0;
+		}
+
+		> div > p:first-child {
+			min-height: 0;
+			padding: 0 0 6px;
+			border-top: 0;
+			+ p { border-top: 0; }
+		}
+
+		// The DNS servers, one row each: the label once, the addresses
+		// stacked under the first.
+		.table {
+			display: block;
+			width: 100%;
+			margin: 0;
+
+			> tbody { display: contents; }
+
+			tr {
+				@include line;
+
+				+ tr {
+					min-height: 0;
+					margin-top: -6px;
+					border-top: 0;
+
+					> td:first-child { visibility: hidden; }
+				}
+			}
+
+			td {
+				display: block;
+				padding: 0;
+				border: 0;
+				@include line-value;
+
+				&:first-child { @include line-label; }
+			}
+		}
+	}
+
+	.router-status-info > .settings-info > p:first-child { border-top: 0; }
+
+	// Wireless: a card per network, in as many columns as fit, instead of
+	// the module's one column each. The SSID heads its card, after a dot
+	// for its state; a disabled network is greyed, as UniFi greys an
+	// offline device.
+	.wifi-info > .settings-info {
+		display: grid;
+		// At most four abreast: a radio's networks, usually, per row.
+		grid-template-columns: repeat(auto-fill, minmax(min(100%, max(260px, (100% - 36px) / 4)), 1fr));
+		gap: 12px;
+		margin-bottom: 20px;
+
+		> .radio-info {
+			min-width: 0;
+			padding: 0 14px 4px;
+			border: 1px solid var(--uf-border);
+			border-radius: var(--uf-radius);
+
+			> p {
+				min-height: 29px;
+				padding: 5px 0;
+			}
+
+			> p:first-child {
+				align-items: flex-start;
+				gap: 8px;
+				min-height: 0;
+				padding: 11px 0 9px;
+				border-top: 0;
+
+				&::before {
+					content: "";
+					flex: none;
+					margin-top: 5px;
+					@include dot(8px, var(--uf-green));
+				}
+
+				> span:first-child { display: none; }
+
+				> .ssid {
+					flex: 1 1 0;
+					max-height: none;
+					margin: 0;
+					color: var(--uf-text-1);
+					font-weight: 600;
+					text-align: left;
+				}
+			}
+
+			&:has(.label-danger) > p:first-child {
+				&::before { background: var(--uf-text-4); }
+				> .ssid { color: var(--uf-text-3); }
+			}
+
+			// Off is not a fault here: a quiet chip.
+			.label.label-danger { background: var(--uf-field); color: var(--uf-text-2); }
+		}
+	}
+
+	// Client lists (DHCP leases, wireless stations): the theme's tables,
+	// headed by bold titles, hovered like a list, a dot before each name
+	// and the addresses in secondary grey, as on the reworked dashboard.
+	.devices-info {
+		width: 100%;
+		margin: 0;
+		text-align: left;
+
+		> :is(.thead, .tfoot), > .thead > .tr {
+			background: none;
+			border-radius: 0;
+		}
+
+		.th,
+		.td {
+			padding: 7px 10px;
+			word-break: normal;
+			overflow-wrap: break-word;
+		}
+
+		.th { white-space: nowrap; }
+
+		:is(.th, .td):first-child { padding-left: 8px; }
+		:is(.th, .td):last-child { padding-right: 8px; }
+
+		.td {
+			position: static;
+			overflow: visible;
+			font-variant-numeric: tabular-nums;
+
+			// A cell's paragraph runs on after the dot.
+			> p {
+				display: inline;
+				margin: 0;
+				color: inherit;
+				line-height: inherit;
+			}
+		}
+
+		> .tr[class*="cbi-rowstyle"] {
+			> .td:first-child {
+				color: var(--uf-text-1);
+
+				&::before { @include client-dot; }
+			}
+
+			&:hover > .td {
+				background-color: var(--uf-hover);
+
+				&:first-child { border-radius: var(--uf-radius-sm) 0 0 var(--uf-radius-sm); }
+				&:last-child { border-radius: 0 var(--uf-radius-sm) var(--uf-radius-sm) 0; }
+			}
+		}
+
+		// The closing "Total": a sum, under a firmer rule, its label against
+		// the figure (the colon, the cell's last em, clipped off).
+		> .tfoot {
+			.td {
+				border-top: 1px solid var(--uf-border);
+				background: none;
+			}
+
+			.td:nth-child(2) {
+				padding-right: 0;
+				color: var(--uf-text-3);
+				text-align: right;
+				white-space: nowrap;
+				clip-path: inset(0 1em 0 0);
+
+				+ .td {
+					padding-left: 0;
+					color: var(--uf-text-1);
+					font-weight: 600;
+				}
+			}
+		}
+	}
+
+	// DHCP leases: name, address, MAC.
+	.router-status-lan .devices-info {
+		.th:nth-child(1) { width: 40%; }
+		.th:nth-child(2) { width: 25%; }
+		> .tr > .td:nth-child(3) { color: var(--uf-text-3); }
+	}
+
+	// Stations: name, SSID, a signal bar under its reading, and traffic
+	// (the module's own column widths are for its centred layout).
+	.router-status-wifi .devices-info {
+		.th:nth-child(1) { width: 28%; }
+		.th:nth-child(2) { width: 22%; }
+		.th:nth-child(3) { width: 28%; }
+
+		.td { width: auto; }
+		> .tr > .td:nth-child(2) { color: var(--uf-text-2); }
+
+		.cbi-progressbar {
+			min-width: 0;
+			max-width: 240px;
+			margin: 20px 0 4px;
+
+			&::before { top: -19px; color: var(--uf-text-2); }
+
+			// Coloured by rating, as the theme's signal meter: excellent,
+			// good, fair, poor.
+			> div { background: var(--uf-green); }
+			> div:is(#{widths(50, 75)}) { background: var(--uf-lime); }
+			> div:is(#{widths(25, 50)}) { background: var(--uf-orange); }
+			> div:is(#{widths(0, 25)}, [style^="width: -"]) { background: var(--uf-red); }
+		}
+
+		// Up in purple, down in cyan, each after its arrow, on one line.
+		.td:nth-child(4) > p {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 2px 12px;
+
+			> br { display: none; }
+
+			> span {
+				white-space: nowrap;
+
+				&::before {
+					content: "";
+					display: inline-block;
+					@include size(10px, 12px);
+					margin-right: 4px;
+					background: currentColor;
+					vertical-align: -1px;
+					@include mask(var(--uf-dashboard-i-up) center / contain no-repeat);
+				}
+
+				&:first-child { color: var(--uf-purple-text); }
+
+				&:last-child {
+					color: var(--uf-cyan-text);
+
+					&::before {
+						-webkit-mask-image: var(--uf-dashboard-i-down);
+						mask-image: var(--uf-dashboard-i-down);
+					}
+				}
+			}
+		}
+	}
+}
+
+// Side by side: Internet and System; IPv4 beside IPv6; the system rows in
+// pairs while the System card has the whole width.
+@container uf-dashboard-classic (min-width: 1040px) {
+	#{$classic} { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@container (min-width: 560px) {
+	#{$classic} .internet-status-info > .settings-info { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@container uf-dashboard-classic (min-width: 720px) and (max-width: 1039.98px) {
+	#{$classic} .router-status-info > .settings-info {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		column-gap: 48px;
+
+		> p:nth-child(2) { border-top: 0; }
+	}
+}
+
+// Phones: one column; the client lists stack (as the base stacks tables),
+// each client headed by its name, the rest paired below, without the
+// column titles.
+@include phone {
+	#{$classic} {
+		gap: 12px;
+		margin-bottom: 12px;
+
+		> .dashboard-bg,
+		> .uf-ports-card { padding: 14px 16px; }
+
+		.devices-info {
+			> .thead { display: none; }
+
+			.tr > .td,
+			> .tfoot > .td {
+				flex: 1 1 50%;
+				padding: 3px 0;
+				border: 0;
+				overflow: visible;
+			}
+
+			> .tr > .td:first-child {
+				flex-basis: 100%;
+				font-weight: 500;
+			}
+
+			// The total: its label and figure, alone on a line.
+			> .tfoot {
+				display: flex;
+				gap: 12px;
+				border-top: 1px solid var(--uf-border);
+
+				> .tr { flex: 1 1 auto; gap: 12px; border-top: 0; }
+
+				.td {
+					flex: none;
+					border-top: 0;
+					text-align: left;
+					&:first-child, &:empty { display: none; }
+				}
+			}
+		}
+
+		.router-status-wifi .devices-info {
+			> .tr > .td:nth-child(4) { flex-basis: 100%; }
+			.cbi-progressbar { margin-right: 16px; }
+		}
+	}
+}
