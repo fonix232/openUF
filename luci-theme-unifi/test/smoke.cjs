@@ -7,8 +7,10 @@
  *
  * Signs in, walks every page the menu offers, and fails on a script error,
  * a failed theme or LuCI asset, a page that never finishes loading, or a
- * layout wider than the window. Screenshots of the main views, in light,
- * dark and phone layouts, are written to OUT_DIR.
+ * layout wider than the window. Then it switches the Interfaces and
+ * Wireless designs on System > UniFi Theme and checks both pages in each.
+ * Screenshots of the main views, in light, dark and phone layouts, are
+ * written to OUT_DIR.
  */
 
 const { chromium } = require('playwright');
@@ -29,10 +31,12 @@ const SHOTS = {
 	'admin/status/overview': 'overview',
 	'admin/system/system': 'system',
 	'admin/network/network': 'interfaces',
+	'admin/network/wireless': 'wireless',
 	'admin/network/firewall': 'firewall',
 	'admin/network/dhcp': 'dhcp',
 	'admin/system/package-manager': 'software',
-	'admin/status/processes': 'processes'
+	'admin/status/processes': 'processes',
+	'admin/system/unifi-theme': 'theme-settings'
 };
 
 function watch(page) {
@@ -114,6 +118,7 @@ async function checkPorts(page, route) {
 		return {
 			cards: count('.uf-ports-card'),
 			squares: count('.uf-ports-card .uf-port'),
+			rows: count('.uf-ports-card .uf-ports-list tr[data-port]'),
 			linked: count('.uf-ports-card .uf-port:is([data-state="fe"], [data-state="gbe"], [data-state="mgig"], [data-state="up"])'),
 			unlinked: count('.uf-ports-card .uf-port:is([data-state="down"], [data-state="disabled"])')
 		};
@@ -121,12 +126,90 @@ async function checkPorts(page, route) {
 
 	if (seen.cards != 1)
 		fail(`${route}: ${seen.cards} Ports cards, not one`);
+	else if (route == 'admin/network/network' && seen.rows != PORTS)
+		fail(`${route}: the Port Manager lists ${seen.rows} ports, not ${PORTS}`);
 	else if (seen.squares != PORTS)
 		fail(`${route}: the Ports card shows ${seen.squares} ports, not ${PORTS}`);
 	else if (!seen.linked || !seen.unlinked)
 		fail(`${route}: the Ports card shows ${seen.linked} ports with link and ${seen.unlinked} without; expected some of each`);
 	else
 		console.log(`  ok   ports on ${route}: ${seen.linked} linked, ${seen.unlinked} not`);
+}
+
+/* The designs (System > UniFi Theme, luci.unifi): each comes round on
+ * Interfaces and on Wireless, with another one on the other page, so a
+ * stylesheet or script leaking between pages or designs shows; the Port
+ * Manager is switched off once. The run ends on the defaults. */
+const DESIGNS = [
+	{ interfaces: 'settings', wireless: 'cards', ports: '1' },
+	{ interfaces: 'cards', wireless: 'list', ports: '1' },
+	{ interfaces: 'list', wireless: 'settings', ports: '0' },
+	{ interfaces: 'list', wireless: 'list', ports: '1' }
+];
+
+const DESIGNED = { interfaces: 'admin/network/network', wireless: 'admin/network/wireless' };
+
+/* Choose on the settings page and Save & Apply, which reloads it; the page
+ * then carries the saved choice on <html>, as every page does. */
+async function saveDesigns(page, want) {
+	await page.goto(`${base}/cgi-bin/luci/admin/system/unifi-theme`);
+	await settle(page);
+
+	for (const key of [ 'interfaces', 'wireless' ])
+		await page.click(`.cbi-value[data-name="${key}"] .cbi-radio:has(> input[value="${want[key]}"]) .uf-choice-title`);
+
+	const flag = page.locator('.cbi-value[data-name="port_manager"] input[type="checkbox"]');
+
+	if (await flag.isChecked() != (want.ports == '1'))
+		await flag.click();
+
+	const have = await page.evaluate(() => [ 'interfaces', 'wireless', 'port-manager' ].map((k) => document.documentElement.getAttribute(`data-uf-${k}`)).join(' '));
+
+	if (have != `${want.interfaces} ${want.wireless} ${want.ports}`)
+		await Promise.all([
+			page.waitForNavigation({ timeout: 60000 }).catch(() => fail('Save & Apply on the theme settings did not reload the page')),
+			page.click('.cbi-page-actions .cbi-dropdown.cbi-button-apply', { position: { x: 24, y: 16 } })
+		]);
+
+	await settle(page);
+
+	const saved = await page.evaluate(() => [ 'interfaces', 'wireless', 'port-manager' ].map((k) => document.documentElement.getAttribute(`data-uf-${k}`)).join(' '));
+
+	if (saved != `${want.interfaces} ${want.wireless} ${want.ports}`)
+		fail(`theme settings: saved "${saved}", not "${want.interfaces} ${want.wireless} ${want.ports}"`);
+	else
+		console.log(`  ok   theme settings saved: interfaces ${want.interfaces}, wireless ${want.wireless}, port manager ${want.ports}`);
+}
+
+/* A designed page: its design's stylesheet, and only that one, loaded; its
+ * script's marks on LuCI's rows; nothing wider than the window. */
+async function checkDesign(page, key, design, label) {
+	const route = DESIGNED[key];
+
+	await page.goto(`${base}/cgi-bin/luci/${route}`);
+	await settle(page);
+	await checkWidth(page, `${label}, ${key} ${design}`);
+
+	const seen = await page.evaluate(([ key, design ]) => {
+		const sheets = [ ...document.querySelectorAll('link[rel="stylesheet"]') ].filter((l) => /\/network\/[a-z]+-[a-z]+\.css$/.test(l.getAttribute('href')));
+		const own = sheets.find((l) => l.getAttribute('href').endsWith(`/network/${key}-${design}.css`));
+		let rules = 0;
+
+		try { rules = own?.sheet?.cssRules.length ?? 0; } catch (e) {}
+
+		return {
+			sheets: sheets.map((l) => l.getAttribute('href').replace(/.*\//, '')),
+			rules: rules,
+			marked: !!document.querySelector('#view :is([data-uf-key], [data-uf-state], [data-uf-kind], [data-uf-row], [data-uf-before])')
+		};
+	}, [ key, design ]);
+
+	if (seen.sheets.length != 1 || !seen.rules)
+		fail(`${route} (${label}): design stylesheets ${JSON.stringify(seen.sheets)}, ${seen.rules} rules; expected ${key}-${design}.css alone`);
+	else if (!seen.marked)
+		fail(`${route} (${label}): the ${design} design's script marked none of LuCI's rows`);
+	else
+		console.log(`  ok   ${route} as ${design} (${label})`);
 }
 
 async function signIn(page) {
@@ -190,15 +273,35 @@ async function signIn(page) {
 
 		await page.goto(`${base}/cgi-bin/luci/admin/network/network`);
 		await settle(page);
-		await page.click('.uf-ports-card .uf-ports-manager').catch(() => fail('the Ports card has no Port Manager button'));
-		await page.waitForSelector('.uf-ports-card .uf-ports-list', { timeout: 5000 })
-			.catch(() => fail('Port Manager did not show the port list on the Devices tab'));
-		await page.waitForTimeout(300);
 		await shot(page, 'ports-light');
-
-		/* LuCI remembers the tab; the next visits expect Interfaces. */
-		await page.click('#view .cbi-tabmenu > li[data-tab="interface"] > a').catch(() => {});
 	}
+
+	/* Each design, on each page, wide and on a phone. */
+	const phoneCheck = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: 'light', isMobile: true, hasTouch: true });
+	const phonePage = await phoneCheck.newPage();
+	watch(phonePage);
+	await signIn(phonePage);
+
+	for (const want of DESIGNS) {
+		await saveDesigns(page, want);
+
+		for (const key of [ 'interfaces', 'wireless' ]) {
+			await checkDesign(page, key, want[key], 'desktop');
+			await shot(page, `${key}-${want[key]}-light`);
+
+			if (key == 'interfaces' && process.env.UF_PORTS == '1') {
+				if (want.ports == '1')
+					await checkPorts(page, DESIGNED.interfaces);
+				else if (await page.locator('.uf-ports-card').count())
+					fail(`${DESIGNED.interfaces}: the Port Manager shows though it is switched off`);
+			}
+
+			await checkDesign(phonePage, key, want[key], 'phone');
+			await shot(phonePage, `${key}-${want[key]}-phone`);
+		}
+	}
+
+	await phoneCheck.close();
 
 	/* Unsaved changes: the top-bar chip and the changes dialog. */
 	await page.goto(`${base}/cgi-bin/luci/admin/system/system`);

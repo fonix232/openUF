@@ -6,13 +6,14 @@
  *
  *   node compat.cjs BASE_URL PASSWORD OUT_DIR
  *
- * cascade.css is served with the declarations of every property in ABSENT
- * dropped, "@supports (P: ...)" false and "@supports not (P: ...)" true,
- * which is what Firefox ESR or Safari make of it. Every page in the menu is
- * then visited wide, in the 961-1200px band where grids scroll inside their
- * cards, and at phone width; a layout wider than the window, a script error
- * or a read-only field that cuts its value off fails. Screenshots of the
- * pages that use these properties are written to OUT_DIR.
+ * cascade.css (and the Network designs' stylesheets beside it) is served
+ * with the declarations of every property in ABSENT dropped, "@supports
+ * (P: ...)" false and "@supports not (P: ...)" true, which is what Firefox
+ * ESR or Safari make of it. Every page in the menu is then visited wide,
+ * in the 961-1200px band where grids scroll inside their cards, and at
+ * phone width; a layout wider than the window, a script error or a
+ * read-only field that cuts its value off fails. Screenshots of the pages
+ * that use these properties are written to OUT_DIR.
  */
 
 const { chromium } = require('playwright');
@@ -91,7 +92,7 @@ async function settle(page) {
 		const page = await ctx.newPage();
 		let rewritten = 0;
 
-		await ctx.route(/\/luci-static\/unifi\/cascade\.css(\?|$)/, async (route) => {
+		await ctx.route(/\/luci-static\/unifi[^/]*\/(cascade|network\/[a-z]+-[a-z]+)\.css(\?|$)/, async (route) => {
 			const res = await route.fetch();
 
 			await route.fulfill({ response: res, body: withoutFeatures(await res.text()) });
