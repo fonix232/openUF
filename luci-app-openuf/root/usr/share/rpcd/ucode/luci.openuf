@@ -64,11 +64,11 @@ function conf_options() {
 }
 
 // Catalogue entry for a model code: its product name, SKU, system id and
-// current firmware (unifi/ufmodel/catalog.lua, one entry spread over three lines).
+// current firmware (unifi/catalog.lua, one entry spread over three lines).
 function catalogue(model) {
 	if (!model || !match(model, /^[A-Za-z0-9_-]+$/))
 		return null;
-	const src = readfile(`${OPENUF}/unifi/ufmodel/catalog.lua`) ?? '';
+	const src = readfile(`${OPENUF}/unifi/catalog.lua`) ?? '';
 	const at = index(src, `{model = "${model}",`);
 	if (at < 0)
 		return null;

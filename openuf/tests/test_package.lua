@@ -67,4 +67,20 @@ return {
 			assert_eq(c.inform_url, "http://unifi:8080/inform", "default inform URL")
 		end
 	},
+	{
+		name = "package: every install path the LuCI backend reads is a file the package ships",
+		fn = function()
+			local src = read("../luci-app-openuf/root/usr/share/rpcd/ucode/luci.openuf")
+			local n = 0
+			for rel in src:gmatch("%${OPENUF}/([%w_/%.%-]+)") do
+				if rel ~= "BUILD" then   -- written at build time
+					local f = io.open("src/" .. rel, "r")
+					assert_not_nil(f, "the backend reads " .. rel .. ", which src/ does not have")
+					if f then f:close() end
+					n = n + 1
+				end
+			end
+			assert_true(n >= 2, "found the backend's paths (" .. n .. ")")
+		end
+	},
 }
