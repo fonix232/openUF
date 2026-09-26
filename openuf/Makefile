@@ -1,5 +1,5 @@
 #
-# openUF: UniFi access point emulation for OpenWrt.
+# openUF: UniFi access point emulation for OpenWrt 25.12 and later (apk).
 #
 # Built by the OpenWrt SDK or buildroot from this feed (see the repository's
 # README: the feed's CI builds it with the official SDK images).
@@ -42,7 +42,7 @@ define Package/openuf
   TITLE:=UniFi access point emulation (adoptable by a UniFi Network controller)
   URL:=https://github.com/fonix232/openUF
   PKGARCH:=all
-  DEPENDS:=$(if $(filter 1,$(OPENUF_FEED_BUILD)),,$(addprefix +,$(OPENUF_RUNTIME_DEPENDS)))
+  DEPENDS:=@USE_APK $(if $(filter 1,$(OPENUF_FEED_BUILD)),,$(addprefix +,$(OPENUF_RUNTIME_DEPENDS)))
   EXTRA_DEPENDS:=$(if $(filter 1,$(OPENUF_FEED_BUILD)),$(call runtime_depends,$(OPENUF_RUNTIME_DEPENDS)))
 endef
 
@@ -83,24 +83,17 @@ define Package/openuf/install
 	$(INSTALL_DIR) $(1)/usr/share/openuf
 	$(CP) $(OPENUF_TREE)/. $(1)/usr/share/openuf/
 	chmod 0755 $(1)/usr/share/openuf/hook/*.sh
-	$(INSTALL_DIR) $(1)/usr/bin $(1)/usr/sbin
+	$(INSTALL_DIR) $(1)/usr/bin
 	$(LN) /usr/share/openuf/hook/syswrapper.sh $(1)/usr/bin/syswrapper.sh
-	$(INSTALL_BIN) ./files/openuf-update $(1)/usr/sbin/openuf-update
 	$(INSTALL_DIR) $(1)/etc/init.d $(1)/etc/config $(1)/etc/uci-defaults $(1)/lib/upgrade/keep.d
 	$(INSTALL_BIN) ./files/openuf.init $(1)/etc/init.d/openuf
 	$(INSTALL_BIN) ./files/openuf-bootstrap.init $(1)/etc/init.d/openuf-bootstrap
 	$(INSTALL_CONF) ./files/openuf.config $(1)/etc/config/openuf
 	$(INSTALL_DATA) ./files/openuf.uci-defaults $(1)/etc/uci-defaults/80_openuf
 	$(INSTALL_DATA) ./files/openuf.keep $(1)/lib/upgrade/keep.d/openuf
-ifdef CONFIG_USE_APK
 	$(INSTALL_DIR) $(1)/etc/apk/keys $(1)/etc/apk/repositories.d
 	$(INSTALL_DATA) ./files/feed/openuf.pem $(1)/etc/apk/keys/openuf.pem
 	$(INSTALL_DATA) ./files/feed/openuf.list $(1)/etc/apk/repositories.d/openuf.list
-else
-	$(INSTALL_DIR) $(1)/etc/opkg/keys
-	$(INSTALL_DATA) ./files/feed/55e48a603d3eb56a $(1)/etc/opkg/keys/55e48a603d3eb56a
-	$(INSTALL_DATA) ./files/feed/openuf.conf $(1)/etc/opkg/openuf.conf
-endif
 endef
 
 # A tarball install (install.sh into /opt/openuf) predates the package: stop
@@ -147,14 +140,6 @@ if grep -q '^ubnt:[^:]*:[0-9]*:[0-9]*:openuf bootstrap adoption:' /etc/passwd 2>
 	sed -i '/^ubnt:/d' /etc/passwd /etc/shadow
 	sed -i '/^openuf:/d' /etc/group
 fi
-exit 0
-endef
-
-# opkg leaves the package's directories behind, empty.
-define Package/openuf/postrm
-#!/bin/sh
-[ -n "$${IPKG_INSTROOT}" ] && exit 0
-rmdir /usr/share/openuf/* /usr/share/openuf 2>/dev/null
 exit 0
 endef
 

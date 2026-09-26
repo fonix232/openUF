@@ -67,8 +67,7 @@ M._exec = function(cmd) return os.execute(cmd) end
 -- back from the openUF feed on its first boot.
 M.OWN_PACKAGES = {"openuf", "luci-app-openuf"}
 M._installed = function(pkg)
-	return M._exec("{ apk info -e " .. pkg .. " || opkg status " .. pkg
-		.. " | grep -q 'installed'; } >/dev/null 2>&1") == 0
+	return M._exec("apk info -e " .. pkg .. " >/dev/null 2>&1") == 0
 end
 function M.owut_args()
 	local own = {}

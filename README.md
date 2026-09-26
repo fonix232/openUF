@@ -114,7 +114,7 @@ Most rows below marked ✅ were verified by driving the real controller UI again
 | L2 hardening (`ebtables.*`) | ✅ The controller's BPDU and VLAN-tag drops for Wi-Fi clients, re-expressed as an nftables bridge table on the VAPs (`l2guard`; needs `kmod-nft-bridge`) |
 | Board radio policy | ✅ A modelmap can floor or cap the pushed channel width and keep ACS off DFS channels (`dev.conf.radio.<band>`), and `country_override` programs a different regulatory domain while still reporting the controller's — for drivers that cannot run DFS |
 | LuCI pages | ✅ **Services → openUF** (`luci-app-openuf`): **Status** (daemon and heartbeat, adoption and applied-config state, the identity presented — catalogue model, sysid, firmware — the port map, network ownership and upgrade survival), **Settings** (every option in `/etc/config/openuf`, a standard LuCI form with Save & Apply and rollback; a change restarts the daemon, a switched-off feature drops its nft table or cron job, and a setting that changes what the controller provisions has it send its configuration again) and **Unhandled messages** (the ledger). Served by a ucode rpcd backend that never returns the adoption key |
-| Packaging and updates | ✅ OpenWrt packages (`openuf`, `luci-app-openuf`, architecture-independent) from a signed feed built by CI with the official SDK: apk for 25.12+, opkg for 24.10. `openuf-update` upgrades from the feed, waits for a completed inform and goes back to the previous build otherwise; the package reinstalls itself after a firmware upgrade that keeps settings; `tools/deploy.sh` installs a local build on test APs |
+| Packaging and updates | ✅ OpenWrt packages (`openuf`, `luci-app-openuf`, architecture-independent) for OpenWrt 25.12 and later, from a signed apk feed built by CI with the official SDK; updates arrive with `apk upgrade`; the package reinstalls itself after a firmware upgrade that keeps settings; `tools/deploy.sh` installs a local build on test APs |
 | Set Replacement Device / Load Configuration | ✅ Working — both are controller-side clones; no device-side protocol involved |
 | Power / PoE reporting | Not applicable — the flagged UI field belongs to the upstream parent device, not the AP |
 | Speed test | Not applicable — gateway-only feature in current UniFi Network |
@@ -171,15 +171,11 @@ openUF is an OpenWrt package, `openuf`, with its LuCI pages in `luci-app-openuf`
 come from this repository's package feed, which CI builds with the official OpenWrt SDK
 and signs.
 
+OpenWrt 25.12 or later (apk):
+
 ```sh
-# OpenWrt 25.12 and snapshots (apk)
 wget -O /etc/apk/keys/openuf.pem https://fonix232.github.io/openUF/openuf.pem
 apk add -X https://fonix232.github.io/openUF/apk/packages.adb luci-app-openuf
-
-# OpenWrt 24.10 (opkg)
-wget -O /etc/opkg/keys/55e48a603d3eb56a https://fonix232.github.io/openUF/55e48a603d3eb56a
-echo "src/gz openuf https://fonix232.github.io/openUF/ipk" >> /etc/opkg/customfeeds.conf
-opkg update && opkg install luci-app-openuf
 ```
 
 Install `openuf` alone on a device without LuCI. The package pulls in what it needs
@@ -202,8 +198,9 @@ Optional extras, each for one controller feature: `usteer` (band steering), `tc-
 (`wpad-wolfssl`, `-openssl` or `-mbedtls`; the default `wpad-basic-*` lacks 802.11v, so
 BSS Transition and Band Steering fail with "unknown configuration item 'bss_transition'").
 
-**Updates.** `openuf-update` upgrades from the feed, waits for the new version to complete
-an inform, and goes back to the previous one if it does not.
+**Updates.** The package adds its feed to the device, so `apk upgrade` picks up new
+versions with the rest of the system. The feed keeps the last five builds;
+`apk add openuf=<version>` goes back to one.
 
 **Firmware upgrades.** Packages only survive a firmware upgrade when they are built into the
 image, and OpenWrt's image builder (ASU, owut, LuCI's attended sysupgrade) only builds

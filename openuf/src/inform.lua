@@ -3919,8 +3919,7 @@ function M._warn_missing_uci()
 		"openuf: read/write fails silently, the inform payload reports ZERO\n" ..
 		"openuf: radios, and the controller has nothing to push a WLAN onto --\n" ..
 		"openuf: adoption and statistics still work, so nothing else looks wrong.\n" ..
-		"openuf: Fix it with:  apk add libuci-lua      (25.12+)\n" ..
-		"openuf:               opkg install libuci-lua (24.10 and earlier)\n")
+		"openuf: Fix it with:  apk add libuci-lua\n")
 	return true
 end
 
@@ -4284,7 +4283,7 @@ function M._tick(st, cfg, ufhw, ctx)
 				M._logged_pending = true
 			end
 			-- The controller answered: the daemon is alive and talking to it,
-			-- which is what the status file's readers (openuf-update) ask.
+			-- which is what the status file's readers (tools/deploy.sh, LuCI) ask.
 			pcall(M._write_status, st, {last_ok = M._time(), last_type = "pending"})
 			ctx.backoff = ctx.interval
 			return ctx.interval

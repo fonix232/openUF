@@ -1,7 +1,6 @@
 # Package builds (.github/scripts/sdk-build.sh output)
 out/
 *.apk
-*.ipk
 __pycache__/
 
 # macOS Finder metadata. Written into any directory the Finder has merely

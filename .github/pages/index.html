@@ -23,18 +23,12 @@
 <p class="sub">UniFi access point emulation for OpenWrt &mdash;
 <a href="https://github.com/fonix232/openUF">github.com/fonix232/openUF</a></p>
 
-<h2>OpenWrt 25.12 and snapshots (apk)</h2>
+<h2>Install (OpenWrt 25.12 and later)</h2>
 <pre><code>wget -O /etc/apk/keys/openuf.pem https://fonix232.github.io/openUF/openuf.pem
 apk add -X https://fonix232.github.io/openUF/apk/packages.adb luci-app-openuf</code></pre>
 
-<h2>OpenWrt 24.10 (opkg)</h2>
-<pre><code>wget -O /etc/opkg/keys/55e48a603d3eb56a https://fonix232.github.io/openUF/55e48a603d3eb56a
-echo "src/gz openuf https://fonix232.github.io/openUF/ipk" &gt;&gt; /etc/opkg/customfeeds.conf
-opkg update &amp;&amp; opkg install luci-app-openuf</code></pre>
-
 <p>Leave out <code>luci-app-openuf</code> and install <code>openuf</code> for a device without LuCI.
-The package adds this feed to the device, so later versions arrive with
-<code>openuf-update</code> (which goes back if a new version cannot reach the controller),
+The package adds this feed to the device, so later versions arrive with <code>apk upgrade</code>,
 and it reinstalls itself after a firmware upgrade that keeps settings.</p>
 </body>
 </html>

@@ -12,11 +12,9 @@ local function read(p)
 	return s
 end
 
-local USIGN = "55e48a603d3eb56a"
-
 return {
 	{
-		name = "package: the first-boot script embeds the package's bootstrap service and feed keys verbatim",
+		name = "package: the first-boot script embeds the package's bootstrap service and feed key verbatim",
 		fn = function()
 			local fb = read("contrib/asu/openuf-firstboot.sh")
 			local service = fb:match("cat > /etc/init.d/openuf%-bootstrap <<'SERVICE'\n(.-)\nSERVICE\n")
@@ -25,16 +23,13 @@ return {
 				"service drifted: copy files/openuf-bootstrap.init into openuf-firstboot.sh")
 			assert_true(fb:find(read("files/feed/openuf.pem"):gsub("\n+$", ""), 1, true) ~= nil,
 				"apk key drifted")
-			assert_true(fb:find(read("files/feed/" .. USIGN):gsub("\n+$", ""), 1, true) ~= nil,
-				"usign key drifted")
 		end
 	},
 	{
 		name = "package: the feed key, keep-list and Makefile agree on the key and repository files",
 		fn = function()
 			local mk, keep = read("Makefile"), read("files/openuf.keep")
-			for _, path in ipairs({"/etc/apk/keys/openuf.pem", "/etc/apk/repositories.d/openuf.list",
-					"/etc/opkg/keys/" .. USIGN, "/etc/opkg/openuf.conf"}) do
+			for _, path in ipairs({"/etc/apk/keys/openuf.pem", "/etc/apk/repositories.d/openuf.list"}) do
 				assert_true(mk:find(path, 1, true) ~= nil, "Makefile installs " .. path)
 				assert_true(keep:find(path, 1, true) ~= nil, "sysupgrade keeps " .. path)
 			end

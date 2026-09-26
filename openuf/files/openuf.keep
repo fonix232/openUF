@@ -4,5 +4,3 @@
 /etc/rc.d/S98openuf-bootstrap
 /etc/apk/keys/openuf.pem
 /etc/apk/repositories.d/openuf.list
-/etc/opkg/keys/55e48a603d3eb56a
-/etc/opkg/openuf.conf

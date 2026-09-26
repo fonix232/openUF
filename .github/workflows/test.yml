@@ -78,7 +78,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check the package's shell scripts
         run: |
-          for f in openuf/tools/check.sh openuf/tools/strip-tree.sh openuf/files/openuf-update \
+          for f in openuf/tools/check.sh openuf/tools/strip-tree.sh openuf/tools/deploy.sh \
                    openuf/files/openuf.uci-defaults openuf/files/openuf.init \
                    openuf/files/openuf-bootstrap.init openuf/src/hook/*.sh \
                    .github/scripts/sdk-build.sh; do

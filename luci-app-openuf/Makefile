@@ -32,7 +32,7 @@ define Package/luci-app-openuf
   TITLE:=LuCI pages for openUF
   URL:=https://github.com/fonix232/openUF
   PKGARCH:=all
-  DEPENDS:=$(if $(filter 1,$(OPENUF_FEED_BUILD)),,$(addprefix +,$(LUCI_OPENUF_DEPENDS)))
+  DEPENDS:=@USE_APK $(if $(filter 1,$(OPENUF_FEED_BUILD)),,$(addprefix +,$(LUCI_OPENUF_DEPENDS)))
   EXTRA_DEPENDS:=$(if $(filter 1,$(OPENUF_FEED_BUILD)),$(call runtime_depends,$(LUCI_OPENUF_DEPENDS)))
 endef
 

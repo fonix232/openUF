@@ -1,8 +1,8 @@
 #!/bin/sh
 # Build openUF's packages with an official OpenWrt SDK image (docker
-# openwrt/sdk:<target>-<version>, SDK in /builder). Both packages are
-# architecture-independent, so one SDK per package format is enough: 25.12 or
-# later for apk, 24.10 for opkg.
+# openwrt/sdk:<target>-<version>, SDK in /builder; 25.12 or later). Both
+# packages are architecture-independent, so one SDK builds them for every
+# device.
 #
 #   sdk-build.sh <repo> <out>     (inside the SDK container)
 #
@@ -34,4 +34,5 @@ mkdir -p "$OUT"
 find bin/packages -name 'openuf[-_]*' -o -name 'luci-app-openuf[-_]*' | while read -r f; do
 	cp "$f" "$OUT/"
 done
+ls "$OUT" | grep -q '\.apk$' || { echo "sdk-build: no packages were built" >&2; exit 1; }
 ls -l "$OUT"

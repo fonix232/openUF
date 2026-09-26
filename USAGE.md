@@ -53,15 +53,11 @@ openUF is two OpenWrt packages, both architecture-independent: `openuf` (the dae
 `luci-app-openuf` (its LuCI pages). They come from this repository's package feed, which
 GitHub Actions builds with the official OpenWrt SDK and signs:
 
+OpenWrt 25.12 or later (apk; 24.10 and its opkg are not supported):
+
 ```sh
-# OpenWrt 25.12 and snapshots (apk)
 wget -O /etc/apk/keys/openuf.pem https://fonix232.github.io/openUF/openuf.pem
 apk add -X https://fonix232.github.io/openUF/apk/packages.adb luci-app-openuf
-
-# OpenWrt 24.10 (opkg)
-wget -O /etc/opkg/keys/55e48a603d3eb56a https://fonix232.github.io/openUF/55e48a603d3eb56a
-echo "src/gz openuf https://fonix232.github.io/openUF/ipk" >> /etc/opkg/customfeeds.conf
-opkg update && opkg install luci-app-openuf
 ```
 
 Install `openuf` alone on a device without LuCI. What the package puts where:
@@ -74,18 +70,14 @@ Install `openuf` alone on a device without LuCI. What the package puts where:
 | `/etc/init.d/openuf` | The service: two procd instances, `announce` and `inform`. Restarts on its own when `/etc/config/openuf` changes |
 | `/etc/init.d/openuf-bootstrap` | Reinstalls the package after a firmware upgrade (below) |
 | `/usr/bin/syswrapper.sh` | The controller-facing command (`set-inform`, `set-adopt`, …) |
-| `/usr/sbin/openuf-update` | Update from the feed, with rollback |
-| `/etc/apk/keys/openuf.pem`, `/etc/apk/repositories.d/openuf.list` (opkg: `/etc/opkg/keys/55e48a603d3eb56a`, `/etc/opkg/openuf.conf`) | The feed, so updates arrive with the rest of the system's packages |
+| `/etc/apk/keys/openuf.pem`, `/etc/apk/repositories.d/openuf.list` | The feed, so updates arrive with the rest of the system's packages |
 | `/lib/upgrade/keep.d/openuf` | What a firmware upgrade keeps |
 
 The first install enables and starts the service and enables `lldpd`.
 
-**Updating.** `openuf-update` upgrades both packages from the feed, then waits up to 75 s
-for the new daemon to complete an inform. If it does not, it installs the previous version
-again (the feed keeps the last five builds). A controller that does not answer is reported
-but not rolled back, because the old version would face the same controller.
-`openuf-update --check` only says whether there is a newer build. Plain `apk upgrade` works
-too; it just has no rollback.
+**Updating.** `apk upgrade` (or `apk upgrade openuf luci-app-openuf` for just these two);
+the service restarts onto the new build. The feed keeps the last five builds, so
+`apk add openuf=<version>` goes back to an earlier one.
 
 **Firmware upgrades.** A package survives a firmware upgrade only when it is built into
 the image, and OpenWrt's image builder (ASU: owut, LuCI's attended sysupgrade, the
@@ -98,7 +90,7 @@ owut`, § 6) tells owut to leave openUF's packages out of the ASU request; when 
 `owut upgrade` by hand, add `-r openuf,luci-app-openuf`, or the ASU server rejects the
 build.
 
-**Uninstalling.** `apk del luci-app-openuf openuf` (`opkg remove`). The service stops, the
+**Uninstalling.** `apk del luci-app-openuf openuf`. The service stops, the
 temporary SSH adoption account goes, and `/etc/openuf/` stays, so a reinstall finds the
 adoption again. Delete it by hand to forget the device.
 
@@ -1098,8 +1090,7 @@ plan that is rolled back (§ Controller-owned bridge) sets `cfgversion_effective
 
 ### Updating openUF in place
 
-`openuf-update` upgrades from the package feed and goes back to the previous build if the
-new one does not complete an inform within 75 s (§ 2). From a development machine,
+`apk upgrade` from the package feed (§ 2). From a development machine,
 `sh tools/deploy.sh <dir> <ap>...` installs packages built with
 `.github/scripts/sdk-build.sh` on each AP in turn, stopping at the first that does not
 complete an inform.
@@ -1204,7 +1195,7 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 | JSON decode error in controller logs | AES key mismatch — try `syswrapper.sh reset-inform` |
 | `inform: parse error: ... inflate: truncated stream` | A compressed controller response arrived incomplete. One heartbeat is lost and the next retries, so an occasional line is harmless; a steady stream of them points at the link to the controller (an MTU or proxy problem), not at the device |
 | Adopted device goes Offline and the log fills with `HTTP 400` | The identity MAC changed underneath the adoption — usually `dev.conf.net.lan_cpueth` now naming a different interface. openUF says so once per streak, naming the MAC it informs as. Forget the device in the controller and re-adopt, or point `lan_cpueth` back at the interface it was adopted under |
-| Device adopts, reports ports and statistics, but no pushed WLAN is ever created | `libuci-lua` missing — every radio and WLAN read fails silently and `radio_table` goes out empty, so the controller has no radio to push onto. openUF says so at startup; `apk add libuci-lua` (or `opkg install`) and restart |
+| Device adopts, reports ports and statistics, but no pushed WLAN is ever created | `libuci-lua` missing — every radio and WLAN read fails silently and `radio_table` goes out empty, so the controller has no radio to push onto. openUF says so at startup; `apk add libuci-lua` and restart |
 | SSID not appearing after adoption | Check `uci show wireless`, check `loglevel` in `/var/log/openuf.log` |
 | `lldp_table` empty | `lldpd` not running — run `/etc/init.d/lldpd start` |
 | Wired clients reach LAN peers but not the gateway or internet, while WiFi clients on the same AP are fine (DSA boards) | The VLAN-SSID bridge shares the physical uplink with `br-lan`, so the switch's single hardware FDB learns the router's MAC against the tagged port. openUF sets `learning '0'` on that port to prevent it — check `bridge fdb show` for the router's MAC carrying `offload` on `<uplink>.<vid>` instead of the bare uplink, and confirm `network.openuf_brport<vid>` exists |

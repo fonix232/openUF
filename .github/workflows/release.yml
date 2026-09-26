@@ -1,8 +1,8 @@
 name: Release
 
 # A version tag attaches the built packages to a GitHub release, for installing
-# by hand (apk add --allow-untrusted / opkg install). Devices normally update
-# from the feed (see feed.yml).
+# by hand (apk add --allow-untrusted). Devices normally update from the feed
+# (see feed.yml).
 
 on:
   push:
@@ -20,13 +20,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Build with the OpenWrt SDKs
+      - name: Build with the OpenWrt SDK
         run: |
           mkdir -p out && chmod 777 out
-          for sdk in openwrt/sdk:x86-64-openwrt-25.12 openwrt/sdk:x86-64-openwrt-24.10; do
-            docker run --rm -v "$PWD:/feed:ro" -v "$PWD/out:/out" "$sdk" \
-              sh /feed/.github/scripts/sdk-build.sh /feed /out
-          done
+          docker run --rm -v "$PWD:/feed:ro" -v "$PWD/out:/out" openwrt/sdk:x86-64-openwrt-25.12 \
+            sh /feed/.github/scripts/sdk-build.sh /feed /out
           (cd out && sha256sum * > SHA256SUMS)
 
       - name: Publish release

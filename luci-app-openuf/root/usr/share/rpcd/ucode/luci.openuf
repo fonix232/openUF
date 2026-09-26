@@ -200,7 +200,7 @@ const methods = {
 				upgrade: {
 					bootstrap: !!access('/etc/init.d/openuf-bootstrap'),
 					bootstrap_enabled: !!access('/etc/rc.d/S98openuf-bootstrap'),
-					feed: !!(access('/etc/apk/repositories.d/openuf.list') || access('/etc/opkg/openuf.conf'))
+					feed: !!access('/etc/apk/repositories.d/openuf.list')
 				},
 				diagnostics: {
 					unhandled: length(keys(json_file(`${STATE}/unhandled.json`)?.entries ?? {})),

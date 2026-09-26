@@ -102,23 +102,14 @@ EOF
 fi
 
 # ─── The openUF feed ─────────────────────────────────────────────────────────
-if command -v apk >/dev/null 2>&1; then
-	mkdir -p /etc/apk/keys /etc/apk/repositories.d
-	cat > /etc/apk/keys/openuf.pem <<'KEY'
+mkdir -p /etc/apk/keys /etc/apk/repositories.d
+cat > /etc/apk/keys/openuf.pem <<'KEY'
 -----BEGIN PUBLIC KEY-----
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqpVcObiagPpzXuDYOM5z7+k9h/PV
 NL+swuTAD9dqyu6Hc2LcnkLY21ZOoJgWEmd5Ra/s+CajGmPpLEc/uPTAcw==
 -----END PUBLIC KEY-----
 KEY
-	echo "$FEED/apk/packages.adb" > /etc/apk/repositories.d/openuf.list
-else
-	mkdir -p /etc/opkg/keys
-	cat > /etc/opkg/keys/55e48a603d3eb56a <<'KEY'
-untrusted comment: openUF feed key
-RWRV5IpgPT61alUAF0x6WKF+igTBaDCDl5ZsaD184KKnlvlxOsJ8gY7z
-KEY
-	echo "src/gz openuf $FEED/ipk" > /etc/opkg/openuf.conf
-fi
+echo "$FEED/apk/packages.adb" > /etc/apk/repositories.d/openuf.list
 
 # ─── The bootstrap service (the openuf package's /etc/init.d/openuf-bootstrap)
 cat > /etc/init.d/openuf-bootstrap <<'SERVICE'
@@ -159,21 +150,12 @@ reinstall() {
 		n=$((n + 1)); [ $((n % 30)) -eq 1 ] && log "waiting for the network"
 		sleep 10
 	done
-	if command -v apk >/dev/null 2>&1; then
-		apk info -e luci-base >/dev/null 2>&1 && pkgs="$pkgs luci-app-openuf"
-		n=0
-		until apk update >/dev/null 2>&1 && apk add $pkgs; do
-			n=$((n + 1)); [ $n -ge 30 ] && { log "giving up on: apk add $pkgs"; return 1; }
-			log "apk add $pkgs failed, retry $n"; sleep 60
-		done
-	else
-		opkg status luci-base 2>/dev/null | grep -q installed && pkgs="$pkgs luci-app-openuf"
-		n=0
-		until opkg update >/dev/null 2>&1 && opkg install $pkgs; do
-			n=$((n + 1)); [ $n -ge 30 ] && { log "giving up on: opkg install $pkgs"; return 1; }
-			log "opkg install $pkgs failed, retry $n"; sleep 60
-		done
-	fi
+	apk info -e luci-base >/dev/null 2>&1 && pkgs="$pkgs luci-app-openuf"
+	n=0
+	until apk update >/dev/null 2>&1 && apk add $pkgs; do
+		n=$((n + 1)); [ $n -ge 30 ] && { log "giving up on: apk add $pkgs"; return 1; }
+		log "apk add $pkgs failed, retry $n"; sleep 60
+	done
 	log "installed $pkgs from the openUF feed"
 }
 SERVICE
