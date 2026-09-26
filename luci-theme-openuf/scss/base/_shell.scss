@@ -167,7 +167,13 @@
 	box-shadow: inset -1px 0 0 var(--uf-border);
 }
 
-.uf-subnav-head { @include row(8px, space-between); padding: 0 4px 10px 10px; }
+.uf-subnav-head {
+	@include row(8px, space-between);
+	margin-bottom: 10px;
+	padding: 0 4px 0 10px;
+	border-radius: var(--uf-radius);
+	transition: box-shadow .15s;
+}
 .uf-subnav-title { font-size: 15px; font-weight: 600; @include ellipsis; }
 
 .uf-subnav-collapse, .uf-subnav-expand {
@@ -213,6 +219,45 @@
 		.uf-page, .uf-footer { padding-left: 52px; }
 	}
 }
+
+// Hovering the category whose pages the column shows traces a line from its
+// icon, along the column's edge, into the column's heading, which is
+// outlined: UniFi's way of pointing from the rail to the panel it has open.
+// menu-openuf.js measures both ends into --uf-trace-top/-h and sets
+// data-trace (down: the icon is below the heading, up: above). Its flyout
+// would only repeat the column, so it stays shut.
+.uf-subnav::before {
+	content: "";
+	position: absolute;
+	top: var(--uf-trace-top, 0px);
+	left: 0;
+	width: 10px;
+	height: var(--uf-trace-h, 0px);
+	border: 0 solid var(--uf-text-3);
+	opacity: 0;
+	transition: opacity .15s;
+	pointer-events: none;
+}
+
+.uf-subnav[data-trace] {
+	&::before { opacity: 1; }
+	.uf-subnav-head { box-shadow: inset 0 0 0 1px var(--uf-text-3); }
+}
+
+.uf-subnav[data-trace="down"]::before { border-width: 1px 0 0 1px; border-top-left-radius: 8px; }
+.uf-subnav[data-trace="up"]::before { border-width: 0 0 1px 1px; border-bottom-left-radius: 8px; }
+
+.uf-shell:has(> .uf-subnav[data-trace]) .uf-rail-item.active::after {
+	content: "";
+	position: absolute;
+	top: 18px;
+	right: -6px;
+	width: 6px;
+	border-top: 1px solid var(--uf-text-3);
+	pointer-events: none;
+}
+
+.uf-has-subnav:not(.uf-subnav-collapsed) .uf-rail-item.active > .uf-flyout { display: none; }
 
 .uf-scrim { display: none; }
 

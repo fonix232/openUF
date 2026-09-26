@@ -268,8 +268,12 @@ return baseclass.extend({
 
 			(RAIL_FOOT.indexOf(child.name) > -1 ? foot : head).appendChild(li);
 
-			if (isActive && pages.length)
+			if (isActive && pages.length) {
 				this.renderSubMenu(child, url + '/' + child.name, title);
+
+				li.addEventListener('mouseenter', () => this.trace(li, true));
+				li.addEventListener('mouseleave', () => this.trace(li, false));
+			}
 		});
 
 		foot.appendChild(E('li', { 'class': 'uf-rail-item uf-rail-toggle' }, [
@@ -294,6 +298,30 @@ return baseclass.extend({
 			new ResizeObserver(() => {
 				document.documentElement.style.setProperty('--uf-drawer-rail-h', `${nav.offsetHeight}px`);
 			}).observe(nav);
+	},
+
+	/* Hovering the category whose pages the column shows traces a line from
+	 * its icon into the column's heading (cascade.css, "traces a line"):
+	 * measure both ends, relative to the column, which scrolls. Only while
+	 * the column stands beside the rail, not in the phone drawer. */
+	trace(li, on) {
+		const nav = document.querySelector('#submenu');
+		const head = nav ? nav.querySelector('.uf-subnav-head') : null;
+
+		if (!on || !head || !nav.offsetParent || !window.matchMedia('(min-width: 961px)').matches) {
+			if (nav)
+				nav.removeAttribute('data-trace');
+
+			return;
+		}
+
+		const icon = li.firstElementChild.getBoundingClientRect();
+		const from = icon.top + icon.height / 2 - nav.getBoundingClientRect().top + nav.scrollTop;
+		const to = head.offsetTop + head.offsetHeight / 2;
+
+		nav.style.setProperty('--uf-trace-top', '%dpx'.format(Math.min(from, to)));
+		nav.style.setProperty('--uf-trace-h', '%dpx'.format(Math.abs(from - to)));
+		nav.setAttribute('data-trace', (from >= to) ? 'down' : 'up');
 	},
 
 	renderSubMenu(tree, url, title) {
