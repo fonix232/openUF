@@ -2365,9 +2365,13 @@ input[type="submit"]:hover {
 	overflow: hidden;
 }
 
+/* A split button (Save & Apply with its menu) stands beside plain buttons,
+ * so it takes their height: the dropdown's own "height: auto" above would
+ * shrink it to its label, since LuCI zeroes its padding. */
 .cbi-dropdown.btn,
 .cbi-dropdown.cbi-button {
 	align-items: stretch;
+	height: var(--uf-control-h);
 }
 
 .cbi-dropdown.btn > ul:not(.dropdown),
@@ -2381,6 +2385,8 @@ input[type="submit"]:hover {
 .cbi-dropdown.cbi-button > ul:not(.dropdown) > li {
 	padding: 0;
 	color: inherit;
+	/* The button's own, so the label sits on its neighbours' baseline. */
+	line-height: inherit;
 }
 
 .cbi-dropdown > ul.preview {
@@ -2415,7 +2421,7 @@ input[type="submit"]:hover {
 .cbi-dropdown.btn > .open,
 .cbi-dropdown.cbi-button > .open {
 	align-self: stretch;
-	width: 28px;
+	width: 32px;
 	margin: 0;
 	border-left: 1px solid color-mix(in srgb, var(--uf-on-accent) 35%, transparent);
 	color: inherit;
@@ -2423,6 +2429,18 @@ input[type="submit"]:hover {
 
 .cbi-dropdown.cbi-button:not(.important):not(.cbi-button-apply) > .open {
 	border-left-color: var(--uf-btn-line);
+}
+
+/* A split button's menu in the page's action bar or a dialog's button row
+ * opens upwards: the bar sits at the foot of the window, and LuCI weighs
+ * the room below against the whole page rather than the window, so it
+ * would open out of sight. */
+.cbi-page-actions .cbi-dropdown[open] > ul.dropdown,
+.modal > .right .cbi-dropdown[open] > ul.dropdown,
+.modal .button-row .cbi-dropdown[open] > ul.dropdown {
+	top: auto !important; /* over LuCI's inline placement */
+	bottom: calc(100% + 4px) !important;
+	max-height: none !important;
 }
 
 .cbi-dropdown > .more,
