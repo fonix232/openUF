@@ -1,0 +1,131 @@
+#!/bin/sh
+#
+# A stand-in for /sbin/swconfig in the test container, which has no switch
+# chip. It answers from files instead of the kernel, what the real tool
+# printed on a real board (test/add-swconfig.sh installs them):
+#
+#   $SWCONFIG_DATA/<switch>.help   swconfig dev <switch> help
+#   $SWCONFIG_DATA/<switch>.show   swconfig dev <switch> show
+#
+# LuCI runs "help" (the switch's features) and "show" (each port's link),
+# and netifd runs "load" on a network reload. "list", "get" and a single
+# port or VLAN's "show" are read from the same two files, in the real
+# tool's format, so they agree with them. There is no hardware to program:
+# "set" and "load" check their arguments as the real tool does, then change
+# nothing.
+
+data=${SWCONFIG_DATA:-/usr/share/swconfig-fake}
+
+usage() {
+	echo "swconfig list"
+	echo "swconfig dev <dev> [port <port>|vlan <vlan>] (help|set <key> <value>|get <key>|load <config>|show)"
+	exit 1
+}
+
+# One section of "show": "Global attributes:", "Port N:" or "VLAN N:". The
+# ARL table's "Port N: MAC ..." lines sit inside the global section; only
+# a bare "Port N:" starts a port's.
+section() {
+	awk -v want="$1" '
+		/^(Global attributes|Port [0-9]+|VLAN [0-9]+):$/ { on = ($0 == want) }
+		on
+	' "$data/$dev.show"
+}
+
+# A VLAN slot with no ports is left out of the full "show" but still has
+# its attributes; its VID is its slot number until one is set.
+vlan_section() {
+	section "VLAN $1:" | grep . || printf 'VLAN %s:\n\tvid: %s\n\tports: \n' "$1" "$1"
+}
+
+# The type of one attribute of a group (switch, vlan or port), from "help".
+attr_type() {
+	awk -v group="     --$1" -v name="$2" '
+		/^     --/ { on = ($0 == group); next }
+		on && $4 == name { gsub(/[():]/, "", $3); print $3; exit }
+	' "$data/$dev.help"
+}
+
+if [ "$#" -eq 1 ] && [ "$1" = list ]; then
+	for f in "$data"/*.help; do
+		[ -f "$f" ] || continue
+		# "switch0: mdio.0:00(Atheros AR8327), ..." names the switch and its bus
+		sed -n '1s/^\([^:]*\): \([^(]*\)(.*/Found: \1 - \2/p' "$f"
+	done
+	exit 0
+fi
+
+[ "$#" -ge 3 ] && [ "$1" = dev ] || usage
+dev=$2
+shift 2
+
+port= vlan= cmd= key= value=
+while [ "$#" -gt 0 ]; do
+	[ -z "$cmd" ] || usage
+	case "$1" in
+		port) [ "$#" -ge 2 ] || usage; port=$2; shift ;;
+		vlan) [ "$#" -ge 2 ] || usage; vlan=$2; shift ;;
+		help|show) cmd=$1 ;;
+		get) [ "$#" -ge 2 ] || usage; cmd=get; key=$2; shift ;;
+		set)
+			[ "$#" -ge 2 ] || usage
+			cmd=set key=$2
+			shift
+			if [ "$#" -ge 2 ]; then value=$2; shift; fi
+			;;
+		load) [ "$#" -ge 2 ] && [ -z "$port$vlan" ] || usage; cmd=load; shift ;;
+		portmap) cmd=portmap; if [ "$#" -ge 2 ]; then shift; fi ;;
+		*) usage ;;
+	esac
+	shift
+done
+
+[ -n "$cmd" ] || usage
+[ -z "$port" ] || [ -z "$vlan" ] || usage
+
+if [ ! -f "$data/$dev.help" ]; then
+	echo 'Failed to connect to the switch. Use the "list" command to see which switches are available.' >&2
+	exit 1
+fi
+
+case "$cmd" in
+	get|set)
+		group=switch heading="Global attributes:"
+		[ -z "$port" ] || group=port heading="Port $port:"
+		[ -z "$vlan" ] || group=vlan heading="VLAN $vlan:"
+
+		type=$(attr_type "$group" "$key")
+		if [ -z "$type" ]; then
+			echo "Unknown attribute \"$key\"" >&2
+			exit 255
+		fi
+
+		if [ "$cmd" = set ]; then
+			[ "$type" = none ] || [ -n "$value" ] || usage
+			exit 0
+		fi
+
+		# A value runs from "<tab>key: " to the next attribute (the ARL
+		# table and MIB counters take several lines).
+		{ if [ -n "$vlan" ]; then vlan_section "$vlan"; else section "$heading"; fi; } | awk -v key="$key" '
+			/^\t[a-z0-9_]+: / { on = (index($0, "\t" key ": ") == 1); if (on) sub(/^\t[a-z0-9_]+: /, "") }
+			on
+		'
+		;;
+	help)
+		cat "$data/$dev.help"
+		;;
+	show)
+		if [ -n "$port" ]; then
+			out=$(section "Port $port:")
+			[ -n "$out" ] || exit 1
+			printf '%s\n' "$out"
+		elif [ -n "$vlan" ]; then
+			vlan_section "$vlan"
+		else
+			cat "$data/$dev.show"
+		fi
+		;;
+esac
+
+exit 0

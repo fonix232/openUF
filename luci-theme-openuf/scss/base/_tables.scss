@@ -1,0 +1,262 @@
+@use '../abstracts' as *;
+
+// A list: a plain table with column titles. Label/value tables have none.
+$list: ':where(.table:not(.cbi-section-table):has(.tr.table-titles, .tr.cbi-section-table-titles))';
+// A card holding an editable grid that may scroll sideways (below).
+$grid: '.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"]))';
+
+.table {
+	display: table;
+	position: relative;
+	width: 100%;
+	margin-bottom: 0;
+	font-size: 13px;
+	border-collapse: collapse;
+}
+
+.tr { display: table-row; }
+.thead { display: table-header-group; }
+.tbody { display: table-row-group; }
+.tfoot { display: table-footer-group; }
+.table[width="33%"], .th[width="33%"], .td[width="33%"] { width: 33%; }
+.table[width="100%"], .th[width="100%"], .td[width="100%"] { width: 100%; }
+
+.table {
+	.th, .td {
+		display: table-cell;
+		vertical-align: middle;
+		padding: 7px 10px;
+		line-height: 18px;
+		text-align: left;
+		color: var(--uf-text-2);
+		border-top: 1px solid var(--uf-divider);
+	}
+	// Squeezed (Static Leases at 1100px), a title wraps between its words
+	// rather than push the table out of its card.
+	.th {
+		color: var(--uf-text-1);
+		font-weight: 600;
+		vertical-align: bottom;
+		border-top: 0;
+		border-bottom: 1px solid var(--uf-border);
+	}
+	.tr:first-child .td { border-top: 0; }
+	// The header rule is the first row's, so it also runs under an actions
+	// column that has no title.
+	.tr.table-titles + .tr > .td, .tr.cbi-section-table-titles + .tr > .td { border-top-color: var(--uf-border); }
+	// Under a thead the first row has no rule of its own to recolour (it is
+	// a first child); give it one. Stacked on phones, rows draw their own.
+	.thead + .tbody > .tr:first-child:not(.placeholder) > .td {
+		@include desktop { border-top: 1px solid var(--uf-border); }
+	}
+	.th:first-child, .td:first-child { padding-left: 0; }
+	.th:last-child, .td:last-child { padding-right: 0; }
+}
+
+.cbi-section > .table:first-child, .cbi-section > h3 + .table { margin-top: -4px; }
+
+// Status tables pair a label with a value, UniFi's "Model  U6 IW" rows.
+.table:not(.cbi-section-table) {
+	.tr > .td:first-child[width="33%"] { color: var(--uf-text-3); }
+	.tr > .td[width="33%"] + .td { color: var(--uf-text-1); }
+	// A long unbroken value (a DUID, an IPv6 address) may break rather than
+	// push a label/value table out of its card. A list keeps its words whole
+	// (a MAC address is not split to spare a column that could wrap at its
+	// spaces) and scrolls instead (below); pages with long tokens opt out.
+	.td { overflow-wrap: anywhere; }
+	&:where(:has(.tr.table-titles, .tr.cbi-section-table-titles)) .td { overflow-wrap: break-word; }
+}
+
+// Squeezed by a long column, a short one (a PID, a user) stays whole.
+#{$list} .td { min-width: 4em; }
+
+.tr.placeholder {
+	height: 64px;
+	> .td {
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		padding: 22px 0;
+		text-align: center;
+		color: var(--uf-text-3);
+		border-top: 0;
+	}
+	// The message hangs from the table's bottom edge, so it can only do that
+	// from the last row; with a row after it (a "Total") it stays in its row.
+	&:not(:last-child) { height: auto; }
+	&:not(:last-child) > .td { position: static; }
+	> .td > em { font-style: normal; }
+}
+
+.tr.drag-over-above, .tr.drag-over-below {
+	border: 2px solid var(--uf-blue);
+	border-width: 2px 0 0 0;
+}
+
+.tr.drag-over-below { border-width: 0 0 2px 0; }
+
+.cbi-section-table .tr:not(.cbi-section-table-titles):not(.table-titles):not(.cbi-section-table-descr):not(.placeholder):hover > .td {
+	background-color: var(--uf-hover);
+}
+
+// A list (Startup's scripts, the mounted file systems) is hovered like an
+// editable table.
+#{$list} .tr {
+	&:where(:not(.table-titles, .cbi-section-table-titles, .placeholder)):hover > .td { background-color: var(--uf-hover); }
+	// Its first and last column are inset, so the tint has an edge.
+	> :is(.th, .td):first-child { padding-left: 8px; }
+	> :is(.th, .td):last-child { padding-right: 8px; }
+}
+
+.cbi-section-table, :where(.table:has(.tr.table-titles, .tr.cbi-section-table-titles)) {
+	.tr:hover > .td:first-child { border-radius: var(--uf-radius-sm) 0 0 var(--uf-radius-sm); }
+	.tr:hover > .td:last-child { border-radius: 0 var(--uf-radius-sm) var(--uf-radius-sm) 0; }
+}
+
+.cbi-section-table {
+	// The hover tint is the fields' own grey in the light scheme; outline
+	// the fields of a hovered row, or they dissolve into it.
+	.tr:hover > .td :where(input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="reset"], [type="file"]), select, textarea, .cbi-dropdown:not(.btn, .cbi-button)):not(:focus, [open]) {
+		border-color: var(--uf-border-strong);
+	}
+	.td:first-child { padding-left: 8px; }
+	.th:first-child { padding-left: 8px; }
+	.td:last-child, .th:last-child { padding-right: 8px; }
+	.tr.cbi-section-table-descr .th {
+		font-weight: 400;
+		color: var(--uf-text-3);
+		white-space: normal;
+	}
+}
+
+.cbi-section-table-titles { font-weight: 600; }
+.cbi-section-table-descr.named::before, .cbi-section-table-row[data-title]::before { content: none; }
+.cbi-rowstyle-2, .tr.table-titles, .tr.cbi-section-table-titles { background: none; }
+
+.cbi-section-table-filter {
+	.th { padding-top: 0; border-bottom: 0; font-weight: 400; }
+	input { width: 100%; min-width: 60px; height: 28px; }
+}
+
+th[data-sortable-row] { cursor: pointer; }
+.th[data-sort-direction] { color: var(--uf-blue); }
+th[data-sort-direction="asc"]::after { content: "\a0\2191"; }
+th[data-sort-direction="desc"]::after { content: "\a0\2193"; }
+table table td, .cbi-value-field table td { border: none; }
+
+.table.cbi-section-table {
+	input[type="password"], input[type="text"], textarea, select, .cbi-select {
+		width: 100%;
+		min-width: auto;
+	}
+	.td.cbi-section-table-cell {
+		white-space: nowrap;
+		text-align: right;
+		select, .cbi-select { width: inherit; }
+	}
+}
+
+.td.cbi-section-actions {
+	width: 1%;
+	text-align: right;
+	vertical-align: middle;
+	white-space: nowrap;
+	> * { display: flex; gap: 6px; justify-content: flex-end; }
+	> :not(.cbi-dropdown) > *, > * > form > * { flex: 1 1 auto; margin: 0; }
+	> * > form { display: inline-flex; margin: 0; }
+	.cbi-button { height: 28px; padding: 0 12px; }
+	.cbi-button.drag-handle { flex: 0 0 auto; padding: 0; }
+}
+
+// A list's row buttons are the small size and sit in a tighter cell, so a
+// row with actions is as low as one without, about UniFi's 32px. Kept weak
+// (:where), so a page's own row buttons still win.
+#{$list} .td {
+	:is(.btn, .cbi-button):not(.cbi-dropdown) { height: 28px; padding: 0 12px; }
+	&:has(> :is(.btn, .cbi-button), > * > :is(.btn, .cbi-button)) {
+		padding-top: 2px;
+		padding-bottom: 2px;
+	}
+}
+
+.table.valign-middle .td { vertical-align: middle; }
+
+// A grid wider than its card (up to about 1200px with the subnav open,
+// as LuCI sizes row actions for one line and MACs and zones do not break)
+// scrolls sideways inside it, as UniFi's tables do, its row actions pinned
+// at the right edge. Not one holding LuCI's dropdowns, whose open lists a
+// scroller would clip, nor a hidden tab pane, which could take the focus.
+@include desktop {
+	#{$grid} {
+		overflow-x: auto;
+		scrollbar-width: thin;
+		// Only the grid moves: the title, the description and "Add" stay.
+		> :not(.table) { position: sticky; left: 0; }
+		// Separate borders, as only those let the pinned cells cast their
+		// shadow. So the rule under the titles is the first row's alone, and
+		// a drop target is marked on its cells.
+		> .table {
+			border-collapse: separate;
+			border-spacing: 0;
+			> * > .tr > .th { border-bottom-width: 0; }
+			> .thead + .tbody > .tr:first-child > .td, > .tr.cbi-section-table-titles + .tr > .td { border-top: 1px solid var(--uf-border); }
+			> * > .tr.drag-over-above > .td { box-shadow: inset 0 2px 0 var(--uf-blue); }
+			> * > .tr.drag-over-below > .td { box-shadow: inset 0 -2px 0 var(--uf-blue); }
+			> .tr, > * > .tr {
+				// Opaque: the hover tint and the edge line (below) are layers
+				// over the card colour, or the columns under it would show in
+				// the dark. A shadow in the card colour, not a box (which
+				// would make a grid that fits scroll), covers the columns
+				// passing between the cell and the card's edge.
+				> .cbi-section-actions {
+					position: sticky;
+					right: 0;
+					z-index: 1;
+					background:
+						linear-gradient(to right, var(--uf-grid-edge, transparent) 1px, transparent 1px),
+						linear-gradient(var(--uf-grid-tint, transparent), var(--uf-grid-tint, transparent))
+						var(--uf-grid-bg, var(--uf-surface));
+					box-shadow: 20px 0 0 var(--uf-grid-bg, var(--uf-surface));
+				}
+				&.cbi-section-table-row:hover > .cbi-section-actions { --uf-grid-tint: var(--uf-hover); }
+			}
+			> * > .tr.drag-over-above > .cbi-section-actions {
+				box-shadow: 20px 0 0 var(--uf-grid-bg, var(--uf-surface)), inset 0 2px 0 var(--uf-blue);
+			}
+			> * > .tr.drag-over-below > .cbi-section-actions {
+				box-shadow: 20px 0 0 var(--uf-grid-bg, var(--uf-surface)), inset 0 -2px 0 var(--uf-blue);
+			}
+		}
+	}
+}
+
+// A list wider than its card (961-1200px with the subnav open) scrolls the
+// same way, its box's title staying; not around LuCI's dropdowns, nor the
+// view itself, which would carry the page's other content along.
+@include desktop {
+	:not(#view):has(> .table:not(.cbi-section-table) > .tr:is(.table-titles, .cbi-section-table-titles), > .table:not(.cbi-section-table) > .thead > .tr:is(.table-titles, .cbi-section-table-titles)):not(:has(.cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) {
+		overflow-x: auto;
+		scrollbar-width: thin;
+		> :not(.table) { position: sticky; left: 0; }
+	}
+}
+
+// A dialog's grid sits on the dialog's colour, not a card's.
+.modal { --uf-grid-bg: var(--uf-raised); }
+
+// The edge line shows while columns are under the actions: driven by the
+// scroll position, it goes at the end, and a grid that fits has none.
+@keyframes uf-grid-pinned {
+	0%, 99% { --uf-grid-edge: var(--uf-border-strong); }
+	100% { --uf-grid-edge: transparent; }
+}
+
+@supports (animation-timeline: scroll()) {
+	@include desktop {
+		#{$grid} > .table > .tr > .cbi-section-actions, #{$grid} > .table > * > .tr > .cbi-section-actions {
+			animation: uf-grid-pinned linear both;
+			animation-timeline: scroll(nearest inline);
+		}
+	}
+}

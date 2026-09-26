@@ -1,0 +1,255 @@
+// Network > Switch, on boards with a swconfig switch chip: the switch's
+// settings, then its VLANs as a matrix of ports (one select per port and
+// VLAN) under a row of UniFi's port squares, which LuCI draws as the matrix's
+// second header row.
+@use '../abstracts' as *;
+@use '../abstracts/pages-b' as *;
+
+body[data-page="admin-network-switch"] {
+	// UniFi's port strip: a rounded tile with the jack cut out; the uplink
+	// with a chevron in its place; a CPU port (the switch's link to the SoC,
+	// not a socket) as a chip.
+	--uf-switch-i-port: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 20'><path fill-rule='evenodd' d='M3.5 0h17A3.5 3.5 0 0 1 24 3.5v13a3.5 3.5 0 0 1-3.5 3.5h-17A3.5 3.5 0 0 1 0 16.5v-13A3.5 3.5 0 0 1 3.5 0ZM7 5v8h2.5v2.5h5V13H17V5Z'/></svg>");
+	--uf-switch-i-uplink: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 20'><path fill-rule='evenodd' d='M3.5 0h17A3.5 3.5 0 0 1 24 3.5v13a3.5 3.5 0 0 1-3.5 3.5h-17A3.5 3.5 0 0 1 0 16.5v-13A3.5 3.5 0 0 1 3.5 0ZM12 6.2l-5.3 5.3 1.6 1.6 3.7-3.7 3.7 3.7 1.6-1.6Z'/></svg>");
+	--uf-switch-i-cpu: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 20'><path fill-rule='evenodd' d='M3.5 0h17A3.5 3.5 0 0 1 24 3.5v13a3.5 3.5 0 0 1-3.5 3.5h-17A3.5 3.5 0 0 1 0 16.5v-13A3.5 3.5 0 0 1 3.5 0ZM7.5 5.5v9h9v-9ZM10 8h4v4h-4Z'/></svg>");
+
+	// Settings: "Enable mirroring of incoming packets" on one line, as its
+	// neighbours.
+	@media screen and (min-width: 961px) {
+		.cbi-section-node > .cbi-value > label.cbi-value-title { flex-basis: 280px; }
+	}
+
+	// VLAN matrix
+	// -----------
+	.cbi-tblsection > .table {
+		// A port's column is centred: its title, its square, its pills.
+		> * > .tr > [data-widget="CBI.ListValue"] {
+			padding-left: 4px;
+			padding-right: 4px;
+			text-align: center;
+			white-space: nowrap;
+		}
+
+		// The VLAN ID stays in view while the ports scroll under it, on an
+		// opaque cell (the row's hover tint is a layer on the card colour, as
+		// for the pinned actions), with an edge line once something is under
+		// it.
+		> * > .tr:not(.placeholder) > :is(.th, .td):first-child {
+			position: sticky;
+			left: 0;
+			z-index: 1;
+			width: 1%;
+			padding-right: 12px;
+			background:
+				linear-gradient(to left, var(--uf-switch-edge, transparent) 1px, transparent 1px),
+				linear-gradient(var(--uf-grid-tint, transparent), var(--uf-grid-tint, transparent))
+				var(--uf-grid-bg, var(--uf-surface));
+			// The cell stops at the card's padding; this covers the ports
+			// passing between it and the card's edge.
+			box-shadow: -20px 0 0 var(--uf-grid-bg, var(--uf-surface));
+		}
+
+		> .tbody > .tr.cbi-section-table-row:hover > .td:first-child {
+			--uf-grid-tint: var(--uf-hover);
+			background-color: var(--uf-grid-bg, var(--uf-surface));
+		}
+
+		@keyframes uf-switch-pinned {
+			0% { --uf-switch-edge: transparent; }
+			1%, 100% { --uf-switch-edge: var(--uf-border-strong); }
+		}
+
+		@supports (animation-timeline: scroll()) {
+			> * > .tr:not(.placeholder) > :is(.th, .td):first-child {
+				animation: uf-switch-pinned linear both;
+				animation-timeline: scroll(nearest inline);
+			}
+		}
+
+		> .tbody > .tr > .td:first-child input { width: 64px; font-variant-numeric: tabular-nums; }
+		> .tbody > .tr > .td[data-name="description"] input { min-width: 140px; }
+	}
+
+	// Port status: UniFi's port squares, green at gigabit, lime at Fast
+	// Ethernet (or slower), grey with no link. LuCI draws the same picture at
+	// any speed and gives the speed only as text ("1000baseT" over
+	// "full-duplex"), so the square is coloured by the text's width: the box
+	// is as wide as its longest word, the speed (the duplex wraps at its
+	// hyphen if it must), in the monospace font, so 9ch at gigabit and 8ch at
+	// Fast Ethernet. The square's gradient turns from green to lime at 8.5ch,
+	// scaled so the turn lands far beyond the square or far before it.
+	.cbi-section-table-descr > .th {
+		padding-top: 10px;
+		padding-bottom: 12px;
+		vertical-align: top;
+
+		&:first-child {
+			padding-top: 12px;
+			color: var(--uf-text-3);
+			font-size: 12px;
+			white-space: nowrap;
+		}
+	}
+
+	small[data-port] {
+		position: relative;
+		display: inline-block;
+		width: min-content;
+		padding-top: 28px;
+		white-space: normal;
+		color: var(--uf-text-3);
+		font-size: 11px;
+		line-height: 15px;
+		text-align: center;
+
+		&::first-line {
+			color: var(--uf-text-1);
+			font-family: var(--uf-mono);
+			font-size: 12px;
+			line-height: 16px;
+		}
+
+		> img, > br:first-of-type { display: none; }
+
+		&::before {
+			content: "";
+			position: absolute;
+			top: 0;
+			left: 0;
+			right: 0;
+			height: 20px;
+			font-family: var(--uf-mono);
+			font-size: 12px;
+			background: linear-gradient(to right, var(--uf-green) calc((100% - 8.5ch) * 40), var(--uf-lime) 0);
+			@include mask(var(--uf-switch-port-icon, var(--uf-switch-i-port)) center / 24px 20px no-repeat);
+		}
+
+		// No link: a grey square over a quiet "no link" on one line.
+		&:has(> img[src*="/port_down"]) {
+			width: auto;
+			white-space: nowrap;
+			&::first-line { color: var(--uf-text-3); font-family: var(--uf-font); font-size: 11px; }
+			&::before { background: var(--uf-text-4); }
+		}
+	}
+
+	// Which column is which is only in the rows' data-title (the labels are
+	// LuCI's own, untranslated): the CPU ports come first, sorted by role,
+	// and WAN, the uplink, last.
+	.cbi-tblsection > .table {
+		&:has(> .tbody > .tr > .td:nth-child(3)[data-title^="CPU ("]) > .thead > .cbi-section-table-descr > .th:nth-child(3),
+		&:has(> .tbody > .tr > .td:nth-child(4)[data-title^="CPU ("]) > .thead > .cbi-section-table-descr > .th:nth-child(4) {
+			--uf-switch-port-icon: var(--uf-switch-i-cpu);
+		}
+
+		&:has(> .tbody > .tr > .td:nth-last-child(2)[data-title="WAN"]) > .thead > .cbi-section-table-descr > .th:nth-last-child(2) {
+			--uf-switch-port-icon: var(--uf-switch-i-uplink);
+		}
+	}
+
+	// Membership: a pill per port and VLAN, blue when untagged (the port's
+	// own network), purple when tagged, and no pill at all when off, so a row
+	// reads at a glance. The chevron is drawn over the select by its wrapper,
+	// in the pill's colour (the base's background one is a fixed grey).
+	.cbi-tblsection > .table > .tbody > .tr > .td[data-widget="CBI.ListValue"] {
+		> div > div {
+			position: relative;
+			color: var(--uf-text-3);
+
+			&::after {
+				content: "";
+				position: absolute;
+				top: 50%;
+				right: 8px;
+				@include size(12px);
+				margin-top: -6px;
+				background: currentColor;
+				@include mask(var(--uf-i-chevron) center / contain no-repeat);
+				pointer-events: none;
+			}
+		}
+
+		select {
+			width: 100%;
+			min-width: 92px;
+			height: 28px;
+			padding: 0 24px 0 11px;
+			background: transparent none;
+			border-color: transparent;
+			border-radius: 14px;
+			color: inherit;
+			font-size: 12px;
+			font-weight: 500;
+		}
+
+		@each $value, $color, $fill in
+			(u, var(--uf-blue-strong), var(--uf-blue-soft)),
+			(t, var(--uf-purple-text), color-mix(in srgb, var(--uf-purple) 14%, transparent)) {
+			> div > div:has(> select > option[value="#{$value}"]:checked) { color: $color; }
+			select:has(> option[value="#{$value}"]:checked) { background-color: $fill; font-weight: 600; }
+		}
+
+		select:hover { border-color: color-mix(in srgb, currentColor 40%, transparent); }
+		select:focus { border-color: var(--uf-blue); }
+
+		// "LAN 1 is untagged in multiple VLANs!": red over the state's colours
+		// (as specific as those, and later).
+		> div > div:has(> select.cbi-input-invalid > option:checked) { color: var(--uf-red-text); }
+		select.cbi-input-invalid:has(> option:checked) { background-color: rgba(var(--uf-red-rgb), .08); }
+	}
+
+	// Phones: the matrix stays a matrix and scrolls inside its card, as it
+	// does between the phone layout and a wide window; stacked, it would be a
+	// page of selects per VLAN with the port status gone.
+	@include phone {
+		.cbi-tblsection {
+			overflow-x: auto;
+			scrollbar-width: thin;
+			> :not(.table) { position: sticky; left: 0; }
+
+			> .table {
+				display: table;
+				width: 100%;
+				border-collapse: separate;
+				border-spacing: 0;
+				> .thead { display: table-header-group; }
+				> .tbody { display: table-row-group; }
+				> * > .tr { display: table-row; padding: 0; border: 0; }
+
+				> * > .tr:not(.placeholder) > :is(.th, .td) {
+					display: table-cell;
+					padding: 6px 4px;
+					overflow: visible;
+					border-top: 1px solid var(--uf-divider);
+				}
+
+				> .thead > .tr > .th { border-top: 0; }
+
+				> .thead > .tr > .th:first-child, > .tbody > .tr:not(.placeholder) > .td:first-child {
+					padding-left: 0;
+					padding-right: 10px;
+				}
+
+				> .thead > .cbi-section-table-descr > .th { padding-top: 10px; padding-bottom: 12px; }
+
+				> .tbody > .tr {
+					&:first-child > .td { border-top-color: var(--uf-border); }
+					> .td::before { display: none; }
+					// No VLANs: the note starts in view, not centred on the whole grid.
+					&.placeholder > .td { text-align: left; }
+					> .td.cbi-section-actions { width: 1%; padding-left: 8px; }
+					> .td:first-child input { width: 56px; }
+					> .td[data-name="description"] input { min-width: 100px; }
+
+					// Fields are 16px here (so iOS does not zoom into them): a
+					// pill is wider to hold "untagged".
+					> .td[data-widget="CBI.ListValue"] select {
+						min-width: 112px;
+						height: 32px;
+						border-radius: 16px;
+					}
+				}
+			}
+		}
+	}
+}

@@ -24,7 +24,8 @@ The daemon's source is `openuf/src/`, in two sides with one rule between them
 - `inform.lua` — the loop between them: heartbeat, rollback window, state, status file;
   `state.lua` (`/etc/openuf/state.json`, explicit `M.FIELDS` list)
 - `openuf/types/contracts.lua` — the tables that cross between `unifi/` and `openwrt/`
-- `luci-app-openuf/` — the LuCI app (Services → openUF) and its rpcd backend
+- `luci-app-openuf/`, `luci-theme-openuf/` — the LuCI packages. The theme's CSS is
+  compiled from `scss/` and committed; see its README.
 - `PROTOCOL-VALIDATION.md` — the evidence log for every wire-format claim. Read the
   relevant section before touching a protocol field; add to it when you establish one.
 

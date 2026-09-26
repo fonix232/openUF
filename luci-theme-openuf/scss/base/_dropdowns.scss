@@ -1,0 +1,244 @@
+@use '../abstracts' as *;
+
+// LuCI's own select widget.
+.cbi-dropdown {
+	display: inline-flex !important;
+	position: relative;
+	height: auto;
+	padding: 0 !important;
+	cursor: pointer;
+	&:not(.btn):not(.cbi-button) {
+		width: auto;
+		min-width: 240px;
+		max-width: 100%;
+		min-height: var(--uf-control-h);
+		height: auto;
+		align-items: center;
+	}
+	img { max-height: 1.5em; width: auto; }
+	> ul {
+		display: flex;
+		width: 100%;
+		margin: 0 !important;
+		padding: 0;
+		list-style: none;
+		overflow: hidden;
+	}
+	// A split button (Save & Apply with its menu) stands beside plain
+	// buttons, so it takes their height: the dropdown's own "height: auto"
+	// above would shrink it to its label, since LuCI zeroes its padding.
+	&.btn, &.cbi-button {
+		align-items: stretch;
+		height: var(--uf-control-h);
+		> ul:not(.dropdown) {
+			margin: 0 !important;
+			padding: 0 12px 0 14px;
+			align-items: center;
+		}
+		> ul:not(.dropdown) > li {
+			padding: 0;
+			color: inherit;
+			// The button's own, so the label sits on its neighbours' baseline.
+			line-height: inherit;
+		}
+	}
+	> ul.preview { display: none; }
+	> .open, > .more {
+		flex: 0 0 auto;
+		@include center;
+		padding: 0 8px;
+		line-height: 1;
+	}
+	> .open {
+		width: 30px;
+		font-size: 0;
+		color: var(--uf-text-3);
+		&::before { content: ""; @include icon(var(--uf-i-chevron), 16px); }
+	}
+	&.btn > .open, &.cbi-button > .open {
+		align-self: stretch;
+		width: 32px;
+		margin: 0;
+		border-left: 1px solid color-mix(in srgb, var(--uf-on-accent) 35%, transparent);
+		color: inherit;
+	}
+	&.cbi-button:not(.important):not(.cbi-button-apply) > .open { border-left-color: var(--uf-btn-line); }
+	// In the action bar or a dialog's button row, a split button's menu opens
+	// upwards: LuCI weighs the room below against the page, not the window,
+	// so at the foot of the window it would open out of sight.
+	&[open] > ul.dropdown {
+		.cbi-page-actions &, .modal > .right &, .modal .button-row & {
+			top: auto !important; // over LuCI's inline placement
+			bottom: calc(100% + 4px) !important;
+			max-height: none !important;
+		}
+	}
+	> .more, &:not(.btn):not(.cbi-button) > ul > li[placeholder] {
+		color: var(--uf-text-3);
+		display: none;
+	}
+	> ul > li {
+		display: none;
+		flex: 1 1 auto;
+		align-items: center;
+		align-self: center;
+		gap: 6px;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		color: inherit;
+	}
+	> ul.dropdown > li, &:not(.btn):not(.cbi-button) > ul > li {
+		min-height: 20px;
+		padding: 4px 10px;
+		color: var(--uf-text-1);
+	}
+	> ul > li {
+		.hide-open { display: initial; }
+		.hide-close { display: none; }
+		&[display]:not([display="0"]) { border-left: 1px solid var(--uf-border-strong); }
+	}
+	// A closed multiple choice lists what is chosen as UniFi's blue chips.
+	&[multiple]:not([open]) > ul > li[display] {
+		flex: 0 1 auto;
+		min-height: 0;
+		height: 22px;
+		margin: 4px 0 4px 5px;
+		padding: 0 8px;
+		border-left: 0;
+		border-radius: 11px;
+		background: var(--uf-blue-soft);
+		color: var(--uf-blue-strong); // on its tint over a field: 4.5:1
+		font-size: 12px;
+		// A chip that starts with a device icon (Bridge ports) centres a
+		// small icon on the name, in the chip's blue.
+		> label { align-items: center; gap: 4px; }
+		> label > span { align-self: center; }
+		img { --uf-device-color: currentColor; @include size(14px); }
+		// Zones and networks bring their own badge; do not wrap it in a chip.
+		&:has(.zonebadge, .ifacebadge) {
+			height: auto;
+			padding: 0;
+			background: none;
+			color: var(--uf-text-1);
+		}
+	}
+	// A network's badge is filled with the field's grey, a stray box on a
+	// dark field and on every row of the open list: plain text there, with
+	// "(no interfaces attached)" in grey; chosen in a closed multiple
+	// choice, the blue chip any choice is.
+	> ul > li .ifacebadge {
+		@include unboxed;
+		> em { font-style: normal; color: var(--uf-text-3); }
+	}
+	// Inside a zone's tinted badge grey would not read; its colour does.
+	> ul > li .zonebadge .ifacebadge > em { color: inherit; }
+	&[multiple]:not([open]) > ul > li[display] .ifacebadge {
+		height: 22px;
+		padding: 0 8px;
+		border-radius: 11px;
+		background: var(--uf-blue-soft);
+		color: var(--uf-blue-strong);
+		font-size: 12px;
+		> em { color: inherit; }
+	}
+	// Network and zone selects offer "unspecified" as a real choice: upright,
+	// and grey while closed, as any other select's placeholder.
+	> ul > li[data-value=""] em { font-style: normal; }
+	&:not([open]) > ul > li[data-value=""] > em { color: var(--uf-text-3); }
+	&[empty] > ul { max-width: 1px; }
+	// Closed and empty, the list only measures (its "-- custom --" item is
+	// a 26px field): it must not grow the field past its height.
+	&[empty]:not([open]) > ul { max-height: calc(var(--uf-control-h) - 2px); }
+	// An empty choice reads like any other empty field: its placeholder at
+	// the start of the text, upright, in the placeholder grey.
+	&[empty] > .more { justify-content: flex-start; padding: 0 10px; }
+	&[empty] > .more > em, > ul > li[placeholder] > em {
+		color: var(--uf-text-3);
+		font-style: normal;
+	}
+	// Chosen in the open list, it is an item like the others.
+	&[open] > ul.dropdown > li[selected] > em { color: inherit; }
+	> ul > li > form {
+		display: none;
+		margin: 0;
+		padding: 0;
+		pointer-events: none;
+	}
+	> ul > li img { vertical-align: middle; }
+}
+
+// Form rows line their title up on the field's text baseline; let an item
+// that starts with an icon take that baseline from its text, not from the
+// icon's bottom edge, or the title sinks by half a line.
+.cbi-dropdown > ul > li > span, .cbi-value-field .ifacebadge > span { align-self: baseline; }
+
+.cbi-dropdown {
+	> ul > li > form > input[type="checkbox"] { margin: 0 4px 0 0; }
+	> ul > li input[type="text"] {
+		height: 26px;
+		background: var(--uf-surface);
+		border-color: var(--uf-border-strong);
+	}
+	&[open] { position: relative; }
+	// The open list is as wide as its longest item ('Ethernet Adapter:
+	// "eth0" (wan, wan6)'), not cut to the field's width, up to a sane cap.
+	&[open] > ul.dropdown {
+		display: block;
+		position: absolute;
+		z-index: 1100;
+		min-width: 100%;
+		width: max-content;
+		max-width: min(520px, calc(100vw - 32px));
+		padding: 4px;
+		overflow-y: auto;
+		@include popover;
+		transition: max-height .125s ease-in;
+		// On touch screens LuCI spans the list across the viewport itself,
+		// with an inline left and right.
+		&[style*="right:"] { width: auto; max-width: none; }
+	}
+	> ul > li[display], &[open] > ul.preview, &[open] > ul.dropdown > li, &[multiple] > ul > li > label,
+	&[multiple][open] > ul.dropdown > li, &[multiple][more] > .more, &[multiple][empty] > .more {
+		flex-grow: 1;
+		display: flex !important;
+	}
+	&[empty] > ul > li, &[optional][open] > ul.dropdown > li[placeholder] { display: block !important; }
+	&[multiple][open] > ul.dropdown > li > form { display: flex !important; }
+	&[open] > ul.dropdown > li {
+		.hide-open { display: none; }
+		.hide-close { display: initial; }
+	}
+	&[open] > ul.dropdown > li {
+		min-height: 32px;
+		border-radius: var(--uf-radius-sm);
+		&[selected] { background: var(--uf-blue-soft); color: var(--uf-blue); }
+		&.focus, &:hover { background: var(--uf-hover); color: var(--uf-text-1); }
+		&[selected].focus, &[selected]:hover {
+			background: var(--uf-blue-soft);
+			color: var(--uf-blue);
+		}
+		&[unselectable] { opacity: .6; }
+		> input.create-item-input:first-child:last-child { width: 100%; }
+	}
+}
+
+// Header-bar menus from other themes' markup, kept usable.
+.dropdown-menu {
+	position: absolute;
+	top: 100%;
+	left: -9999px;
+	z-index: 900;
+	min-width: max-content;
+	margin: 0;
+	padding: 4px;
+	@include popover;
+	list-style: none;
+	a {
+		@include menu-item(6px 10px, var(--uf-text-1));
+		&:hover { background: var(--uf-hover); }
+	}
+}
+
+.dropdown:hover ul.dropdown-menu { left: 0; }
+li.menu, .dropdown { position: relative; }
