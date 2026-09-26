@@ -66,7 +66,7 @@ M._exec = function(cmd) return os.execute(cmd) end
 -- refuse to build: owut leaves them out of the image and the bootstrap puts
 -- them back from the openUF feed on its first boot (the theme only when the
 -- kept LuCI settings still register it).
-M.OWN_PACKAGES = {"openuf", "luci-app-openuf", "luci-theme-unifi"}
+M.OWN_PACKAGES = {"openuf", "luci-app-openuf", "luci-theme-openuf"}
 M._installed = function(pkg)
 	return M._exec("apk info -e " .. pkg .. " >/dev/null 2>&1") == 0
 end

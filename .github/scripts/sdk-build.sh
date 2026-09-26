@@ -18,7 +18,7 @@ git config --global --add safe.directory '*'
 # the only other thing to build is lua/host, which strips the shipped Lua.
 export OPENUF_FEED_BUILD=1
 
-PKGS="openuf luci-app-openuf luci-theme-unifi"
+PKGS="openuf luci-app-openuf luci-theme-openuf"
 
 cd /builder
 # The moving tags (x86-64-openwrt-25.12) ship only setup.sh, which downloads

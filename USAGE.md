@@ -61,8 +61,8 @@ apk add -X https://fonix232.github.io/openUF/apk/packages.adb luci-app-openuf
 ```
 
 Install `openuf` alone on a device without LuCI. The same feed also carries
-`luci-theme-unifi`, a LuCI theme with UniFi Network's look (`apk add luci-theme-unifi`;
-see [luci-theme-unifi/README.md](luci-theme-unifi/README.md)); it is independent of the
+`luci-theme-openuf`, a LuCI theme inspired by the UniFi Network look (`apk add luci-theme-openuf`;
+see [luci-theme-openuf/README.md](luci-theme-openuf/README.md)); it is independent of the
 daemon. What the `openuf` package puts where:
 
 | Path | What |
@@ -79,7 +79,7 @@ daemon. What the `openuf` package puts where:
 The first install enables and starts the service and enables `lldpd`.
 
 **Updating.** `apk upgrade` (or `apk upgrade openuf luci-app-openuf` for just these two,
-plus `luci-theme-unifi` if you use it);
+plus `luci-theme-openuf` if you use it);
 the service restarts onto the new build. The feed keeps the last five builds, so
 `apk add openuf=<version>` goes back to an earlier one.
 
@@ -88,11 +88,11 @@ the image, and OpenWrt's image builder (ASU: owut, LuCI's attended sysupgrade, t
 firmware-selector) only builds official packages. So the package lists its settings, state,
 feed and bootstrap service in `/lib/upgrade/keep.d/openuf`, which every upgrade that keeps
 settings honours. On the new image's first boot the bootstrap waits for the network, then
-installs `openuf` (and `luci-app-openuf` when LuCI is there, and `luci-theme-unifi` when the
+installs `openuf` (and `luci-app-openuf` when LuCI is there, and `luci-theme-openuf` when the
 kept LuCI settings still register it) from the feed. The AP comes back
 still adopted, with the same identity. The controller's Upgrade button (`upgrade_mode
 owut`, § 6) tells owut to leave openUF's packages out of the ASU request; when you run
-`owut upgrade` by hand, add `-r openuf,luci-app-openuf` (and `luci-theme-unifi` if it is
+`owut upgrade` by hand, add `-r openuf,luci-app-openuf` (and `luci-theme-openuf` if it is
 installed), or the ASU server rejects the build.
 
 **Uninstalling.** `apk del luci-app-openuf openuf`. The service stops, the
@@ -111,7 +111,7 @@ The move into UCI then writes every setting that differs from the defaults to
 ```sh
 echo "src-git openuf https://github.com/fonix232/openUF.git" >> feeds.conf
 ./scripts/feeds update openuf && ./scripts/feeds install -p openuf -a
-make package/openuf/compile package/luci-app-openuf/compile package/luci-theme-unifi/compile
+make package/openuf/compile package/luci-app-openuf/compile package/luci-theme-openuf/compile
 ```
 
 `.github/scripts/sdk-build.sh` does the same inside the official SDK containers, and

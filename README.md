@@ -114,7 +114,7 @@ Most rows below marked ✅ were verified by driving the real controller UI again
 | L2 hardening (`ebtables.*`) | ✅ The controller's BPDU and VLAN-tag drops for Wi-Fi clients, re-expressed as an nftables bridge table on the VAPs (`l2guard`; needs `kmod-nft-bridge`) |
 | Board radio policy | ✅ `local.lua` can floor or cap the pushed channel width and keep ACS off DFS channels (`dev.conf.radio.<band>`), and `country_override` programs a different regulatory domain while still reporting the controller's — for drivers that cannot run DFS |
 | LuCI pages | ✅ **Services → openUF** (`luci-app-openuf`): **Status** (daemon and heartbeat, adoption and applied-config state, the identity presented — catalogue model, sysid, firmware — the port map, network ownership and upgrade survival), **Settings** (every option in `/etc/config/openuf`, a standard LuCI form with Save & Apply and rollback; a change restarts the daemon, a switched-off feature drops its nft table or cron job, and a setting that changes what the controller provisions has it send its configuration again) and **Unhandled messages** (the ledger). Served by a ucode rpcd backend that never returns the adoption key |
-| Packaging and updates | ✅ OpenWrt packages (`openuf`, `luci-app-openuf`, and the optional `luci-theme-unifi`; architecture-independent) for OpenWrt 25.12 and later, from a signed apk feed built by CI with the official SDK; updates arrive with `apk upgrade`; the package reinstalls itself after a firmware upgrade that keeps settings; `tools/deploy.sh` installs a local build on test APs |
+| Packaging and updates | ✅ OpenWrt packages (`openuf`, `luci-app-openuf`, and the optional `luci-theme-openuf`; architecture-independent) for OpenWrt 25.12 and later, from a signed apk feed built by CI with the official SDK; updates arrive with `apk upgrade`; the package reinstalls itself after a firmware upgrade that keeps settings; `tools/deploy.sh` installs a local build on test APs |
 | Set Replacement Device / Load Configuration | ✅ Working — both are controller-side clones; no device-side protocol involved |
 | Power / PoE reporting | Not applicable — the flagged UI field belongs to the upstream parent device, not the AP |
 | Speed test | Not applicable — gateway-only feature in current UniFi Network |
@@ -175,10 +175,10 @@ Install `openuf` alone on a device without LuCI. The package pulls in what it ne
 starts the service. Settings are in `/etc/config/openuf`, and on **Services → openUF →
 Settings** in LuCI.
 
-**The UniFi look for LuCI.** The same feed carries `luci-theme-unifi`, a LuCI theme modelled
-on UniFi Network, with light, dark and follow-the-system schemes:
-`apk add luci-theme-unifi` after the two lines above. It works with or without openUF; see
-[luci-theme-unifi/README.md](luci-theme-unifi/README.md).
+**A LuCI theme to match.** The same feed carries `luci-theme-openuf`, a LuCI theme inspired
+by the UniFi Network look, with light, dark and follow-the-system schemes:
+`apk add luci-theme-openuf` after the two lines above. It works with or without openUF; see
+[luci-theme-openuf/README.md](luci-theme-openuf/README.md).
 
 Then adopt it:
 
@@ -205,7 +205,7 @@ service across upgrades that keep settings (`/lib/upgrade/keep.d/openuf`); on th
 first boot the bootstrap reinstalls openUF from the feed, and the AP comes back still
 adopted. The controller's Upgrade button (`upgrade_mode owut`) leaves openUF's packages out
 of the ASU request by itself; when you run `owut upgrade` by hand, add
-`-r openuf,luci-app-openuf` (and `luci-theme-unifi` if it is installed).
+`-r openuf,luci-app-openuf` (and `luci-theme-openuf` if it is installed).
 
 **Coming from a tarball install** (`install.sh`, `/opt/openuf`): install the package over
 it. It stops the old service, moves `conf.lua`'s settings into `/etc/config/openuf`
@@ -226,7 +226,7 @@ See [USAGE.md](USAGE.md) for every setting, dependency details and troubleshooti
 |---|---|
 | `openuf/` | The `openuf` package: `Makefile`, `src/` (the daemon, installed to `/usr/share/openuf`: `unifi/` is the controller's side — packets, crypto, identity, events — and `openwrt/` the device's — reading it and applying what the controller pushes), `files/` (init scripts, default UCI config, keep-list, feed key), `tests/`, `tools/`, `contrib/asu/` |
 | `luci-app-openuf/` | The `luci-app-openuf` package: the LuCI views and their rpcd backend |
-| `luci-theme-unifi/` | The `luci-theme-unifi` package: a LuCI theme with UniFi Network's look, independent of the daemon, and its Docker/Playwright test lab (`test/`) |
+| `luci-theme-openuf/` | The `luci-theme-openuf` package: a LuCI theme inspired by the UniFi Network look, independent of the daemon, and its Docker/Playwright test lab (`test/`) |
 | `.github/` | CI: tests, the package feed (`feed.yml`, published to GitHub Pages), releases |
 | `docs/`, `USAGE.md`, `PROTOCOL-VALIDATION.md` | Documentation |
 

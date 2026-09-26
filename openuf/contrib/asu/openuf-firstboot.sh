@@ -148,9 +148,9 @@ reinstall() {
 		sleep 10
 	done
 	apk info -e luci-base >/dev/null 2>&1 && pkgs="$pkgs luci-app-openuf"
-	# The UniFi theme comes from the same feed: bring it back when the kept
+	# The openUF theme comes from the same feed: bring it back when the kept
 	# LuCI settings still register it, or LuCI falls back to Bootstrap.
-	[ -n "$(uci -q get luci.themes.UniFi)" ] && pkgs="$pkgs luci-theme-unifi"
+	[ -n "$(uci -q get luci.themes.openUF)" ] && pkgs="$pkgs luci-theme-openuf"
 	n=0
 	until apk update >/dev/null 2>&1 && apk add $pkgs; do
 		n=$((n + 1)); [ $n -ge 30 ] && { log "giving up on: apk add $pkgs"; return 1; }

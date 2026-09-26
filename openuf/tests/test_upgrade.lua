@@ -105,10 +105,10 @@ return {
 			local orig = upgrade._installed
 			upgrade._installed = function(p) return p == "openuf" end
 			assert_eq(upgrade.owut_args(), " --remove openuf", "only what is installed")
-			upgrade._installed = function(p) return p ~= "luci-theme-unifi" end
+			upgrade._installed = function(p) return p ~= "luci-theme-openuf" end
 			assert_eq(upgrade.owut_args(), " --remove openuf,luci-app-openuf", "both, comma-separated")
 			upgrade._installed = function() return true end
-			assert_eq(upgrade.owut_args(), " --remove openuf,luci-app-openuf,luci-theme-unifi",
+			assert_eq(upgrade.owut_args(), " --remove openuf,luci-app-openuf,luci-theme-openuf",
 				"the feed's theme too: the ASU server cannot build it either")
 			upgrade._installed = function() return false end
 			assert_eq(upgrade.owut_args(), "", "nothing to remove on a tarball install")
