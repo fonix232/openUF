@@ -173,6 +173,16 @@ menu again with the CSS that only Chromium ships (`field-sizing`,
 out of the stylesheets, as Firefox and Safari see it, so the fallbacks for them
 are checked too (`test/compat.cjs`; `UF_COMPAT=0` skips it).
 
+CI runs it three times, on what devices run:
+
+| Target | `OPENWRT_IMAGE` | `LUCI_BRANCH` |
+|---|---|---|
+| 25.12, the release the feed is built for | `openwrt/rootfs:x86-64-25.12.5` | `openwrt-25.12` |
+| SNAPSHOT (no LuCI in the image; `run.sh` installs it from the snapshot feed, which needs internet) | `openwrt/rootfs:x86-64` | `master` |
+| luci-mod-dashboard before its rework (September 2026), as 24.10 and older 25.12 feeds ship it | `openwrt/rootfs:x86-64-25.12.5` | `a8c110bed82375b69eb3881b2e54e617520e8c7d` |
+
+`LUCI_BRANCH` takes a branch, a tag or a full commit id.
+
 `sh test/run.sh --setup` leaves the container running instead, and
 `test/shoot.cjs` takes full-page screenshots of any pages you name, which is
 the loop to work on the theme in:

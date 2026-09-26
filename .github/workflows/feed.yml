@@ -51,9 +51,27 @@ jobs:
   # dark and phone layouts, failing on script errors, broken assets or
   # sideways overflow (luci-theme-openuf/test/run.sh).
   theme:
-    name: Test luci-theme-openuf
+    name: Test luci-theme-openuf (${{ matrix.target }})
     needs: build
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The release the feed is built for.
+          - target: "25.12"
+            image: openwrt/rootfs:x86-64-25.12.5
+            luci: openwrt-25.12
+          # SNAPSHOT ships without LuCI: run.sh installs it from the
+          # snapshot feed, and the extras come from LuCI master.
+          - target: SNAPSHOT
+            image: openwrt/rootfs:x86-64
+            luci: master
+          # luci-mod-dashboard before its rework (LuCI of 8 September
+          # 2026), as 24.10 and older 25.12 feeds still ship it.
+          - target: classic dashboard
+            image: openwrt/rootfs:x86-64-25.12.5
+            luci: a8c110bed82375b69eb3881b2e54e617520e8c7d
     steps:
       - uses: actions/checkout@v4
 
@@ -72,6 +90,9 @@ jobs:
           npx --prefix "$RUNNER_TEMP/pw" playwright install --with-deps chromium
 
       - name: Boot OpenWrt, install the package, walk every page
+        env:
+          OPENWRT_IMAGE: ${{ matrix.image }}
+          LUCI_BRANCH: ${{ matrix.luci }}
         run: |
           UF_APK=$(ls out/luci-theme-openuf-*.apk | head -n 1) \
           NODE_PATH="$RUNNER_TEMP/pw/node_modules" sh luci-theme-openuf/test/run.sh
@@ -80,7 +101,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: luci-theme-openuf-screenshots
+          name: luci-theme-openuf-screenshots-${{ matrix.target }}
           path: luci-theme-openuf/test/out/
           if-no-files-found: ignore
 
