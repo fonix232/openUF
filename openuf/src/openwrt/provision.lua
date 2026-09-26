@@ -509,8 +509,8 @@ function M.handle(ctx, json_str, st, cfg)
 		st.mac, st.ip, st.hostname = mac, ip, hostname
 		ctx._sync_bootstrap_account(false, cfg and cfg.config and cfg.config.bootstrap_adopt_user)
 		ctx._firewall.reconcile(st.blocked_stas)
-		-- st.l2guard went with the reset; the kernel table must follow.
-		if ctx._l2guard then pcall(ctx._l2guard.reconcile, nil, {}) end
+		-- The l2guard table and the cron job went with the reset.
+		ctx._forget_controller()
 		return false
 	end
 

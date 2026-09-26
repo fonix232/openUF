@@ -541,6 +541,27 @@ function M._uname_info()
 	return M._uname
 end
 
+-- What a controller left behind outside state.json, torn down when the
+-- device stops being adopted -- a `setdefault` (controller "Forget") or an
+-- out-of-process `syswrapper.sh reset-inform`. The l2guard table is kernel
+-- state that st.l2guard no longer describes once the reset cleared it, and
+-- the nightly 11k-scan cron job would keep asking clients for beacon reports
+-- on behalf of a controller that no longer manages the device. Given the
+-- loop's state, the controller's noop interval goes too: a failing inform
+-- backs off up to that interval, which would slow re-adoption to one attempt
+-- per interval. (A setdefault is itself an answer that is not a noop, so the
+-- loop is back on the device's own cadence without it.) The pushed timezone
+-- and NTP servers stay: they are sane settings for the board either way, and
+-- their originals remain stamped in UCI (USAGE § 6).
+function M._forget_controller(loop)
+	if loop and loop.base_interval then
+		loop.interval = loop.base_interval
+		loop.backoff  = loop.interval
+	end
+	if M._l2guard then pcall(M._l2guard.reconcile, nil, {}) end
+	if M._sysconf then pcall(M._sysconf.apply_cron, {enabled = false}) end
+end
+
 -- Detects an out-of-process change to the on-disk state file -- written by
 -- syswrapper.lua's set-adopt/reset-inform, invoked over SSH as a separate,
 -- short-lived process -- and reloads it into the in-memory st table this
@@ -548,13 +569,16 @@ end
 -- fresh SSH-driven adoption (or a manual reset-inform) and would keep
 -- informing with stale credentials until restarted. Also keeps the SSH
 -- bootstrap account (if enabled) locked/unlocked to match the reloaded
--- adopted state. Returns the current mtime (unchanged from last_mtime if
--- the file didn't change).
-function M._reload_if_changed(st, cfg, last_mtime)
+-- adopted state, and forgets the controller (_forget_controller, with the
+-- loop's state `loop`) when the reload turns an adopted device unadopted.
+-- Returns the current mtime (unchanged from last_mtime if the file didn't
+-- change).
+function M._reload_if_changed(st, cfg, last_mtime, loop)
 	local mtime = M._state_mtime(M._state._state_file)
 	if mtime == nil or mtime == last_mtime then
 		return last_mtime
 	end
+	local was_adopted = st.adopted
 	-- mac/ip/hostname are populated once at M.run() startup and never
 	-- persisted to state.json -- preserve them across the reload.
 	local mac, ip, hostname = st.mac, st.ip, st.hostname
@@ -564,6 +588,7 @@ function M._reload_if_changed(st, cfg, last_mtime)
 	st.mac, st.ip, st.hostname = mac, ip, hostname
 	M._sync_bootstrap_account(st.adopted, cfg and cfg.config and cfg.config.bootstrap_adopt_user)
 	M._firewall.reconcile(st.blocked_stas)
+	if was_adopted and not st.adopted then M._forget_controller(loop) end
 	return mtime
 end
 
@@ -771,7 +796,7 @@ function M._tick(st, cfg, ufhw, ctx)
 	ctx.interval = ctx.interval or ctx.base_interval
 	ctx.backoff  = ctx.backoff  or ctx.interval
 
-	ctx.last_mtime = M._reload_if_changed(st, cfg, ctx.last_mtime)
+	ctx.last_mtime = M._reload_if_changed(st, cfg, ctx.last_mtime, ctx)
 	-- attended-sysupgrade update check (config.advertise_updates); never blocks.
 	pcall(M._upgrade.tick, M._time(), cfg and cfg.config)
 	-- The reported address was read once at startup; a DHCP renumbering or a

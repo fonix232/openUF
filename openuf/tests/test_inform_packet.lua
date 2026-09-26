@@ -20,9 +20,11 @@ inform._firewall = {
 	reconcile = function() end,
 	deauth = function() end,
 }
--- Likewise l2guard's table, which a factory reset tears down: the parser
--- stays real, the rebuild does nothing.
+-- Likewise l2guard's table and the controller's cron block, which a factory
+-- reset tears down: the parsers stay real, the rebuild does nothing, and no
+-- test touches the host's crontab.
 inform._l2guard = setmetatable({reconcile = function() return 0 end}, {__index = inform._l2guard})
+inform._sysconf = setmetatable({apply_cron = function() return false end}, {__index = inform._sysconf})
 
 -- Deterministic IV for the TEST FILE's own crypto instance -- affects only
 -- tests that call crypto.* directly (e.g. the zlib round-trip). inform's
@@ -4011,18 +4013,80 @@ return {
 		end
 	},
 	{
-		name = "inform: a factory reset tears the l2guard table down",
+		name = "inform: a factory reset, from the controller or reset-inform, forgets the controller's leftovers",
 		fn = function()
-			local orig = inform._l2guard
-			local calls = {}
-			inform._l2guard = {reconcile = function(spec, names) calls[#calls + 1] = {spec = spec, n = #names} end}
+			local orig = {l2 = inform._l2guard, sc = inform._sysconf,
+				mtime = inform._state_mtime, load = inform._state.load}
+			local l2calls, crons = {}, {}
+			inform._l2guard = {reconcile = function(spec, names) l2calls[#l2calls + 1] = {spec = spec, n = #names} end}
+			inform._sysconf = {apply_cron = function(c) crons[#crons + 1] = c end}
+
+			-- 1. The controller's setdefault.
 			local ok, err = pcall(inform.handle_response, '{"_type":"setdefault"}',
 				sample_state({adopted = true, l2guard = {bpdu = true, tagdrop = true, ifnames = {"x"}}}),
 				{config = {}})
-			inform._l2guard = orig
+
+			-- 2. An out-of-process reset-inform, seen through the state-file
+			-- reload, while the loop is on a controller's 300 s interval.
+			local loop = {base_interval = 10, interval = 300, backoff = 300}
+			inform._state_mtime = function() return "reset" end
+			inform._state.load = function() return {adopted = false} end
+			inform._reload_if_changed(
+				sample_state({adopted = true, l2guard = {bpdu = true, tagdrop = true, ifnames = {"x"}}}),
+				{config = {}}, "before", loop)
+			-- 3. A reload that stays adopted forgets nothing, and neither does
+			-- one that finds a device that was never adopted (a set-inform
+			-- while pending).
+			local kept = {base_interval = 10, interval = 300, backoff = 300}
+			inform._state.load = function() return {adopted = true} end
+			inform._reload_if_changed(sample_state({adopted = true}), {config = {}}, "before", kept)
+			inform._state.load = function() return {adopted = false} end
+			inform._reload_if_changed(sample_state({adopted = false}), {config = {}}, "before", kept)
+
+			inform._l2guard, inform._sysconf, inform._state_mtime, inform._state.load =
+				orig.l2, orig.sc, orig.mtime, orig.load
+
 			assert_true(ok, tostring(err))
-			assert_eq(#calls, 1, "reconciled once")
-			assert_nil(calls[1].spec, "with nothing to enforce, which only deletes the table")
+			assert_eq(#l2calls, 2, "the l2guard table is torn down on both paths, and only those")
+			assert_nil(l2calls[1].spec, "with nothing to enforce, which only deletes the table")
+			assert_nil(l2calls[2].spec, "on the reset-inform path too")
+			assert_eq(#crons, 2, "the controller's cron block is removed on both paths")
+			assert_false(crons[1].enabled, "by applying a disabled cron block")
+			assert_eq(loop.interval, 10, "reset-inform puts the loop back on its own cadence")
+			assert_eq(loop.backoff, 10, "and its backoff with it")
+			assert_eq(kept.interval, 300, "a reload that stays adopted keeps the controller's")
+		end
+	},
+	{
+		name = "inform: after a reset-inform, a failing inform backs off from the device's own cadence",
+		fn = function()
+			-- The loop is on a controller's 300 s noop interval when an SSH
+			-- reset-inform lands, and the controller turns the next inform
+			-- away: the retries must not wait 300 s each.
+			local orig = {
+				build_json = inform.build_json, build_packet = inform.build_packet,
+				http_post = inform.http_post, mtime = inform._state_mtime,
+				load = inform._state.load, rrm = inform._rrm_tick, stderr = io.stderr,
+			}
+			io.stderr = {write = function() end}
+			inform._state_mtime = function() return "reset" end
+			inform._state.load = function() return {adopted = false, inform_url = "http://unifi:8080/inform"} end
+			inform._rrm_tick = function() return false end
+			inform.build_json = function() return "{}" end
+			inform.build_packet = function() return "pkt" end
+			inform.http_post = function() return nil, "HTTP 400" end
+
+			local ctx = {base_interval = 10, interval = 300, backoff = 300, last_mtime = "before"}
+			local ok, wait = pcall(inform._tick,
+				sample_state({adopted = true, inform_url = "http://unifi:8080/inform"}), {config = {}}, nil, ctx)
+
+			io.stderr = orig.stderr
+			inform.build_json, inform.build_packet, inform.http_post, inform._state_mtime,
+				inform._state.load, inform._rrm_tick =
+				orig.build_json, orig.build_packet, orig.http_post, orig.mtime, orig.load, orig.rrm
+
+			assert_true(ok, tostring(wait))
+			assert_eq(wait, 20, "doubled from 10 s, not held at the forgotten 300 s")
 		end
 	},
 	{
