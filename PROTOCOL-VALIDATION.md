@@ -48,7 +48,7 @@ Real OpenWrt target hardware has genuine `uci`/`iw`/`ubus`/`hostapd` and hits no
    controller will never provision the device — see
    [the GCM provisioning gate](#the-gcm-provisioning-gate). `tools/validation/ap/Dockerfile`
    builds the `zhaozg/lua-openssl` rock (`luarocks-5.1 install openssl`); no prebuilt Alpine
-   apk exists. `install.sh` already installs `lua-openssl` on real OpenWrt hardware.
+   apk exists. The `openuf` package depends on `lua-openssl` on real OpenWrt hardware.
 2. **Set the Inform Host Override before adopting anything.** Devices → Device Updates and
    Settings → Device SSH Settings. It must be the controller container's **literal IP** —
    the controller rejects a bare hostname with `ERROR inform - dev[<mac>] invalid inform_ip
@@ -580,7 +580,7 @@ The complete set, per `InformServlet`: `noop`, `setparam`, `cmd`, `upgrade`, `re
 
 | `_type` | Shape | Notes |
 |---|---|---|
-| `noop` | `{"_type":"noop","interval":…}` | Steady state. `interval` is the heartbeat cadence in seconds the controller wants; openUF waits that long before the next inform, clamped to 5–300 s (pre-adoption noops are unauthenticated), and goes back to its own 10 s when a noop carries none. |
+| `noop` | `{"_type":"noop","interval":…}` | Steady state. `interval` is the heartbeat cadence in seconds the controller wants; openUF waits that long before the next inform, clamped to 5–300 s (pre-adoption noops are unauthenticated), and goes back to its own 10 s when a noop carries none. A failed inform backs off from that cadence, never faster. |
 | `setparam` | `{"_type":"setparam","mgmt_cfg":"…","system_cfg":"…","server_time_in_utc":"…"}` | Both configs are flat `key=value` blobs. See [system_cfg](#system_cfg-the-real-config-channel). |
 | `cmd` | `{"_type":"cmd","cmd":"…","mac":"…","device_id":"…",…}` | See command table below. |
 | `upgrade` | `{"_type":"upgrade","version":"6.8.2.15592","md5sum":"…","url":"http://fw-download.ubnt.com/…"}` | Fire-and-forget, sent exactly once; no retry, no confirmation expected. |
@@ -633,6 +633,8 @@ an **absent block means disabled** — there is generally no explicit `status=fa
 | `bss_transition` | 802.11v. Present on every band's block, flips independently of Fast Roaming. |
 | `br.devname` | `br0` untagged, **`br0.<vlan>`** when the WLAN is assigned to a VLAN network — CONFIRMED live 2026-08-01, the first capture of a tagged WLAN on real hardware. This suffix is the *only* per-WLAN VLAN signal; there is no `network_table`/`networkconf_id` join anywhere in the wire format. |
 | `sae.anti_clogging` / `sae.sync` | Plain integers, emitted only when > 0 **and** the WLAN is genuinely WPA3 (see below). |
+| `dynamic_vlan`, `wpa.psk_file.status`, `wpa.psk_file.<k>.psk`, `wpa.psk_file.<k>.vlanid` | **Private Pre-Shared Keys**, sent only to a device claiming `wifi_caps` bit `0x100000`. One passphrase per `<k>`; `vlanid` is left out for a key on a VLAN-1 network. The WLAN's own `wpa.psk` is then a random passphrase the controller generates. See [capability bitmasks](#capability-bitmasks). |
+| `wpa.psk_radius` | UID IoT's "keys from RADIUS": `0`/`1`/`2` (disabled/optional/required, hostapd's `wpa_psk_radius` values). Decompiled from 10.6.101, **not seen on the wire**. openUF skips a WLAN with `2`, since the push names no RADIUS server. |
 | `driver` | `madwifi` — confirms the controller is talking to this model as madwifi-era firmware, which explains several value encodings below. |
 
 A VLAN assignment also produces companion `vlan.*`, `bridge.*` and `netconf.*` blocks.
@@ -687,7 +689,7 @@ openUF maps these to hostapd's `sae_anti_clogging_threshold` / `sae_sync`
 |---|---|
 | `ssid`, `parent` | SSID, and the owning radio (`radio0`/`radio1`) |
 | `dtim_period` | Plain integer, **always present** regardless of the WLAN's Auto/Custom DTIM toggle. There is no `dtim_mode`/`dtim_ng`/`dtim_na` key on the wire — go-unifi's band-split shape describes the REST API, not this protocol. |
-| `no2ghz_oui` | **Band Steering's real wire representation.** Not a per-device `mgmt_cfg` field. Toggling Band Steering changes only this key, and only on the 2.4 GHz entry (the 5 GHz entry stays `disabled` — nothing to toggle there). A madwifi/QCA convention: omitting the AP's OUI from 2.4 GHz beacons nudges dual-band clients toward 5 GHz. Mainline mac80211/hostapd has no equivalent, so openUF derives a single device-wide `steering_active` boolean (true if *any* vap has it) and drives `usteer`, which is itself a device-wide daemon. |
+| `no2ghz_oui` | **Band Steering's real wire representation.** Not a per-device `mgmt_cfg` field. Toggling Band Steering changes only this key, and only on the 2.4 GHz entry (the 5 GHz entry stays `disabled` — nothing to toggle there). A madwifi/QCA convention: omitting the AP's OUI from 2.4 GHz beacons nudges dual-band clients toward 5 GHz. Mainline mac80211/hostapd has no equivalent, so openUF derives a single device-wide `steering_active` boolean (true if *any* vap has it) and drives `usteer`, which is itself a device-wide daemon. The AP's own Band Steering setting is a separate, device-level `bandsteering.*` block that also sets it; see [Capability bitmasks](#capability-bitmasks) (`wifi_caps` `0x4`). |
 | `mcast.enhance` | Multicast Enhancement / Multicast-to-Unicast. `0`\|`1`. |
 | `minrate_data`, `beacon_rate`, `mgmt_rate`, `minrate_cck_rates.status`, `minrate_below_disable`, `pureg` | **Minimum Data Rate Control.** `minrate_data` is the floor in kb/s; `beacon_rate`/`mgmt_rate` simply mirror it. `minrate_cck_rates.status` and `pureg` are derived consequences on 2.4 GHz (a 12 Mbps floor is OFDM, so CCK goes `false` and `pureg` goes `1`). `minrate_below_disable` is the separate "advertising rates" sub-toggle. Emitted per band and **absent entirely** when that band's control is off — not band-gated, which an early reading of a 2.4-GHz-only capture suggested. |
 | `bcfilt.status`, `bcfilt.<k>.mac`, `bcfilt.<k>.status` | **Multicast and Broadcast Blocker** (REST `bc_filter_enabled`/`bc_filter_list`). `status` appears whenever the control is on, including with an empty allow-list; the indexed entries only once it is non-empty. `<k>` is 1-based and does **not** follow the REST list's order — adding a second MAC renumbered the first — so the index means nothing beyond grouping. Emitted on both band entries. |
@@ -776,7 +778,7 @@ Switching it off removed both again. There is no `status=disabled`: absence is o
   capability bit, not the protocol.
 - **What a UniFi AP does with it**, from the key name and the controller's
   `MOVED_DUE_TO_ROAMING_ASSISTANT` event: a BSS Transition Management request, then a
-  disassociation. openUF implements that in `openuf/roamassist.lua`, but only when another
+  disassociation. openUF implements that in `openwrt/roamassist.lua`, but only when another
   AP on the same SSID and band hears the client at or above the threshold and at least
   `roam_assist_diff_db` (default 8) dB better. A client with no better AP is left alone.
 - **usteer's own roam trigger is not used.** It is device-wide, and its only scoping knob,
@@ -790,6 +792,8 @@ Switching it off removed both again. There is no `status=disabled`: absence is o
   reason 12 and a 30 s `ban_time` on the source BSS only. In OpenWrt 25.12's hostapd `ubus.c`,
   `bss_transition_request` has no 802.11v capability check: the frame goes out regardless and a
   non-11v client simply ignores it.
+- **Nothing goes off-channel.** The cross-AP readings are the ones usteer already exchanges
+  between APs; the AP neither scans nor dwells elsewhere to get them.
 
 ### `macacl.*` — MAC Address Filter
 
@@ -980,25 +984,6 @@ reflected. Two details worth keeping:
 A disabled WLAN is still provisioned, just with `disabled=1`, so its configuration survives
 a re-enable.
 
-### `ebtables.*` — L2 hardening
-
-Carried by every full push (the yesrab/openUF fork's capture, 2026-09-15): literal
-ebtables fragments, which the stock firmware replays against its `ath<n>` VAPs.
-
-```
-ebtables.status=enabled
-ebtables.add_vlan.status=disabled
-ebtables.<n>.cmd=-t nat -A PREROUTING --in-interface ath0 -d BGA -j DROP     # per VAP
-ebtables.<n>.cmd=-t nat -A POSTROUTING --out-interface ath0 -d BGA -j DROP   # per VAP
-ebtables.<n>.cmd=-t broute -A BROUTING -i ath1 -p 802_1Q -j DROP             # the tagged SSID's VAP
-ebtables.<n>.cmd=-t broute -A BROUTING --vlan-id 10 -p 802_1Q -j DROP        # bridge-wide
-```
-
-The `ath<n>` names are the stock firmware's, and they do not map onto OpenWrt netdevs. So
-`l2guard.lua` keeps only the two ideas (BPDU drop, tag drop) and applies them to the live
-AP VAPs. A rule of any other shape is logged verbatim and not applied.
-`ebtables.add_vlan.status` is not read.
-
 ### `system.timezone` / `ntpclient.*` / `cron.*` — system settings
 
 Carried by every full push, and not read by openUF until 2026-09-25. The yesrab/openUF
@@ -1020,8 +1005,45 @@ cron.1.job.1.cmd=syswrapper.sh 11k-scan
 
 The cron job is how the controller schedules the nightly neighbour scan: it runs through
 the AP's own crond at 04:00 device-local time. That is why the timezone matters. See USAGE
-§ 6 for what `sysconf.lua` does with each block. `cron.<n>.user` is deliberately left
-unrecognized, so it shows in the dropped-key report.
+§ 6 (Controller-managed system settings) for what `sysconf.lua` does with each block.
+Upstream openUF answers `11k-scan` with an `iw scan ap-force` of every radio; openUF
+deliberately asks a client for an 802.11k beacon report instead, for the 12% packet loss
+measured under *Enriching it without scanning* below.
+`cron.<n>.user` is deliberately left unrecognized, so it shows in the dropped-key report and
+the unhandled ledger.
+
+### `ebtables.*` — L2 hardening
+
+Carried by every full push (the yesrab/openUF fork's capture, 2026-09-15): literal
+ebtables fragments, which the stock firmware replays against its `ath<n>` VAPs.
+
+```
+ebtables.status=enabled
+ebtables.add_vlan.status=disabled
+ebtables.<n>.cmd=-t nat -A PREROUTING --in-interface ath0 -d BGA -j DROP     # per VAP
+ebtables.<n>.cmd=-t nat -A POSTROUTING --out-interface ath0 -d BGA -j DROP   # per VAP
+ebtables.<n>.cmd=-t broute -A BROUTING -i ath1 -p 802_1Q -j DROP             # the tagged SSID's VAP
+ebtables.<n>.cmd=-t broute -A BROUTING --vlan-id 10 -p 802_1Q -j DROP        # bridge-wide
+```
+
+The `ath<n>` names are the stock firmware's, and they do not map onto OpenWrt netdevs. So
+`unifi/hardening.lua` keeps only the two ideas (BPDU drop, tag drop) and
+`openwrt/l2guard.lua` applies them to the live AP VAPs. A rule of any other shape is logged
+verbatim and not applied. `ebtables.add_vlan.status` is not read, and stays in the
+unhandled ledger.
+
+### `atf.*` — Airtime Fairness
+
+The AP's own Airtime Fairness switch, sent only to a device claiming `wifi_caps` bit `0x20`:
+
+```
+atf.status=enabled        always, whenever the block is sent (not read)
+atf.mode=enabled          the switch: "disabled" when the device's atf_enabled is off
+```
+
+`unifi/atf.lua` reads `atf.mode`, and `openwrt/airtime.lua` switches mac80211's scheduler with
+it. The evidence, the gate and the OpenWrt counterpart are under
+[capability bitmasks](#capability-bitmasks).
 
 ---
 
@@ -1398,6 +1420,39 @@ What that leaves unproven is only the 802.11 association itself, which is not op
 no second radio in the house can act as a station on the IoT WLAN's band, so no client was
 put on it. Every hop the AP is responsible for carries traffic.
 
+### Connection timing: what the WiFi Connectivity view counts (2026-09-26)
+
+The Connectivity view (Initial WiFi Connections, the Association/Authentication/DHCP/DNS/Success
+percentages and latencies) read **0** with openUF APs while roaming worked. Its data is
+`ace_stat.wifi_connectivity_event`, `_class: WIFI_CONNECTION`, and there were none. Traced in
+10.6.106 (`devmgr.w.a.VsCpQiCuGEvNvUNmH`, `wifi.connectivity.a.ctfbDsCjrxgkv`,
+`wifi.k.fdwW`) and confirmed with hand-sent events:
+
+- For an AP on firmware **6.2.1 or later** (`hyFnQ.supportTrafficStaTrackerEvents`; openUF
+  presents 6.8.2) a `success` counts as successful only with **`traffic_delta > 0` and
+  `dns_responses > 0`**. `dns_resp_seen: "yes"` is what older firmware is judged by and is not
+  read. Anything else goes to a ten-minute in-memory cache and is dropped with its empty
+  counters. A hand-sent success with the two fields was stored at once.
+- The deltas are **microseconds, cumulative** from the start of the connection, accepted when
+  `0 < delta <= 60 000 000` (`Duration.ofMinutes(1).toMillis() * 1000`). The view derives the
+  phases as differences: Association = `assoc_delta`; Authentication = the largest of
+  `wpa_auth_delta`/`radius_auth_delta`/`auth_delta` beyond `assoc_delta`; DHCP = `ip_delta`
+  minus that; DNS = `traffic_delta` minus `ip_delta`; the total is `traffic_delta`. Each phase is
+  only counted when it is later than the one before.
+- A connection with RSSI below -75 dBm and no success keeps no counters (ignored as weak).
+- Failures: `auth_failures`, `wpa_auth_failures`, `radius_auth_status: "failure"`,
+  `ip_failures`, `dns_timeouts`, `traffic_failures`, `dns_resp_seen: "no"` each count against
+  their phase; zero counts are dropped before storing.
+
+On the AP: hostapd's per-BSS ubus notifications carry `auth` (per Authentication frame, so
+several for SAE), `assoc`, `sta-authorized` (with `auth-alg`) and `key-mismatch`. A captured
+SAE join on heimdall: three `auth`, `assoc` 260 ms after the first, `sta-authorized` at 310 ms,
+DHCP ACK about a second later. A wrong SAE passphrase ends in `key-mismatch` about 3 ms after
+`auth`, **with no `assoc`**: SAE checks it in the Authentication exchange. With usteer running
+(`notify_response` on), `auth`/`assoc`/`probe` are requests: hostapd waits up to 100 ms and
+**rejects the client on any non-zero answer**, and a ucode subscriber whose handler returns
+nothing answers `UBUS_STATUS_NO_DATA`. `openwrt/staphase.uc` returns 0 explicitly.
+
 ## Outbound payload field reference
 
 Everything openUF sends. Names were audited against the controller's own Device model
@@ -1416,7 +1471,7 @@ Everything openUF sends. Names were audited against the controller's own Device 
 | `mem_total`, **`mem_used`** | Bytes. `mem_used = total − free`; the schema has `mem_used`, not `mem_free`. |
 | **`system-stats`** | Hyphenated key, `{cpu, mem, uptime}` — all three **strings**, cpu/mem as percentages. Not `sys_stats`, and not loadavgs. `cpu` is `0` on the very first inform (delta-sampling `/proc/stat` has no prior sample). |
 | **`fw_caps`** | `0x110` — see [capability bitmasks](#capability-bitmasks) |
-| **`wifi_caps`** | `0xC`, plus `0x20` (Airtime Fairness) and `0x100000` (Private Pre-Shared Keys) where the device can do them — see [capability bitmasks](#capability-bitmasks) |
+| **`wifi_caps`** | `0xC` (bits `0x4`, `0x8`), plus `0x20` (Airtime Fairness) and `0x100000` (Private Pre-Shared Keys) where the device can do them — see [capability bitmasks](#capability-bitmasks) |
 | **`wifi_caps2`** | `0x60` — see [capability bitmasks](#capability-bitmasks) |
 | `spectrum_scanning`, `spectrum_scan_timestamp` | **Device-level**, not per-radio (the per-radio fields are `spectrum_table`/`spectrum_table_time`) |
 | `if_table[]` | `name`, `mac`, `rx_bytes`, `tx_bytes`, `rx_packets`, `tx_packets`, `rx_errors`, `tx_errors` |
@@ -1446,38 +1501,25 @@ by the controller's own startup log: `firmware[U6IW] new version (6.8.2.15592) i
 |---|---|---|---|
 | `fw_caps` | `0x10` (16) | `Device.hasQCASwitch()` = `hasFirmwareCapability(16)` | The Ports view's projection of `port_table` into the device DTO doesn't happen. Wired-client *ingestion* is gated only on `isSwitch()` (a model-registry property), so clients still appear in the list — but the Ports view stays empty. |
 | `fw_caps` | `0x100` (256) | `Device.hasOWRTSwitch()` = `hasFirmwareCapability(256)` | Per-port VLAN assignment is rejected outright — see below. |
+| `wifi_caps` | `0x4` (4) | `Device.supportBandsteering()` = `hasWifiCapability(4)` | The device-level `bandsteering.status`/`mode` block (the AP's own Band Steering setting) is never emitted. See below. |
+| `wifi_caps` | `0x8` (8) | `Device.supportVapBasedBandsteering()` = `hasWifiCapability(8)` | One WLAN without a 2.4/5 GHz pair switches the device-level block to `disabled`. See below. |
+| `wifi_caps` | `0x20` (32) | `Device.supportATFConfig()` = `hasWifiCapability(32)` | The controller never emits `atf.*`, the AP's Airtime Fairness switch. Claimed only where mac80211's `airtime_flags` exists in debugfs — see below. |
+| `wifi_caps` | `0x100000` | `Device.supportWpaPpsk()` = `hasWifiCapability(0x100000)` | A WLAN with Private Pre-Shared Keys, or UID IoT, is **skipped** ("PPSK is not supported … will be skipped"). Claimed only where OpenWrt's generator writes per-station VLANs and hostapd has VLAN support — see below. |
 | `wifi_caps2` | `0x40` (64) | `Device.supportAdvertisingDeviceNameInBeacon()` = `hasWifiCapability2(64)` | The controller never emits `wireless.<n>.advertise_ap_name` at all, and doesn't even re-push config on the toggle. |
 | `wifi_caps2` | `0x20` (32) | `Device.supportsAssistedRoaming()` = `hasWifiCapability2(32)` | The controller never emits a WLAN's Roaming Assistant (`wireless.<n>.btm_disassoc.*`). Confirmed live in the lab: set, the keys appear on the 5 GHz entry. |
 
 `wifi_caps2` is a **second, entirely separate** bitmask from `wifi_caps` (which gates
-`supportBandsteering()`/`supportZeroHandoff()`; openUF claims `0x4`/`0x8` and `0x20`, see below). Only bits `0x40` and
-`0x20` are claimed; the mask also gates Mesh MLO, quick/neighbour scan, roam topology stats,
-Green AP, ACS-DFS and the multicast suppressor, which openUF does not implement and must not
-claim.
+`supportBandsteering()`/`supportZeroHandoff()` and more; openUF claims `0x4`/`0x8`, and
+`0x20` (`supportATFConfig()`) and `0x100000` (`supportWpaPpsk()`) where supported, as below).
+Only bits `0x40` and `0x20` of `wifi_caps2` are claimed; the mask also gates Mesh MLO,
+quick/neighbour scan, roam topology stats, Green AP, ACS-DFS and the multicast suppressor,
+which openUF does not implement and must not claim.
 
-#### Full sweep of the capability gates (controller 10.6.101, 2026-09-27)
-
-Every `has*Capability` predicate on `com.ubnt.data.dChnXOlwHH` (the `Device` class) and
-every `radio_caps`/`radio_caps2` bit test on the radio DTO `com.ubnt.i.g.e.DXufmCC` was
-traced to its callers, mainly the AP config generator `com.ubnt.service.config.oHgVgY` and
-the per-radio WLAN security filter `com.ubnt.service.config.ubntconf.plVcFpIybmrpXclX`.
-Calls on `com.ubnt.i.g.OZQcnZuvnRweLFaaG` in oHgVgY check the **model registry**, not
-anything the device sends, and are excluded. **This table comes from decompiled code only:
-none of the unclaimed rows has been checked on the wire.** openUF sends `wifi_caps = 0xC`
-(since 2026-09-27), plus `0x20` where it can switch airtime fairness and `0x100000` where
-hostapd can put private pre-shared keys on VLANs, and no `fw2_caps`, `fw3_caps` or `hw_caps` field at all, so each of those reads as 0.
-
-Gates that drop or weaken a feature openUF could implement (claimed ones are listed after the table):
-
-| Field | Bit | Predicate | Effect while unclaimed |
-|---|---|---|---|
-| `fw_caps` | `0x1000` | `supportMultiBlockWlanSchedule()` | A WLAN Schedule with several blocks per day goes out as one `wireless.<n>.schedule_<day>` key per block, all under the same name, so the last one wins. With the bit set they become `schedule_<day>.<i>` |
-| `fw_caps` | `0x400000` | `supportWlanScheduleInvert()` | The controller inverts a schedule itself instead of sending `schedule_invert` |
-
-**`wifi_caps` `0x4` + `0x8` (device-level Band Steering): CLAIMED, confirmed in the lab 2026-09-27.**
-Predicates: `supportBandsteering()` = `hasWifiCapability(4)` and
-`supportVapBasedBandsteering()` = `hasWifiCapability(8)`, used by oHgVgY's band steering
-generator. The setting is the AP's own (Devices → *AP* → Band Steering: Off / Prefer 5G /
+**`wifi_caps` `0x4` + `0x8` (device-level Band Steering): CLAIMED, confirmed in the lab
+2026-09-27 (upstream jonasevcik/openUF).** Predicates: `supportBandsteering()` =
+`hasWifiCapability(4)` and `supportVapBasedBandsteering()` = `hasWifiCapability(8)`, used by
+the AP config generator `com.ubnt.service.config.oHgVgY`'s band steering part (decompiled
+from 10.6.101). The setting is the AP's own (Devices → *AP* → Band Steering: Off / Prefer 5G /
 Balance, REST `device.bandsteering_mode`), separate from the per-WLAN toggle
 (`no2ghz_oui`). The generator emits `bandsteering.status=disabled` when the mode is `off`
 (the default when unset), when the site's advanced features switch is off, or when no WLAN
@@ -1502,138 +1544,64 @@ bandsteering.2.vap.2.devname=ath2
 
 - Off is `bandsteering.status=disabled`, with no mode and no pairs.
 
-openUF reads `status` and `mode` only (`_parse_bandsteering_system_cfg`). Prefer 5G turns
-usteer's band steering on for the device, in addition to any WLAN's own toggle. `disabled`
-never switches the per-WLAN toggle off, because it also means "advanced features off" or
-"nothing paired". The pairs are not read: usteer only steers a client toward a same-SSID
-5 GHz interface, which is the pairing already, so they stay in the dropped-key report.
-**Balance (`equal`) is not supported**: it is logged once and changes nothing. usteer
-balances client counts only through `assoc_steering`, which rejects association requests
-and also balances between APs. `probe_steering` is compiled in but cannot be configured
-(it is not in usteer's ubus `_cfg` list or its init script, 2025.10.04 and HEAD). The lab run of
-the real code had 0 `handle_response failed` and logged the `equal` warning once.
+openUF reads `status` and `mode` only (`unifi/wlan.lua` `parse_bandsteering`). Prefer 5G
+turns usteer's band steering on for the device, in addition to any WLAN's own toggle
+(`openwrt/provision.lua` `device_band_steering`). `disabled` never switches the per-WLAN
+toggle off, because it also means "advanced features off" or "nothing paired". The pairs are
+not read: usteer only steers a client toward a same-SSID 5 GHz interface, which is the
+pairing already, so they stay in the dropped-key report. **Balance (`equal`) is not
+supported**: it is logged once and changes nothing. usteer balances client counts only
+through `assoc_steering`, which rejects association requests and also balances between APs.
+`probe_steering` is compiled in but cannot be configured (it is not in usteer's ubus `_cfg`
+list or its init script, 2025.10.04 and HEAD). Upstream's lab run of the same logic had 0
+`handle_response failed` and logged the `equal` warning once. In this fork it is covered by
+unit tests replaying the captured block through `handle_response`.
 
-**Real hardware, 2026-09-27** (Archer C5 on HEAD, the real UCG Ultra controller):
+**Real hardware, 2026-09-27 (upstream jonasevcik/openUF, not re-run on this fork)**: Archer
+C5 on upstream HEAD, the real UCG Ultra controller.
 
 - The real controller sends the same block as the lab. The C5 reported `wifi_caps=12`.
 - With the device setting unset or Off it sends `bandsteering.status=disabled`.
 - On Prefer 5G it sends `status=enabled`, `mode=prefer_5g`, and one pair
   (`vap.1.devname=ath1`, 2.4 GHz; `vap.2.devname=ath0`, 5 GHz) for the dual-band Home WLAN.
   The 2.4-only IoT WLAN gets no pair.
-- With the WLAN's own Band Steering off and Roaming Assistant on, the running daemon
-  (`ubus call usteer get_config`) had `band_steering_interval: 0`, and openUF had removed
-  the old threshold from UCI. This confirms the off switch on hardware.
+- With the WLAN's own Band Steering off and Roaming Assistant on (upstream keeps usteer
+  running for it), the running daemon (`ubus call usteer get_config`) had
+  `band_steering_interval: 0`, and openUF had removed the old threshold from UCI. This
+  confirms the off switch reaches the daemon. This fork keeps usteer running for Roaming
+  Assistant in the same way (`usteer.set_enabled`'s `roam_assist` argument), so here too the
+  0 is what stops a daemon that runs with Band Steering off from steering.
 - Setting the device to Prefer 5G (WLAN toggle still off) brought the daemon back to its
   default 120000 ms.
 - Restoring the WLAN toggle and setting the device to Off left the default interval
   (WLAN toggle on) and `bandsteering.status=disabled`.
 
+The fork's code for all of this is the same logic (`usteer.set_enabled`,
+`provision.device_band_steering`), Roaming Assistant argument included.
+
 **Still unobserved:** an actual 2.4 → 5 GHz steer caused by the device setting alone. No
 client that supports BSS Transition was on the C5 at the time. Its two 5 GHz clients have
 the BTM bit clear, and usteer only steers clients that have it.
 
-**`wifi_caps` `0x20` (Airtime Fairness): CLAIMED, confirmed in the lab 2026-09-27.**
-Predicate: `supportATFConfig()` = `hasWifiCapability(32)`, the only test in oHgVgY's ATF
-generator. The setting is the AP's own (device panel, REST `device.atf_enabled`). Captured
-on 10.4.57 with the bit set:
+#### Full sweep of the capability gates (controller 10.6.101, 2026-09-27)
 
-```
-# airtime fairness
-atf.status=enabled                 (always, whenever the bit is set)
-atf.mode=enabled                   (atf_enabled=true; "disabled" for false)
-```
+Every `has*Capability` predicate on `com.ubnt.data.dChnXOlwHH` (the `Device` class) and
+every `radio_caps`/`radio_caps2` bit test on the radio DTO `com.ubnt.i.g.e.DXufmCC` was
+traced to its callers, mainly the AP config generator `com.ubnt.service.config.oHgVgY` and
+the per-radio WLAN security filter `com.ubnt.service.config.ubntconf.plVcFpIybmrpXclX`.
+Calls on `com.ubnt.i.g.OZQcnZuvnRweLFaaG` in oHgVgY check the **model registry**, not
+anything the device sends, and are excluded. **This table comes from decompiled code only:
+none of the unclaimed rows has been checked on the wire.** openUF sends `wifi_caps = 0xC`
+(since 2026-09-27), plus `0x20` where it can switch airtime fairness and `0x100000` where
+hostapd can put private pre-shared keys on VLANs, and no `fw2_caps`, `fw3_caps` or `hw_caps`
+field at all, so each of those reads as 0.
 
-`atf.mode` is `enabled` only when the site's `mgmt.advanced_feature_enabled` is also on.
-10.4.57 writes that back to `true` even on a full-object REST PUT, so in practice the mode
-follows `atf_enabled` alone. Its default is true for every model but U7-NHD, UHD-IW,
-UFLHD and UDMB (`getDefaultAirtimeFairnessEnabled`). For the 14 models in
-`shouldBlockChangingAirtimeFairnessSettings()`, the device-update hook
-(`devmgr.c.offwZmbh` in 10.6.101) copies the old `atf_enabled` back over any change, so their
-switch is frozen at the default. The list has `UAIW6`, a MediaTek model, but not `U6IW` (QCA),
-the model openUF presents, so the toggle goes through. The same check exists in 10.4.57, where
-the REST toggle on the lab's U6IW took effect.
+Gates that drop or weaken a feature openUF could implement (each bit openUF claims has its own paragraph under Capability bitmasks):
 
-The OpenWrt counterpart is mac80211's airtime scheduler, not hostapd. Every station gets
-weight 256, and its deficit is charged from the TX/RX airtime the driver reports. It is on
-by default: read-only on 2026-09-27, all four radios of both APs (ath10k + ath9k on the C5,
-mt76 on the AX3000T) showed `airtime_flags` = `AIRTIME_TX | AIRTIME_RX` and per-station
-`airtime` files with moving TX/RX totals and deficits. So `enabled` is left as the kernel
-default (openUF writes `3`), and `disabled` writes `0` to
-`/sys/kernel/debug/ieee80211/phy*/airtime_flags`, after which no airtime is charged and
-the scheduler is plain round-robin. hostapd's `airtime_mode` (UCI `wifi-device`
-`airtime_mode`, in the 25.12 schema and generator) only picks static, dynamic or limited
-per-BSS **weights** on top of that scheduler. None of its modes turns it off, so it is not the
-counterpart. The value is kept as `st.atf_enabled`, because debugfs resets to `3` at boot
-and the controller does not push again, and it is reapplied at startup (`M._reapply_airtime`). Forgetting the
-device writes `3`.
-
-Lab (full `down -v` reset, claim from code via a tmpfs over `/sys/kernel/debug` with stub
-per-phy files seeded by the AP entrypoint): the device reported `wifi_caps` `0x2c`. Toggling
-`atf_enabled` over REST pushed `atf.mode=disabled`, both stub files became `0`, and
-`state.json` got `"atf_enabled":false`. After both files were reset to `3` and inform was
-restarted, the startup reapply wrote `0` again. Toggling back pushed `enabled`, and both
-went to `3`. `handle_response failed` = 0 throughout.
-
-Hardware, 2026-09-27 (both APs on fd30306, real UCG Ultra): both devices reported
-`wifi_caps` 44 (0x2C), and the controller had **`atf_enabled: false`** stored for both. That
-setting was inert while the bit was unclaimed, but it would have switched the scheduler off at
-the next push. It was set to true over REST, the push carried `atf.mode=enabled`, and on all four
-radios (ath10k, ath9k, mt76 ×2) the write read back as `AIRTIME_TX | AIRTIME_RX` with no
-error. `state.json` holds `"atf_enabled":true`. **Not yet run on hardware:** the off direction
-(a real write of 0, and per-station airtime totals stopping).
-
-**`wifi_caps` `0x100000` (Private Pre-Shared Keys): CLAIMED, confirmed in the lab 2026-09-27.**
-Predicate: `supportWpaPpsk()` = `hasWifiCapability(0x100000)`. Without it the lab controller
-logged `PPSK is not supported by <mac> and WiFi[ouf-ppsk] will be skipped` and sent no
-`aaa`/`wireless` entry for the WLAN. The emitter is `com.ubnt.service.aF.hEiVLGSwaf`, called from
-oHgVgY's PSK branch when `isPrivatePresharedKeysEnabled()`. Its key list comes from
-`aF.cZldsW`, which maps each key's `networkconf_id` to that network's VLAN and **drops keys whose
-network is not a local-site layer-2 network**. Captured on 10.4.57 with `wifi_caps` `0x10002C`,
-REST `private_preshared_keys` = one key each on Default, a VLAN-20 and a VLAN-30 network:
-
-```
-aaa.<n>.wpa.key.1.mgmt=WPA-PSK
-aaa.<n>.wpa.psk=<random 32 characters>   (passphrase_autogenerated: REST replaced ours)
-aaa.<n>.dynamic_vlan=1                   (OPTIONAL)
-aaa.<n>.wpa.psk_file.status=enabled
-aaa.<n>.wpa.psk_file.1.psk=<key>         (Default network: VLAN 1, so no vlanid)
-aaa.<n>.wpa.psk_file.2.psk=<key>
-aaa.<n>.wpa.psk_file.2.vlanid=20
-aaa.<n>.wpa.psk_file.3.psk=<key>
-aaa.<n>.wpa.psk_file.3.vlanid=30
-```
-
-on both radios' entries, with `br.devname=br0` and **no** `vlan.*`/`bridge.*`/`netconf.*` block for
-VLAN 20 or 30: a UniFi AP creates those interfaces as clients arrive. The generator emits no
-vlanid for VLAN 1 (`if (1 != vlan)`), so such a key's client stays on the VAP's own network.
-
-The OpenWrt counterpart exists in 25.12 as is (read on both APs, 2026-09-27). netifd attaches a
-`wifi-station` section and a `wifi-vlan` section to the wifi-iface named in its `iface` option;
-**one without `iface` applies to every VAP**. `ap.uc` writes each station as a
-`vlanid=<vid> <mac> <key>` line of hostapd's `wpa_psk_file` (and `<key>|mac=…|vlanid=…` into
-`sae_password_file` for SAE), each VLAN as a `<vid> <ifname>-<name>` line of `vlan_file`, and
-emits `vlan_no_bridge` etc. only with `dynamic_vlan` set. netifd puts the `<ifname>-<name>`
-netdev into the bridge of the VLAN's `network`. Both APs run `wpad-mbedtls`, whose binary has
-`Assigned VLAN ID %d from wpa_psk_file`. The claim is gated on that string plus `vlanid=` in
-`ap.uc` (`sysinfo.ppsk_supported`).
-
-openUF writes a `wifi-station` per key and a `wifi-vlan` per VLAN (tied to the VAP by `iface`),
-`dynamic_vlan=1` on the VAP, and builds each VLAN's `br-openuf<id>` with `ensure_vlan_network`,
-trunked on swconfig like a tagged SSID. A key whose VLAN cannot be built (no `lan_cpueth`) is left
-out, not provisioned onto the VAP's own network. A client on a VLAN netdev is listed only by that
-netdev's station dump, so station reporting, the blocker, the speed limit and l2guard include the
-netdevs netifd reports under `interfaces[].vlans[].ifname`; kicks and Roaming Assistant requests
-go to the VAP's own hostapd. UID IoT also passes this gate. It adds
-`aaa.<n>.wpa.psk_radius` = 0/1/2 (enum decompiled from 10.6.101, **not seen on the wire**, no UniFi
-Identity in the lab); openUF skips a WLAN with `2`, since the push names no RADIUS server for it.
-
-Lab (full `down -v` reset, claim from code via probe strings in the AP's `ap.uc`/`hostapd`
-stubs): the device reported `wifi_caps` `0x10002c`, the push above arrived, and the lab's UCI held
-per radio one `wifi-iface` (`dynamic_vlan=1`, `network=lan`), three `wifi-station` sections
-(`vid` absent/20/30), two `wifi-vlan` sections (`network` `openuf_vlan20`/`openuf_vlan30`), and both
-VLAN bridges. Turning PPSK off over REST removed all of it, including the bridges.
-`handle_response failed` = 0 throughout. **Not yet run on hardware:** a client joining with a
-VLAN key and landing on that VLAN (`logread | grep "from wpa_psk_file"`, DHCP from the VLAN).
+| Field | Bit | Predicate | Effect while unclaimed |
+|---|---|---|---|
+| `fw_caps` | `0x1000` | `supportMultiBlockWlanSchedule()` | A WLAN Schedule with several blocks per day goes out as one `wireless.<n>.schedule_<day>` key per block, all under the same name, so the last one wins. With the bit set they become `schedule_<day>.<i>` |
+| `fw_caps` | `0x400000` | `supportWlanScheduleInvert()` | The controller inverts a schedule itself instead of sending `schedule_invert` |
 
 **`radio_caps2` `0x8` (Enhanced Open / OWE): CLAIMED, confirmed in the lab 2026-09-27.**
 Predicate: radio DTO `NoFWvUa()`, tested in `plVcFpIybmrpXclX` for an open WLAN with
@@ -1659,12 +1627,23 @@ aaa.2.devname=ath1  aaa.2.owe_devname=ath0  aaa.2.hide_ssid=true   aaa.2.wpa.key
 
 OpenWrt 25.12 builds this pair from **one** wifi-iface, `encryption=owe` plus
 `owe_transition=1`. hostapd.uc sets up the section twice, once as the hidden OWE BSS and
-once as the open BSS. mac80211.sh gives the open one a second netdev (`owe_transition_ifname`),
-which only hostapd knows (`ubus call hostapd bss_info`). So `_parse_wifi_system_cfg` keeps
-the open half as a `security="owe", owe_transition=true` VAP and drops the hidden half.
-Provisioning both would put two sections with the same radio and SSID into one section name,
-and the hidden one would win. Station reporting, the blocker, the speed limit and l2guard
-read that second netdev from hostapd, so they cover both BSSes.
+once as the open BSS. The ucode mac80211.sh gives the open one a second netdev
+(`owe_transition_ifname`), which only hostapd knows (`ubus call hostapd bss_info`). So
+`unifi/wlan.lua` keeps the open half as a `security="owe", owe_transition=true` VAP and drops
+the hidden half. Provisioning both would put two sections with the same radio and SSID into
+one section name, and the hidden one would win. Station reporting (and the Minimum RSSI kick
+and station events that ride on it), the blocker, the speed limit, l2guard and the
+controller's Reconnect read that second netdev from hostapd, so they cover both BSSes.
+
+Both OpenWrt checks are **exact string matches**: hostapd.uc
+(`interface.config.encryption == 'owe' && interface.config.owe_transition`) and mac80211.sh
+(`v.config.encryption == 'owe' && v.config.owe_transition`), read from the openwrt-25.12
+source. This fork writes every other encryption with an explicit cipher suffix
+(`psk2+ccmp`, ...), and `owe+ccmp` would fail both checks, leaving a transition WLAN as a
+lone hidden OWE BSS. So OWE is written bare: `encryption=owe`. iface.uc then defaults the
+cipher to CCMP (`gcmp256` defaults on only for `sae-compat`), so nothing is left to the
+board. OpenWrt 24.10 has no ucode generator and its shell hostapd.sh has no
+`owe_transition` option at all, so the claim below is never made there.
 
 Two differences from UniFi firmware. OpenWrt names the hidden BSS `<ssid>OWE`, while UniFi
 reuses the SSID. Clients follow the transition element either way. The pushed
@@ -1672,12 +1651,15 @@ reuses the SSID. Clients follow the transition element either way. The pushed
 writes 0 on any BSS below WPA2.
 
 Claimed per radio when `sysinfo.owe_supported()` holds. That needs `hostapd -vowe` to exit 0
-(it exits 1 on a feature the build lacks; both APs' `wpad-mbedtls` pass) and the ucode
-generator to know `owe_transition`. OWE is probed apart from SAE. In the lab (claim from
-code via a stub `hostapd` + `hostapd.uc` in the AP Dockerfile, full `down -v` reset), the
-transition WLAN landed in the UCI mock as `encryption=owe`, `owe_transition=1`, `hidden=0`,
-no key, on both radios, with `handle_response failed` = 0. **Hardware tier not yet run**:
-no OWE BSS has been brought up on a real AP, and no client has joined one.
+(it exits 1 on a feature the build lacks; both of upstream's APs' `wpad-mbedtls` pass) and
+the ucode generator (`/usr/share/ucode/wifi/hostapd.uc`) to know `owe_transition`. OWE is
+probed apart from SAE. In upstream's lab (claim from code via a stub `hostapd` +
+`hostapd.uc` in the AP Dockerfile, full `down -v` reset), the transition WLAN landed in the
+UCI mock as `encryption=owe`, `owe_transition=1`, `hidden=0`, no key, on both radios, with
+`handle_response failed` = 0. This fork carries the same stubs; its lab was not re-run for
+the port, and a unit test replays that transition pair through `_parse_wifi_system_cfg` +
+`apply_config` to the same UCI. **Hardware tier not yet run**: no OWE BSS has been brought
+up on a real AP, and no client has joined one.
 
 **`radio_caps2` `0x2` (FT with WPA3): CLAIMED, confirmed in the lab 2026-09-27.**
 Predicate: radio DTO `ytajcagDggPuTaL()`, tested in `plVcFpIybmrpXclX`. Without it
@@ -1699,9 +1681,11 @@ Those keys, on both radios' copies of each WLAN (six lines), were the whole diff
 474 `system_cfg` lines. So before this change a WPA3-only WLAN never got 802.11r from
 openUF. A mixed WLAN already had it, because openUF enables FT when either toggle asks.
 The captured WPA3-only block replays through `_parse_wifi_system_cfg` + `apply_config` to
-`encryption=sae`, `ieee80211w=2`, `ieee80211r=1` (unit test). The lab AP claims SAE through
-a stub `/usr/share/ucode/wifi/ap.uc` in its Dockerfile, since `sysinfo.sae_supported()`
-reads that file. Hardware tier (FT-SAE roam on a WPA3-only WLAN): not yet run.
+`encryption=sae+ccmp` (this fork writes the pushed cipher), `ieee80211w=2`, `ieee80211r=1`
+(unit test). The lab AP claims SAE through a stub `/usr/share/ucode/wifi/ap.uc` in its
+Dockerfile, since `sysinfo.sae_supported()` reads that file. The capture above was taken
+upstream (jonasevcik/openUF) with identical claim code; this fork's lab was not re-run for
+the port. Hardware tier (FT-SAE roam on a WPA3-only WLAN): not yet run.
 
 The two schedule bits are not claimed because openUF implements no WLAN Schedule: the
 `schedule_*` keys are emitted whenever a WLAN has a schedule, regardless of any bit, and
@@ -1747,6 +1731,127 @@ default-mode port is unconditionally rejected** with `api.err.VlanTaggingUnsuppo
 before `vlan_caps` or anything port-specific is consulted. (Sweeping `switch_caps.vlan_caps`
 through 0/3/4/5/6/7/15/31/255 only changed *which* of two near-identical errors fired.)
 "OpenWrt switch" as opposed to a QCA hardware switch ASIC is, fittingly, exactly what this is.
+
+**`wifi_caps` `0x20` (Airtime Fairness): CLAIMED.** Ported from upstream jonasevcik/openUF
+(fd30306, 7afc7e8). The lab and hardware runs below were made there, on upstream's code;
+this fork's port is covered by unit tests only.
+Predicate: `supportATFConfig()` = `hasWifiCapability(32)`, the only test in oHgVgY's ATF
+generator. The setting is the AP's own (device panel, REST `device.atf_enabled`). Captured
+on 10.4.57 with the bit set:
+
+```
+# airtime fairness
+atf.status=enabled                 (always, whenever the bit is set)
+atf.mode=enabled                   (atf_enabled=true; "disabled" for false)
+```
+
+`atf.mode` is `enabled` only when the site's `mgmt.advanced_feature_enabled` is also on.
+10.4.57 writes that back to `true` even on a full-object REST PUT, so in practice the mode
+follows `atf_enabled` alone. Its default is true for every model but U7-NHD, UHD-IW,
+UFLHD and UDMB (`getDefaultAirtimeFairnessEnabled`). For the 14 models in
+`shouldBlockChangingAirtimeFairnessSettings()`, the device-update hook
+(`devmgr.c.offwZmbh` in 10.6.101) copies the old `atf_enabled` back over any change, so their
+switch is frozen at the default. The list has `UAIW6`, a MediaTek model, but not `U6IW` (QCA),
+the model openUF presents, so the toggle goes through. The same check exists in 10.4.57, where
+the REST toggle on the lab's U6IW took effect.
+
+The OpenWrt counterpart is mac80211's airtime scheduler, not hostapd. Every station gets
+weight 256, and its deficit is charged from the TX/RX airtime the driver reports. It is on
+by default: read-only on 2026-09-27, all four radios of both upstream APs (ath10k + ath9k on
+the C5, mt76 on the AX3000T) showed `airtime_flags` = `AIRTIME_TX | AIRTIME_RX` and
+per-station `airtime` files with moving TX/RX totals and deficits. So `enabled` is left as the
+kernel default (openUF writes `3`), and `disabled` writes `0` to
+`/sys/kernel/debug/ieee80211/phy*/airtime_flags`, after which no airtime is charged and
+the scheduler is plain round-robin. hostapd's `airtime_mode` (UCI `wifi-device`
+`airtime_mode`, in the 25.12 schema and generator) only picks static, dynamic or limited
+per-BSS **weights** on top of that scheduler. None of its modes turns it off, so it is not the
+counterpart. The value is kept as `st.atf_enabled`, because debugfs resets to `3` at boot
+and the controller does not push again, and it is reapplied at startup
+(`inform._reapply_airtime`). Forgetting the device writes `3`.
+
+Lab (upstream, full `down -v` reset, claim from code via a tmpfs over `/sys/kernel/debug`
+with stub per-phy files seeded by the AP entrypoint): the device reported `wifi_caps` `0x2c`
+(`0x20` plus upstream's Band Steering bits). Toggling `atf_enabled` over REST pushed
+`atf.mode=disabled`, both stub files became `0`, and `state.json` got
+`"atf_enabled":false`. After both files were reset to `3` and inform was restarted, the
+startup reapply wrote `0` again. Toggling back pushed `enabled`, and both went to `3`.
+`handle_response failed` = 0 throughout.
+
+Hardware (upstream), 2026-09-27 (both APs on fd30306, real UCG Ultra): both devices
+reported `wifi_caps` 44 (0x2C), and the controller had **`atf_enabled: false`** stored for
+both. That setting was inert while the bit was unclaimed, but it would have switched the
+scheduler off at the next push. It was set to true over REST, the push carried
+`atf.mode=enabled`, and on all four radios (ath10k, ath9k, mt76 ×2) the write read back as
+`AIRTIME_TX | AIRTIME_RX` with no error. `state.json` holds `"atf_enabled":true`. **Not yet
+run on hardware:** the off direction (a real write of 0, and per-station airtime totals
+stopping).
+
+**`wifi_caps` `0x100000` (Private Pre-Shared Keys): CLAIMED.** Ported from upstream
+jonasevcik/openUF (1cd2f0b). The capture and the lab run below were made there, on
+upstream's code; this fork's port is covered by unit tests only.
+Predicate: `supportWpaPpsk()` = `hasWifiCapability(0x100000)`. Without it the lab controller
+logged `PPSK is not supported by <mac> and WiFi[ouf-ppsk] will be skipped` and sent no
+`aaa`/`wireless` entry for the WLAN. The emitter is `com.ubnt.service.aF.hEiVLGSwaf`, called from
+oHgVgY's PSK branch when `isPrivatePresharedKeysEnabled()`. Its key list comes from
+`aF.cZldsW`, which maps each key's `networkconf_id` to that network's VLAN and **drops keys whose
+network is not a local-site layer-2 network**. Captured on 10.4.57 with `wifi_caps` `0x10002C`,
+REST `private_preshared_keys` = one key each on Default, a VLAN-20 and a VLAN-30 network:
+
+```
+aaa.<n>.wpa.key.1.mgmt=WPA-PSK
+aaa.<n>.wpa.psk=<random 32 characters>   (passphrase_autogenerated: REST replaced ours)
+aaa.<n>.dynamic_vlan=1                   (OPTIONAL)
+aaa.<n>.wpa.psk_file.status=enabled
+aaa.<n>.wpa.psk_file.1.psk=<key>         (Default network: VLAN 1, so no vlanid)
+aaa.<n>.wpa.psk_file.2.psk=<key>
+aaa.<n>.wpa.psk_file.2.vlanid=20
+aaa.<n>.wpa.psk_file.3.psk=<key>
+aaa.<n>.wpa.psk_file.3.vlanid=30
+```
+
+on both radios' entries, with `br.devname=br0` and **no** `vlan.*`/`bridge.*`/`netconf.*` block for
+VLAN 20 or 30: a UniFi AP creates those interfaces as clients arrive. The generator emits no
+vlanid for VLAN 1 (`if (1 != vlan)`), so such a key's client stays on the VAP's own network.
+
+The OpenWrt counterpart exists in 25.12 as is (read on upstream's two APs, 2026-09-27, and
+re-read for this port in the 25.12 branch's `ap.uc` and `wireless.wifi-station.json` /
+`wireless.wifi-vlan.json` schemas). netifd attaches a `wifi-station` section and a `wifi-vlan`
+section to the wifi-iface named in its `iface` list; **one without `iface` applies to every
+VAP**. `ap.uc` writes each station as a `vlanid=<vid> <mac> <key>` line of hostapd's
+`wpa_psk_file` (and `<key>|mac=…|vlanid=…` into `sae_password_file` for SAE), each VLAN as a
+`<vid> <ifname>-<name>` line of `vlan_file`, and emits `vlan_no_bridge` etc. only with
+`dynamic_vlan` set. netifd puts the `<ifname>-<name>` netdev into the bridge of the VLAN's
+`network`. Both upstream APs run `wpad-mbedtls`, whose binary has
+`Assigned VLAN ID %d from wpa_psk_file`. The claim is gated on that string plus `vlanid=` in
+`ap.uc` (`sysinfo.ppsk_supported`).
+
+openUF writes a `wifi-station` per key and a `wifi-vlan` per VLAN (tied to the VAP by `iface`),
+and `dynamic_vlan=1` on the VAP. With the per-VLAN-bridge backend each key's VLAN gets the
+`br-openuf<id>` a tagged SSID uses (`ensure_vlan_network`); on this fork's DSA-only boards no
+switch trunk is needed, so upstream's swconfig trunking of key VLANs has no counterpart here.
+With the `vlan_filtering` backend a key joins the plan's `openuf_v<vid>` interface (or the
+management interface for the Management VLAN). The push carries no bridge for a VLAN only a
+key uses, so openUF adds every key's VLAN to the plan itself: tagged on the uplink like the
+push's own VLANs, with an `openuf_v<vid>` interface (`netmodel.plan`'s `key_vids`). ⚠️ netifd
+attaching a `wifi-vlan` netdev to a filtering bridge is the same mechanism as for a VAP, but
+unverified. A key whose VLAN still has no network is left out, never provisioned onto the
+VAP's own network. A client on a VLAN netdev is listed only by that netdev's station dump, so station
+reporting, the blocker, the speed limit and l2guard include the netdevs netifd reports under
+`interfaces[].vlans[].ifname`; Minimum RSSI kicks and Roaming Assistant requests go to the
+VAP's own hostapd, since a VLAN netdev has no hostapd of its own. UID IoT also
+passes this gate. It adds `aaa.<n>.wpa.psk_radius` = 0/1/2 (enum decompiled from 10.6.101,
+**not seen on the wire**, no UniFi Identity in the lab); openUF skips a WLAN with `2`, since the
+push names no RADIUS server for it. A key is refused unless it is 8–63 printable ASCII
+characters or 64 hex digits, hostapd's own limits for a line of the file it lands in.
+
+Lab (upstream, full `down -v` reset, claim from code via probe strings in the AP's
+`ap.uc`/`hostapd` stubs): the device reported `wifi_caps` `0x10002c`, the push above arrived,
+and the lab's UCI held per radio one `wifi-iface` (`dynamic_vlan=1`, `network=lan`), three
+`wifi-station` sections (`vid` absent/20/30), two `wifi-vlan` sections (`network`
+`openuf_vlan20`/`openuf_vlan30`), and both VLAN bridges. Turning PPSK off over REST removed all
+of it, including the bridges. `handle_response failed` = 0 throughout. **Not yet run on
+hardware:** a client joining with a VLAN key and landing on that VLAN
+(`logread | grep "from wpa_psk_file"`, DHCP from the VLAN).
 
 ### `radio_table[]` entry
 
@@ -2244,9 +2349,9 @@ them for measured values.
 | `spectrum_scanning` = `false` | Always false: scans are run synchronously inside the cmd handler, so the device is never "currently scanning" when a payload is built |
 | `lldp_table[].is_wired` = `true` | LLDP is inherently a wired-link protocol |
 | `model` / `platform` / `version` / `required_version` / `bootrom_version` | The emulated UniFi identity from `ufmodel/*.lua` — deliberately not the host hardware. This is the point of the project, not an accidental approximation |
-| `fw_caps` = `0x110`, `wifi_caps2` = `0x60` | Claimed capability bits, each derived from the controller's own bytecode and confirmed live — see [Capability bitmasks](#capability-bitmasks). openUF claims only bits whose features it actually implements |
+| `fw_caps` = `0x110`, `wifi_caps` = `0xC` + `0x20`/`0x100000` where supported, `wifi_caps2` = `0x60` | Claimed capability bits, each derived from the controller's own bytecode and confirmed live — see [Capability bitmasks](#capability-bitmasks). openUF claims only bits whose features it actually implements |
 | `ucihelper` `wps_device_name` / `ap_setup_locked` | Standards-based rather than Ubiquiti-derived — see the beacon row in the [feature matrix](#feature-matrix) |
-| ~~`usteer.lua`'s `USTEER_DEFAULTS`~~ | ✅ **Resolved 2026-09-10.** Verified against the installed package (usteer 2025.10.04) on the Archer C5. `band_steering_threshold` is a real option — it is in the init script's own list of keys fed to `ubus call usteer set_config`. The named `local` section is read too: the loader does `config_foreach uci_usteer usteer`, which visits every section of type `usteer`, named or anonymous. `network` is read from `uci get usteer.@usteer[-1].network`, the last section of that type — openUF's — so both writes reach the daemon. **Corrected 2026-09-27:** reaching the daemon is not the same as doing anything. usteer's source (`policy.c` `below_assoc_threshold`) reads `band_steering_threshold` only when `load_balancing_threshold` is non-zero, and it is 0 on both APs (`ubus call usteer get_config`). So openUF's 5/0 toggle switched nothing. The real switch is `band_steering_interval` (`band_steering.c`: 0 disables, otherwise a BSS Transition request to each steerable 2.4 GHz client every interval). Its default in 2025.10.04 is 120000 ms, read live on both APs, so a running usteer always steered. That included Roaming Assistant with Band Steering off. openUF now writes `band_steering_interval=0` for off and deletes it for on, so the daemon default that steered a real client (#25) applies, and removes the old threshold. |
+| ~~`usteer.lua`'s `USTEER_DEFAULTS`~~ | ✅ **Resolved 2026-09-10.** Verified against the installed package (usteer 2025.10.04) on the Archer C5. `band_steering_threshold` is a real option — it is in the init script's own list of keys fed to `ubus call usteer set_config`. The named `local` section is read too: the loader does `config_foreach uci_usteer usteer`, which visits every section of type `usteer`, named or anonymous. `network` is read from `uci get usteer.@usteer[-1].network`, the last section of that type — openUF's — so both writes reach the daemon. **Corrected 2026-09-27 (upstream):** reaching the daemon is not the same as doing anything. usteer's source (`policy.c` `below_assoc_threshold`) reads `band_steering_threshold` only when `load_balancing_threshold` is non-zero, and it is 0 on both upstream APs (`ubus call usteer get_config`). So openUF's 5/0 toggle switched nothing. The real switch is `band_steering_interval` (`band_steering.c`: 0 disables, otherwise a BSS Transition request to each steerable 2.4 GHz client every interval). Its default in 2025.10.04 is 120000 ms, read live on both upstream APs, so a running usteer always steers. Before its Roaming Assistant port this fork stopped the daemon whenever Band Steering was off, so the inert toggle had no visible effect here: steering on came from the default interval, and off from the stopped daemon. Now usteer also runs for Roaming Assistant with Band Steering off. openUF writes `band_steering_interval=0` for off (so a usteer that runs for Roaming Assistant, or anyway, does not steer) and deletes it for on, so the daemon default that steered a real client (#25) applies, and removes the old threshold. |
 
 Everything not listed above is measured from the running system. Several fields
 *used* to belong in this table and no longer do — `max_txpower`, `tx_power`,
