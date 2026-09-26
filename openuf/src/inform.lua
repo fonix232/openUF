@@ -203,21 +203,46 @@ function M._state_mtime(path)
 	return M._read_file(path)
 end
 
+-- Whether `user`'s password is locked, read off /etc/shadow (`passwd -l`
+-- prefixes the hash with "!"). nil when the file or the user cannot be read,
+-- which the caller treats as "unknown, act anyway".
+M.SHADOW_FILE = "/etc/shadow"
+function M._account_locked(user)
+	local shadow = M._read_file(M.SHADOW_FILE)
+	if not shadow then return nil end
+	for line in shadow:gmatch("[^\n]+") do
+		local name, hash = line:match("^([^:]+):([^:]*):")
+		if name == user then return hash:sub(1, 1) == "!" end
+	end
+	return nil
+end
+
 -- Locks or unlocks the temporary SSH bootstrap account (option ssh_adopt,
 -- config.lua's bootstrap_adopt_user, and USAGE.md's SSH prerequisite section) to match
 -- the device's current adopted state. No-op if user is nil/false (feature
--- not enabled). Idempotent -- locking an already-locked account (or
--- unlocking an already-unlocked one) is a harmless no-op on BusyBox/shadow
--- passwd, so callers never need to track prior state themselves.
+-- not enabled). Reads the current state first: BusyBox passwd is harmless on
+-- an already-locked account but not silent -- it logs "password for <user>
+-- is already locked" to auth.err, and this runs on every config push, so an
+-- adopted AP's log filled with it. When the state cannot be read, passwd is
+-- issued regardless.
 -- The account's password is public, so TCP forwarding is off for as long as
 -- it is usable (hook/ssh-forwarding.sh), in the same command as the unlock.
+-- The hook runs every time, whatever passwd's state: it is silent and
+-- idempotent, and openuf.init creates the account already unlocked without
+-- it, so skipping it along with a redundant `passwd -u` would leave
+-- forwarding on for a usable ubnt/ubnt login.
 M.SSH_FORWARDING_HOOK = "/usr/share/openuf/hook/ssh-forwarding.sh"
 function M._sync_bootstrap_account(adopted, user)
 	if not user then return end
+	local locked = M._account_locked(user)
 	if adopted then
-		M._run_cmd("passwd -l '" .. user .. "'; sh " .. M.SSH_FORWARDING_HOOK .. " restore")
+		local cmd = "sh " .. M.SSH_FORWARDING_HOOK .. " restore"
+		if locked ~= true then cmd = "passwd -l '" .. user .. "'; " .. cmd end
+		M._run_cmd(cmd)
 	else
-		M._run_cmd("sh " .. M.SSH_FORWARDING_HOOK .. " lock; passwd -u '" .. user .. "'")
+		local cmd = "sh " .. M.SSH_FORWARDING_HOOK .. " lock"
+		if locked ~= false then cmd = cmd .. "; passwd -u '" .. user .. "'" end
+		M._run_cmd(cmd)
 	end
 end
 

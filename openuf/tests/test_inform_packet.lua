@@ -10,6 +10,9 @@ local cjson  = require("cjson")
 
 -- Redirect state file to /tmp so handle_response tests don't need /etc/openuf
 inform._state._state_file = "/tmp/openuf_test_inform.json"
+-- ...and the bootstrap account's lock state away from the host's /etc/shadow:
+-- unreadable means "unknown, act anyway", so every passwd command is issued.
+inform.SHADOW_FILE = "/nonexistent/openuf-test-shadow"
 
 -- Stub firewall by default so tests don't shell out to real nft/hostapd_cli;
 -- individual block-sta/unblock-sta tests below override this to capture calls.
@@ -2813,7 +2816,7 @@ return {
 			inform._run_cmd = function(cmd) calls[#calls + 1] = cmd; return "" end
 			inform._sync_bootstrap_account(true, "ubnt")
 			inform._run_cmd = orig
-			assert_eq(#calls, 1, "one command issued")
+			assert_eq(#calls, 1, "one command issued when the shadow file cannot be read")
 			assert_contains(calls[1], "passwd -l", "lock command issued")
 			assert_contains(calls[1], "ubnt", "targets ubnt")
 		end
@@ -2828,6 +2831,39 @@ return {
 			inform._run_cmd = orig
 			assert_eq(#calls, 1, "one command issued")
 			assert_contains(calls[1], "passwd -u", "unlock command issued")
+		end
+	},
+	{
+		name = "inform: _sync_bootstrap_account skips passwd when the account is already in the wanted state",
+		fn = function()
+			-- BusyBox passwd logs "already locked" to auth.err on a repeat
+			-- lock, and this runs on every config push.
+			local shadow = "root:$1$abc:19000:0:99999:7:::\n"
+				.. "ubnt:!$1$xyz:19000:0:99999:7:::\n"
+				.. "guest:$1$def:19000:0:99999:7:::\n"
+			local calls = {}
+			local orig_run, orig_read = inform._run_cmd, inform._read_file
+			inform._run_cmd = function(cmd) calls[#calls + 1] = cmd; return "" end
+			inform._read_file = function(path)
+				if path == inform.SHADOW_FILE then return shadow end
+				return orig_read(path)
+			end
+			inform._sync_bootstrap_account(true, "ubnt")    -- locked, wants locked
+			inform._sync_bootstrap_account(false, "guest")  -- unlocked, wants unlocked
+			inform._sync_bootstrap_account(false, "ubnt")   -- locked, wants unlocked
+			inform._sync_bootstrap_account(true, "guest")   -- unlocked, wants locked
+			inform._sync_bootstrap_account(true, "nobody")  -- not in the file: act anyway
+			inform._run_cmd, inform._read_file = orig_run, orig_read
+			assert_eq(#calls, 5, "the forwarding hook runs on every call")
+			assert_nil(calls[1]:find("passwd", 1, true), "no passwd -l on an already-locked account")
+			assert_contains(calls[1], "ssh-forwarding.sh restore", "forwarding still restored")
+			assert_nil(calls[2]:find("passwd", 1, true), "no passwd -u on an already-unlocked account")
+			-- openuf.init creates the account unlocked and never runs the
+			-- hook: skipping it here would leave forwarding on for ubnt/ubnt.
+			assert_contains(calls[2], "ssh-forwarding.sh lock", "forwarding still locked")
+			assert_contains(calls[3], "passwd -u 'ubnt'", "unlocks the locked account")
+			assert_contains(calls[4], "passwd -l 'guest'", "locks the unlocked account")
+			assert_contains(calls[5], "passwd -l 'nobody'", "an unknown user is acted on")
 		end
 	},
 	{
