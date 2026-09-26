@@ -1,0 +1,554 @@
+/* Controls
+ * -------- */
+
+label,
+input,
+button,
+select,
+textarea {
+	font-family: var(--uf-font);
+	font-size: 13px;
+	font-weight: 400;
+	line-height: normal;
+}
+
+label[for] {
+	cursor: pointer;
+}
+
+button,
+input[type="button"],
+input[type="reset"],
+input[type="submit"] {
+	cursor: pointer;
+	-webkit-appearance: none;
+	appearance: none;
+}
+
+input,
+textarea,
+select,
+.cbi-select,
+.cbi-dropdown:not(.btn):not(.cbi-button) {
+	display: inline-block;
+	width: 240px;
+	max-width: 100%;
+	padding: 0 10px;
+	background-color: var(--uf-field);
+	color: var(--uf-text-1);
+	font-size: 13px;
+	line-height: 18px;
+	border: 1px solid transparent;
+	border-radius: var(--uf-radius-sm);
+	transition: border-color .15s, background-color .15s, box-shadow .15s;
+}
+
+input,
+select,
+.cbi-select,
+.cbi-dropdown:not(.btn):not(.cbi-button) {
+	height: var(--uf-control-h);
+}
+
+textarea {
+	padding: 7px 10px;
+	font-family: var(--uf-mono);
+	font-size: 12px;
+	overflow: auto;
+	vertical-align: top;
+}
+
+input:hover,
+textarea:hover,
+select:hover,
+.cbi-dropdown:not(.btn):not(.cbi-button):hover {
+	border-color: var(--uf-border-strong);
+}
+
+input:focus,
+textarea:focus,
+select:focus,
+.cbi-dropdown:not(.btn):not(.cbi-button):focus,
+.cbi-dropdown:not(.btn):not(.cbi-button)[open] {
+	outline: 0;
+	border-color: var(--uf-blue);
+	background-color: var(--uf-surface);
+}
+
+/* Hints stay a step quieter than values, but readable (4.5:1). */
+::placeholder {
+	color: var(--uf-text-3);
+	opacity: 1;
+}
+
+/* The browser's autofill paints fields pale yellow or blue, a bright box
+ * on a dark card; hold its background off and keep the text colour. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+	-webkit-text-fill-color: var(--uf-text-1);
+	caret-color: var(--uf-text-1);
+	transition: background-color 100000s 0s, color 100000s 0s;
+}
+
+select {
+	-webkit-appearance: none;
+	appearance: none;
+	padding-right: 30px;
+	cursor: pointer;
+	text-overflow: ellipsis;
+	/* The chevron is a mask on a pseudo-element for .cbi-select; on a bare
+	 * select it has to be a background, tinted to match the text. */
+	background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23666d77' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m7 10 5 5 5-5'/></svg>");
+	background-repeat: no-repeat;
+	background-position: right 8px center;
+	background-size: 16px;
+}
+
+/* A data URI cannot read a token: the dark scheme's text-3, spelled out. */
+:root[data-darkmode="true"] select:not([multiple]) {
+	background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23969ca7' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m7 10 5 5 5-5'/></svg>");
+}
+
+select[multiple] {
+	height: auto;
+	padding: 4px;
+	background-image: none;
+}
+
+select option {
+	background: var(--uf-raised);
+	color: var(--uf-text-1);
+}
+
+.cbi-select {
+	position: relative;
+	padding: 0;
+}
+
+.cbi-select select,
+.cbi-select select:focus,
+.cbi-select select:hover {
+	width: 100%;
+	height: 100%;
+	border: 0;
+	background-color: transparent;
+}
+
+input[type="file"] {
+	height: auto;
+	padding: 6px;
+	background: none;
+	border: 1px dashed var(--uf-border-strong);
+	width: auto !important;
+}
+
+input[type="file"]::file-selector-button {
+	margin-right: 10px;
+	padding: 0 12px;
+	height: 26px;
+	border: 1px solid var(--uf-border-strong);
+	border-radius: var(--uf-radius-sm);
+	background: var(--uf-surface);
+	color: var(--uf-text-1);
+	font: inherit;
+	cursor: pointer;
+}
+
+input[type="search"] {
+	-webkit-appearance: textfield;
+}
+
+input[type="search"]::-webkit-search-decoration {
+	-webkit-appearance: none;
+}
+
+input[type="number"] {
+	-moz-appearance: textfield;
+}
+
+input[readonly],
+select[readonly],
+textarea[readonly] {
+	background-color: transparent;
+	border-color: var(--uf-border);
+	pointer-events: auto;
+	cursor: auto;
+}
+
+input[disabled],
+button[disabled],
+select[disabled],
+textarea[disabled],
+.cbi-select[disabled],
+.cbi-dropdown[disabled]:not(.btn):not(.cbi-button) {
+	opacity: var(--uf-disabled-opacity);
+	pointer-events: none;
+	cursor: default;
+}
+
+.cbi-input-invalid,
+.cbi-input-invalid.cbi-dropdown:not(.btn):not(.cbi-button),
+.cbi-value-error input,
+input.cbi-input-invalid:focus {
+	color: var(--uf-red-text);
+	border-color: var(--uf-red) !important;
+}
+
+.cbi-input-invalid.cbi-dropdown:not([open]) > ul > li {
+	color: var(--uf-red-text);
+}
+
+.td > input[type="text"],
+.td > input[type="password"],
+.td > select,
+.td > .cbi-dropdown:not(.btn):not(.cbi-button),
+.cbi-dynlist > .add-item > .cbi-dropdown {
+	width: 100%;
+}
+
+.control-group {
+	display: inline-flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	max-width: 100%;
+}
+
+.control-group > input + :not(input):not(select),
+.control-group > select + :not(input):not(select) {
+	padding: 0 10px;
+}
+
+/* A password field keeps its reveal button beside it at any width. */
+.control-group:has(> .cbi-input-password) {
+	flex-wrap: nowrap;
+}
+
+.control-group > .cbi-input-password {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+/* LuCI labels the reveal toggle "∗"; UniFi's is an eye, crossed out
+ * while the password shows. */
+.control-group > .cbi-input-password + .cbi-button {
+	--uf-btn-fg: var(--uf-text-3);
+	flex: 0 0 auto;
+	width: var(--uf-control-h);
+	padding: 0;
+	font-size: 0;
+}
+
+.control-group > .cbi-input-password + .cbi-button:hover {
+	--uf-btn-fg: var(--uf-text-1);
+}
+
+.control-group > .cbi-input-password + .cbi-button::before {
+	content: "";
+	width: 18px;
+	height: 18px;
+	background: currentColor;
+	-webkit-mask: var(--uf-i-eye) center / contain no-repeat;
+	mask: var(--uf-i-eye) center / contain no-repeat;
+}
+
+.control-group > .cbi-input-password[type="text"] + .cbi-button::before {
+	-webkit-mask-image: var(--uf-i-eye-off);
+	mask-image: var(--uf-i-eye-off);
+}
+
+/* Checkboxes and radios */
+input[type="checkbox"],
+input[type="radio"] {
+	-webkit-appearance: none;
+	appearance: none;
+	position: relative;
+	display: inline-block;
+	flex: 0 0 auto;
+	width: 16px;
+	height: 16px;
+	padding: 0;
+	vertical-align: -3px;
+	background: transparent;
+	border: 1px solid var(--uf-text-4);
+	border-radius: var(--uf-radius-sm);
+	cursor: pointer;
+}
+
+input[type="radio"] {
+	border-radius: 50%;
+}
+
+input[type="checkbox"]:hover,
+input[type="radio"]:hover {
+	border-color: var(--uf-blue);
+	background-color: transparent;
+}
+
+input[type="checkbox"]:checked,
+input[type="radio"]:checked {
+	background: var(--uf-blue);
+	border-color: var(--uf-blue);
+}
+
+input[type="checkbox"]:checked::after {
+	content: "";
+	position: absolute;
+	inset: 1px;
+	background: var(--uf-on-accent);
+	-webkit-mask: var(--uf-i-check) center / contain no-repeat;
+	mask: var(--uf-i-check) center / contain no-repeat;
+}
+
+input[type="radio"]:checked::after {
+	content: "";
+	position: absolute;
+	inset: 4px;
+	border-radius: 50%;
+	background: var(--uf-on-accent);
+}
+
+input[type="checkbox"].cbi-input-invalid,
+input[type="radio"].cbi-input-invalid {
+	border-color: var(--uf-red);
+}
+
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible,
+input[type="range"]:focus-visible {
+	outline: 2px solid rgba(var(--uf-blue-rgb), .45);
+	outline-offset: 2px;
+}
+
+label > input[type="checkbox"],
+label > input[type="radio"] {
+	margin-right: 6px;
+}
+
+/* A LuCI Flag (div.cbi-checkbox) is an on/off setting, which UniFi draws
+ * as a switch. A multiple choice rendered as checkboxes (a span each)
+ * keeps real checkboxes, like UniFi's filter lists. */
+.cbi-checkbox {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	min-height: var(--uf-control-h);
+	vertical-align: middle;
+}
+
+span.cbi-checkbox {
+	margin-right: 12px;
+	cursor: pointer;
+}
+
+div.cbi-checkbox > input[type="checkbox"] {
+	width: 32px;
+	height: 18px;
+	border: 0;
+	border-radius: 9px;
+	background: var(--uf-border-strong);
+	vertical-align: middle;
+	transition: background-color .15s;
+}
+
+div.cbi-checkbox > input[type="checkbox"]:hover {
+	background: var(--uf-text-4);
+}
+
+div.cbi-checkbox > input[type="checkbox"]::after {
+	content: "";
+	position: absolute;
+	top: 2px;
+	left: 2px;
+	width: 14px;
+	height: 14px;
+	border-radius: 50%;
+	background: var(--uf-knob);
+	box-shadow: var(--uf-shadow-sm);
+	-webkit-mask: none;
+	mask: none;
+	transition: transform .15s;
+}
+
+div.cbi-checkbox > input[type="checkbox"]:checked {
+	background: var(--uf-blue);
+}
+
+div.cbi-checkbox > input[type="checkbox"]:checked:hover {
+	background: var(--uf-blue-strong);
+}
+
+div.cbi-checkbox > input[type="checkbox"]:checked::after {
+	inset: auto;
+	top: 2px;
+	left: 2px;
+	transform: translateX(14px);
+}
+
+div.cbi-checkbox > input[type="checkbox"].cbi-input-invalid {
+	box-shadow: 0 0 0 1px var(--uf-red);
+}
+
+.cbi-checkbox > label:empty {
+	display: none;
+}
+
+.cbi-value-field > div > .cbi-radio,
+.cbi-radio {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: var(--uf-control-h);
+	margin-right: 12px;
+	cursor: pointer;
+}
+
+.cbi-value-field > .cbi-checkbox,
+.cbi-value-field > div > .cbi-radio {
+	height: var(--uf-control-h);
+}
+
+/* Range slider */
+.cbi-range-slider {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px 12px;
+	min-height: var(--uf-control-h);
+}
+
+input[type="range"] {
+	-webkit-appearance: none;
+	appearance: none;
+	width: 240px;
+	height: 4px;
+	padding: 0;
+	border: 0;
+	border-radius: 2px;
+	background: var(--uf-border-strong);
+	cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+	-webkit-appearance: none;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	background: var(--uf-surface);
+	border: 2px solid var(--uf-blue);
+}
+
+input[type="range"]::-moz-range-thumb {
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+	background: var(--uf-surface);
+	border: 2px solid var(--uf-blue);
+}
+
+input[type="range"]::-moz-range-progress {
+	height: 4px;
+	border-radius: 2px;
+	background: var(--uf-blue);
+}
+
+.cbi-range-slider-value {
+	min-width: 3ch;
+	color: var(--uf-text-1);
+	font-weight: 500;
+	font-variant-numeric: tabular-nums;
+}
+
+.cbi-range-slider-calc,
+.cbi-range-slider-calc-units {
+	color: var(--uf-text-3);
+}
+
+/* Dynamic lists */
+.cbi-dynlist {
+	display: inline-flex;
+	flex-direction: column;
+	gap: 6px;
+	width: auto;
+	min-width: 240px;
+	max-width: 100%;
+}
+
+.cbi-dynlist > .item {
+	position: relative;
+	display: flex;
+	align-items: center;
+	min-height: var(--uf-control-h);
+	padding: 5px 34px 5px 10px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border-strong);
+	border-radius: var(--uf-radius-sm);
+	color: var(--uf-text-1);
+	word-break: break-all;
+	overflow: hidden;
+	pointer-events: auto; /* drag-and-drop in UIDynamicList */
+	user-select: text;
+	cursor: move;
+}
+
+.cbi-dynlist > .item::after {
+	content: "";
+	position: absolute;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	width: 30px;
+	background: var(--uf-text-3);
+	-webkit-mask: var(--uf-i-close) center / 14px no-repeat;
+	mask: var(--uf-i-close) center / 14px no-repeat;
+	pointer-events: auto;
+	cursor: pointer;
+}
+
+.cbi-dynlist > .item:hover::after {
+	background: var(--uf-red);
+}
+
+.cbi-dynlist > .item.drag-over,
+.cbi-dynlist > .add-item > .cbi-input-text.drag-over,
+.cbi-dynlist > .add-item > .cbi-button-add.drag-over {
+	box-shadow: inset 0 2px 0 var(--uf-blue);
+}
+
+.cbi-dynlist > .item.dragging {
+	opacity: .5;
+}
+
+/* A touch drag moves a bare copy of the entry (class "placeholder") to
+ * where it will land: an empty drop slot, not stray text. */
+.cbi-dynlist > .placeholder {
+	min-height: var(--uf-control-h);
+	background: var(--uf-blue-soft);
+	border: 1px dashed var(--uf-blue);
+	border-radius: var(--uf-radius-sm);
+}
+
+.cbi-dynlist > .placeholder > * {
+	visibility: hidden;
+}
+
+.cbi-dynlist > .item > span {
+	pointer-events: none;
+}
+
+.cbi-dynlist > .add-item {
+	display: flex;
+	gap: 6px;
+}
+
+.cbi-dynlist > .add-item > input,
+.cbi-dynlist > .add-item > button {
+	flex: 1 1 auto;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.cbi-dynlist > .add-item > button {
+	flex: 0 0 auto;
+}

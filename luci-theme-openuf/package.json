@@ -1,0 +1,12 @@
+{
+  "name": "luci-theme-openuf",
+  "private": true,
+  "description": "Builds the theme's stylesheets from scss/ into htdocs/luci-static/openuf/",
+  "scripts": {
+    "build": "sass --no-source-map --style=compressed scss/cascade.scss:htdocs/luci-static/openuf/cascade.css scss/network:htdocs/luci-static/openuf/network",
+    "watch": "npm run build -- --watch"
+  },
+  "devDependencies": {
+    "sass": "1.105.0"
+  }
+}

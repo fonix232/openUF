@@ -1,0 +1,14 @@
+// The two widths the theme's layout turns on: phones (up to 640px) and
+// everything wider. Other queries are rare and stay written out.
+
+@mixin phone {
+	@media screen and (max-width: 640px) {
+		@content;
+	}
+}
+
+@mixin desktop {
+	@media screen and (min-width: 641px) {
+		@content;
+	}
+}

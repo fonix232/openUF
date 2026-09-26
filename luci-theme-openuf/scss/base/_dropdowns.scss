@@ -1,0 +1,401 @@
+/* Dropdowns (LuCI's own select widget)
+ * ----------------------------------- */
+
+.cbi-dropdown {
+	display: inline-flex !important;
+	position: relative;
+	height: auto;
+	padding: 0 !important;
+	cursor: pointer;
+}
+
+.cbi-dropdown:not(.btn):not(.cbi-button) {
+	width: auto;
+	min-width: 240px;
+	max-width: 100%;
+	min-height: var(--uf-control-h);
+	height: auto;
+	align-items: center;
+}
+
+.cbi-dropdown img {
+	max-height: 1.5em;
+	width: auto;
+}
+
+.cbi-dropdown > ul {
+	display: flex;
+	width: 100%;
+	margin: 0 !important;
+	padding: 0;
+	list-style: none;
+	overflow: hidden;
+}
+
+/* A split button (Save & Apply with its menu) stands beside plain buttons,
+ * so it takes their height: the dropdown's own "height: auto" above would
+ * shrink it to its label, since LuCI zeroes its padding. */
+.cbi-dropdown.btn,
+.cbi-dropdown.cbi-button {
+	align-items: stretch;
+	height: var(--uf-control-h);
+}
+
+.cbi-dropdown.btn > ul:not(.dropdown),
+.cbi-dropdown.cbi-button > ul:not(.dropdown) {
+	margin: 0 !important;
+	padding: 0 12px 0 14px;
+	align-items: center;
+}
+
+.cbi-dropdown.btn > ul:not(.dropdown) > li,
+.cbi-dropdown.cbi-button > ul:not(.dropdown) > li {
+	padding: 0;
+	color: inherit;
+	/* The button's own, so the label sits on its neighbours' baseline. */
+	line-height: inherit;
+}
+
+.cbi-dropdown > ul.preview {
+	display: none;
+}
+
+.cbi-dropdown > .open,
+.cbi-dropdown > .more {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0 8px;
+	line-height: 1;
+}
+
+.cbi-dropdown > .open {
+	width: 30px;
+	font-size: 0;
+	color: var(--uf-text-3);
+}
+
+.cbi-dropdown > .open::before {
+	content: "";
+	width: 16px;
+	height: 16px;
+	background: currentColor;
+	-webkit-mask: var(--uf-i-chevron) center / contain no-repeat;
+	mask: var(--uf-i-chevron) center / contain no-repeat;
+}
+
+.cbi-dropdown.btn > .open,
+.cbi-dropdown.cbi-button > .open {
+	align-self: stretch;
+	width: 32px;
+	margin: 0;
+	border-left: 1px solid color-mix(in srgb, var(--uf-on-accent) 35%, transparent);
+	color: inherit;
+}
+
+.cbi-dropdown.cbi-button:not(.important):not(.cbi-button-apply) > .open {
+	border-left-color: var(--uf-btn-line);
+}
+
+/* A split button's menu in the page's action bar or a dialog's button row
+ * opens upwards: the bar sits at the foot of the window, and LuCI weighs
+ * the room below against the whole page rather than the window, so it
+ * would open out of sight. */
+.cbi-page-actions .cbi-dropdown[open] > ul.dropdown,
+.modal > .right .cbi-dropdown[open] > ul.dropdown,
+.modal .button-row .cbi-dropdown[open] > ul.dropdown {
+	top: auto !important; /* over LuCI's inline placement */
+	bottom: calc(100% + 4px) !important;
+	max-height: none !important;
+}
+
+.cbi-dropdown > .more,
+.cbi-dropdown:not(.btn):not(.cbi-button) > ul > li[placeholder] {
+	color: var(--uf-text-3);
+	display: none;
+}
+
+.cbi-dropdown > ul > li {
+	display: none;
+	flex: 1 1 auto;
+	align-items: center;
+	align-self: center;
+	gap: 6px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: inherit;
+}
+
+.cbi-dropdown > ul.dropdown > li,
+.cbi-dropdown:not(.btn):not(.cbi-button) > ul > li {
+	min-height: 20px;
+	padding: 4px 10px;
+	color: var(--uf-text-1);
+}
+
+.cbi-dropdown > ul > li .hide-open { display: initial; }
+.cbi-dropdown > ul > li .hide-close { display: none; }
+
+.cbi-dropdown > ul > li[display]:not([display="0"]) {
+	border-left: 1px solid var(--uf-border-strong);
+}
+
+/* A closed multiple choice lists what is chosen as UniFi's blue chips. */
+.cbi-dropdown[multiple]:not([open]) > ul > li[display] {
+	flex: 0 1 auto;
+	min-height: 0;
+	height: 22px;
+	margin: 4px 0 4px 5px;
+	padding: 0 8px;
+	border-left: 0;
+	border-radius: 11px;
+	background: var(--uf-blue-soft);
+	color: var(--uf-blue-strong); /* on its tint over a field: 4.5:1 */
+	font-size: 12px;
+}
+
+/* A chip that starts with a device icon (Bridge ports) centres a small
+ * icon on the name, in the chip's blue. */
+.cbi-dropdown[multiple]:not([open]) > ul > li[display] > label {
+	align-items: center;
+	gap: 4px;
+}
+
+.cbi-dropdown[multiple]:not([open]) > ul > li[display] > label > span {
+	align-self: center;
+}
+
+.cbi-dropdown[multiple]:not([open]) > ul > li[display] img {
+	--uf-device-color: currentColor;
+	width: 14px;
+	height: 14px;
+}
+
+/* Zones and networks bring their own badge; do not wrap it in a chip. */
+.cbi-dropdown[multiple]:not([open]) > ul > li[display]:has(.zonebadge, .ifacebadge) {
+	height: auto;
+	padding: 0;
+	background: none;
+	color: var(--uf-text-1);
+}
+
+/* A network's badge is filled with the field's grey: unseen on a light
+ * field, a stray lighter box on a dark one, a box on every row of the
+ * open list. Plain text there, as any other item, with "(no interfaces
+ * attached)" in grey; chosen in a closed multiple choice, the blue chip
+ * any choice is. */
+.cbi-dropdown > ul > li .ifacebadge {
+	padding: 0;
+	background: none;
+	border: 0;
+}
+
+.cbi-dropdown > ul > li .ifacebadge > em {
+	font-style: normal;
+	color: var(--uf-text-3);
+}
+
+/* Inside a zone's tinted badge grey would not read; its colour does. */
+.cbi-dropdown > ul > li .zonebadge .ifacebadge > em {
+	color: inherit;
+}
+
+.cbi-dropdown[multiple]:not([open]) > ul > li[display] .ifacebadge {
+	height: 22px;
+	padding: 0 8px;
+	border-radius: 11px;
+	background: var(--uf-blue-soft);
+	color: var(--uf-blue-strong);
+	font-size: 12px;
+}
+
+.cbi-dropdown[multiple]:not([open]) > ul > li[display] .ifacebadge > em {
+	color: inherit;
+}
+
+/* Network and zone selects offer "unspecified" as a real choice, not as
+ * the placeholder: upright, and grey while closed, as the placeholder
+ * of any other select. */
+.cbi-dropdown > ul > li[data-value=""] em {
+	font-style: normal;
+}
+
+.cbi-dropdown:not([open]) > ul > li[data-value=""] > em {
+	color: var(--uf-text-3);
+}
+
+.cbi-dropdown[empty] > ul {
+	max-width: 1px;
+}
+
+/* Closed and empty, the list only measures (its "-- custom --" item is
+ * a 26px field): it must not grow the field past its height. */
+.cbi-dropdown[empty]:not([open]) > ul {
+	max-height: calc(var(--uf-control-h) - 2px);
+}
+
+/* An empty choice reads like any other empty field: its placeholder at
+ * the start of the text, upright, in the placeholder grey. */
+.cbi-dropdown[empty] > .more {
+	justify-content: flex-start;
+	padding: 0 10px;
+}
+
+.cbi-dropdown[empty] > .more > em,
+.cbi-dropdown > ul > li[placeholder] > em {
+	color: var(--uf-text-3);
+	font-style: normal;
+}
+
+/* Chosen in the open list, it is an item like the others. */
+.cbi-dropdown[open] > ul.dropdown > li[selected] > em {
+	color: inherit;
+}
+
+.cbi-dropdown > ul > li > form {
+	display: none;
+	margin: 0;
+	padding: 0;
+	pointer-events: none;
+}
+
+.cbi-dropdown > ul > li img {
+	vertical-align: middle;
+}
+
+/* Form rows line their title up on the field's text baseline; let an item
+ * that starts with an icon take that baseline from its text, not from the
+ * icon's bottom edge, or the title sinks by half a line. */
+.cbi-dropdown > ul > li > span,
+.cbi-value-field .ifacebadge > span {
+	align-self: baseline;
+}
+
+.cbi-dropdown > ul > li > form > input[type="checkbox"] {
+	margin: 0 4px 0 0;
+}
+
+.cbi-dropdown > ul > li input[type="text"] {
+	height: 26px;
+	background: var(--uf-surface);
+	border-color: var(--uf-border-strong);
+}
+
+.cbi-dropdown[open] {
+	position: relative;
+}
+
+/* The open list is as wide as its longest item ('Ethernet Adapter: "eth0"
+ * (wan, wan6)'), not cut to the field's width, up to a sane cap. */
+.cbi-dropdown[open] > ul.dropdown {
+	display: block;
+	position: absolute;
+	z-index: 1100;
+	min-width: 100%;
+	width: max-content;
+	max-width: min(520px, calc(100vw - 32px));
+	padding: 4px;
+	overflow-y: auto;
+	background: var(--uf-raised);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+	box-shadow: var(--uf-shadow);
+	transition: max-height .125s ease-in;
+}
+
+/* On touch screens LuCI spans the list across the viewport itself, with
+ * an inline left and right. */
+.cbi-dropdown[open] > ul.dropdown[style*="right:"] {
+	width: auto;
+	max-width: none;
+}
+
+.cbi-dropdown > ul > li[display],
+.cbi-dropdown[open] > ul.preview,
+.cbi-dropdown[open] > ul.dropdown > li,
+.cbi-dropdown[multiple] > ul > li > label,
+.cbi-dropdown[multiple][open] > ul.dropdown > li,
+.cbi-dropdown[multiple][more] > .more,
+.cbi-dropdown[multiple][empty] > .more {
+	flex-grow: 1;
+	display: flex !important;
+}
+
+.cbi-dropdown[empty] > ul > li,
+.cbi-dropdown[optional][open] > ul.dropdown > li[placeholder] {
+	display: block !important;
+}
+
+.cbi-dropdown[multiple][open] > ul.dropdown > li > form {
+	display: flex !important;
+}
+
+.cbi-dropdown[open] > ul.dropdown > li .hide-open { display: none; }
+.cbi-dropdown[open] > ul.dropdown > li .hide-close { display: initial; }
+
+.cbi-dropdown[open] > ul.dropdown > li {
+	min-height: 32px;
+	border-radius: var(--uf-radius-sm);
+}
+
+.cbi-dropdown[open] > ul.dropdown > li[selected] {
+	background: var(--uf-blue-soft);
+	color: var(--uf-blue);
+}
+
+.cbi-dropdown[open] > ul.dropdown > li.focus,
+.cbi-dropdown[open] > ul.dropdown > li:hover {
+	background: var(--uf-hover);
+	color: var(--uf-text-1);
+}
+
+.cbi-dropdown[open] > ul.dropdown > li[selected].focus,
+.cbi-dropdown[open] > ul.dropdown > li[selected]:hover {
+	background: var(--uf-blue-soft);
+	color: var(--uf-blue);
+}
+
+.cbi-dropdown[open] > ul.dropdown > li[unselectable] {
+	opacity: .6;
+}
+
+.cbi-dropdown[open] > ul.dropdown > li > input.create-item-input:first-child:last-child {
+	width: 100%;
+}
+
+/* Header-bar menus from other themes' markup, kept usable. */
+.dropdown-menu {
+	position: absolute;
+	top: 100%;
+	left: -9999px;
+	z-index: 900;
+	min-width: max-content;
+	margin: 0;
+	padding: 4px;
+	background: var(--uf-raised);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+	box-shadow: var(--uf-shadow);
+	list-style: none;
+}
+
+.dropdown-menu a {
+	display: block;
+	padding: 6px 10px;
+	border-radius: var(--uf-radius-sm);
+	color: var(--uf-text-1);
+}
+
+.dropdown-menu a:hover {
+	background: var(--uf-hover);
+}
+
+.dropdown:hover ul.dropdown-menu {
+	left: 0;
+}
+
+li.menu, .dropdown {
+	position: relative;
+}

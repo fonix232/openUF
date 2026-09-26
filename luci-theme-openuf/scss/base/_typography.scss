@@ -1,0 +1,101 @@
+/* Typography
+ * ---------- */
+
+h1, h2, h3, h4, h5, h6, legend {
+	color: var(--uf-text-1);
+	font-weight: 600;
+	letter-spacing: -.005em;
+}
+
+h1 { font-size: 24px; line-height: 32px; margin-bottom: 16px; }
+h2 { font-size: 20px; line-height: 28px; margin-bottom: 16px; }
+h3, legend { font-size: 15px; line-height: 22px; margin-bottom: 12px; }
+h4 { font-size: 14px; line-height: 20px; margin-bottom: 8px; }
+h5 { font-size: 13px; line-height: 18px; margin-bottom: 8px; }
+h6 { font-size: 12px; line-height: 18px; color: var(--uf-text-3); text-transform: uppercase; letter-spacing: .04em; }
+
+h1 small, h2 small, h3 small, h4 small, h5 small, h6 small {
+	color: var(--uf-text-3);
+	font-weight: 400;
+}
+
+p,
+.cbi-map-descr,
+.cbi-section-descr,
+.table .tr.cbi-section-table-descr .th {
+	font-size: 13px;
+	line-height: 20px;
+	margin-bottom: 12px;
+	color: var(--uf-text-2);
+}
+
+p small {
+	font-size: 12px;
+	color: var(--uf-text-3);
+}
+
+ul, ol {
+	margin: 0 0 16px 20px;
+}
+
+ul { list-style: disc; }
+ol { list-style: decimal; }
+
+ul ul, ul ol, ol ol, ol ul {
+	margin-bottom: 0;
+}
+
+li {
+	line-height: 20px;
+}
+
+ul.unstyled {
+	list-style: none;
+	margin-left: 0;
+}
+
+dl { margin-bottom: 16px; }
+dl dt, dl dd { line-height: 20px; }
+dl dt { font-weight: 600; }
+dl dd { margin-left: 8px; }
+
+hr {
+	margin: 16px 0;
+	border: 0;
+	border-bottom: 1px solid var(--uf-border);
+}
+
+strong, b { font-weight: 600; }
+em { font-style: italic; }
+small { font-size: .9em; }
+
+address {
+	display: block;
+	line-height: 20px;
+	margin-bottom: 16px;
+}
+
+code, pre, kbd, samp {
+	font-family: var(--uf-mono);
+	font-size: 12px;
+}
+
+code {
+	padding: 1px 5px;
+	border-radius: var(--uf-radius-sm);
+	background: var(--uf-field);
+	color: var(--uf-text-1);
+}
+
+pre {
+	display: block;
+	margin: 0 0 16px;
+	padding: 12px;
+	line-height: 18px;
+	background: var(--uf-field);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+	white-space: pre-wrap;
+	word-wrap: break-word;
+	color: var(--uf-text-1);
+}

@@ -1,0 +1,15 @@
+@use 'sass:selector';
+
+// An icon drawn as a mask over currentColor or a background: both the
+// prefixed and the standard property, same value.
+@mixin mask($value) {
+	-webkit-mask: $value;
+	mask: $value;
+}
+
+// The dark scheme's overrides for the rule it is used in.
+@mixin dark {
+	@at-root #{selector.nest(':root[data-darkmode="true"]', &)} {
+		@content;
+	}
+}

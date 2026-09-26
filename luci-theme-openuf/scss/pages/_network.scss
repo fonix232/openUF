@@ -1,0 +1,200 @@
+/* ==== page: network ==== */
+/* Network pages: Routing, DHCP, DNS and Diagnostics, and what they share.
+ * Interfaces and Wireless each have a design of their own, chosen under
+ * System > openUF Theme and linked by header.ut after this file on their
+ * page only: openuf/network/{interfaces,wireless}-{list,settings,cards}.css
+ * (see README.md). Nothing here styles those two pages. */
+
+/* Values LuCI marks as unset ("none", "unspecified", "any") are grey, as
+ * UniFi's "-" is, not italic. */
+:is([data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) .cbi-section-table .td.cbi-value-field > em {
+	font-style: normal;
+	color: var(--uf-text-3);
+}
+
+/* Routing, DHCP, DNS
+ * ------------------
+ * Mostly forms and grid sections the shared styles cover; what is left
+ * is which column names a row, networks shown in cells, and the lease
+ * tables LuCI renders by hand. */
+
+/* The first column names the row (a host, a route's network), so it reads
+ * in the primary colour, the data after it in the secondary. */
+:is([data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) .cbi-section-table .tr.cbi-section-table-row:not(.placeholder) > .td:first-child {
+	color: var(--uf-text-1);
+}
+
+/* A network in a table cell ("wan" and its device): the name, then its
+ * devices as small icons, not a grey box. Out of a dropdown both of the
+ * badge's texts show; keep the one that says what is missing. */
+:is([data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) .cbi-section-table .td > .ifacebadge {
+	flex-wrap: wrap;
+	gap: 0 4px;
+	padding: 0;
+	background: none;
+	color: var(--uf-text-1);
+}
+
+:is([data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) .cbi-section-table .td > .ifacebadge > img {
+	width: 16px;
+	height: 16px;
+}
+
+:is([data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) .cbi-section-table .td > .ifacebadge > em {
+	font-style: normal;
+	color: var(--uf-text-3);
+}
+
+:is([data-page="admin-network-routes"], [data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) .cbi-section-table .td > .ifacebadge > .hide-open {
+	display: none;
+}
+
+:is([data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) .cbi-value > h4 {
+	margin: 4px 0 8px;
+	font-size: 14px;
+	font-weight: 600;
+}
+
+:is([data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) :is(#lease_status_table, #lease6_status_table) .tr:not(.table-titles):not(.placeholder):hover > .td {
+	background: var(--uf-hover);
+}
+
+/* The host is the name of the row; addresses and times read as data. */
+:is([data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) #lease_status_table .td:first-child,
+:is([data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) #lease6_status_table .td:nth-child(2) {
+	color: var(--uf-text-1);
+	font-weight: 500;
+}
+
+:is([data-page="admin-network-dhcp"], [data-page="admin-network-dns"]) :is(#lease_status_table, #lease6_status_table) .td {
+	font-variant-numeric: tabular-nums;
+}
+
+/* Wide grids: the routing rules and the static leases need 800-900px,
+ * more than their card has between the phone layout and a window of
+ * about 1200px with the subnav open. They scroll inside the card with
+ * their actions pinned (the base's wide grids), so they need not
+ * squeeze: each value on one line. */
+@media screen and (min-width: 641px) {
+	:is([data-page="admin-network-routes"] #view .cbi-section, [data-page="admin-network-dhcp"] #cbi-dhcp-host) > .table > * > .tr > .td {
+		white-space: nowrap;
+	}
+
+	:is([data-page="admin-network-routes"] #view .cbi-section, [data-page="admin-network-dhcp"] #cbi-dhcp-host) > .table .td > .ifacebadge {
+		flex-wrap: nowrap;
+	}
+}
+
+/* Diagnostics
+ * -----------
+ * Three tools, each a target field with its run button beside it, in a
+ * card over the output, which reads as a console. */
+
+[data-page="admin-network-diagnostics"] .cbi-map > .table {
+	display: block;
+	margin-bottom: 16px;
+	padding: 16px 20px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+[data-page="admin-network-diagnostics"] .cbi-map > .table > .tr,
+[data-page="admin-network-diagnostics"] .cbi-map > .table > .tbody > .tr {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+	gap: 12px 24px;
+}
+
+[data-page="admin-network-diagnostics"] .cbi-map > .table .td {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	padding: 0;
+	border: 0;
+}
+
+[data-page="admin-network-diagnostics"] .cbi-map > .table .td > input[type="text"] {
+	flex: 1 1 auto;
+	width: auto;
+	min-width: 0;
+	margin: 0 !important; /* over the view's inline margin */
+}
+
+[data-page="admin-network-diagnostics"] .diag-action {
+	flex: 0 0 auto;
+	display: flex;
+}
+
+[data-page="admin-network-diagnostics"] .diag-action > .cbi-button,
+[data-page="admin-network-diagnostics"] .diag-action > .cbi-dropdown {
+	height: var(--uf-control-h);
+}
+
+[data-page="admin-network-diagnostics"] #command-output > textarea {
+	display: block;
+	width: 100%;
+	min-height: 360px;
+	padding: 12px 14px;
+	background: var(--uf-field);
+	border: 1px solid transparent;
+	border-radius: var(--uf-radius-sm);
+	color: var(--uf-text-1);
+	font-family: var(--uf-mono) !important; /* over the view's inline monospace */
+	font-size: 12px;
+	line-height: 18px;
+	resize: vertical;
+}
+
+[data-page="admin-network-diagnostics"] #command-output > textarea:focus {
+	border-color: var(--uf-blue-line);
+	outline: none;
+}
+
+/* Narrow screens
+ * -------------- */
+
+@media screen and (max-width: 640px) {
+	/* Cells bring their own padding here; the cards need less. */
+	[data-page="admin-network-diagnostics"] .cbi-map > .table {
+		padding: 8px;
+	}
+
+	[data-page="admin-network-diagnostics"] .cbi-map > .table > .tr,
+	[data-page="admin-network-diagnostics"] .cbi-map > .table > .tbody > .tr {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 4px;
+		padding: 0;
+		border: 0;
+	}
+
+	/* The stacked cells' padding (the page's own is 0 on wide screens). */
+	[data-page="admin-network-diagnostics"] .cbi-map > .table .td {
+		padding: 4px 6px;
+	}
+
+	/* Every button at one width, so the three fields line up. */
+	[data-page="admin-network-diagnostics"] .diag-action {
+		flex-basis: 164px;
+	}
+
+	[data-page="admin-network-diagnostics"] .diag-action > * {
+		flex: 1 1 auto;
+	}
+
+	[data-page="admin-network-diagnostics"] .diag-action > .cbi-dropdown > ul:not(.dropdown) {
+		justify-content: center;
+	}
+
+	/* The output wraps rather than hide the ends of its lines sideways. */
+	[data-page="admin-network-diagnostics"] #command-output > textarea {
+		min-height: 280px;
+		font-size: 11px;
+		line-height: 16px;
+		white-space: pre-wrap !important; /* over the view's inline pre */
+		overflow-wrap: anywhere;
+	}
+}
+
+/* ==== end page: network ==== */

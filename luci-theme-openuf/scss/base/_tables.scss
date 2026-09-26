@@ -1,0 +1,428 @@
+/* Tables
+ * ------ */
+
+.table {
+	display: table;
+	position: relative;
+	width: 100%;
+	margin-bottom: 0;
+	font-size: 13px;
+	border-collapse: collapse;
+}
+
+.tr { display: table-row; }
+.thead { display: table-header-group; }
+.tbody { display: table-row-group; }
+.tfoot { display: table-footer-group; }
+
+.table[width="33%"], .th[width="33%"], .td[width="33%"] { width: 33%; }
+.table[width="100%"], .th[width="100%"], .td[width="100%"] { width: 100%; }
+
+.table .th,
+.table .td {
+	display: table-cell;
+	vertical-align: middle;
+	padding: 7px 10px;
+	line-height: 18px;
+	text-align: left;
+	color: var(--uf-text-2);
+	border-top: 1px solid var(--uf-divider);
+}
+
+/* Titles stay on one line while the table fits; squeezed (Static Leases
+ * at 1100px), a title wraps between its words rather than push the table
+ * out of its card. */
+.table .th {
+	color: var(--uf-text-1);
+	font-weight: 600;
+	vertical-align: bottom;
+	border-top: 0;
+	border-bottom: 1px solid var(--uf-border);
+}
+
+.table .tr:first-child .td {
+	border-top: 0;
+}
+
+/* A header rule under every column, including an actions column that has
+ * no title over it (the rule is the first row's, where the titles stop). */
+.table .tr.table-titles + .tr > .td,
+.table .tr.cbi-section-table-titles + .tr > .td {
+	border-top-color: var(--uf-border);
+}
+
+/* Under a thead the first row has no rule of its own to recolour (it is
+ * a first child); give it one. Stacked on phones, rows draw their own. */
+@media screen and (min-width: 641px) {
+	.table .thead + .tbody > .tr:first-child:not(.placeholder) > .td {
+		border-top: 1px solid var(--uf-border);
+	}
+}
+
+.table .th:first-child,
+.table .td:first-child {
+	padding-left: 0;
+}
+
+.table .th:last-child,
+.table .td:last-child {
+	padding-right: 0;
+}
+
+.cbi-section > .table:first-child,
+.cbi-section > h3 + .table {
+	margin-top: -4px;
+}
+
+/* Status tables pair a label with a value, UniFi's "Model  U6 IW" rows. */
+.table:not(.cbi-section-table) .tr > .td:first-child[width="33%"] {
+	color: var(--uf-text-3);
+}
+
+.table:not(.cbi-section-table) .tr > .td[width="33%"] + .td {
+	color: var(--uf-text-1);
+}
+
+/* A long unbroken value (a DUID, an IPv6 address) may break rather than
+ * push a label/value table out of its card. A list (a table with column
+ * titles) sizes its columns by their words, so it keeps them whole: a MAC
+ * address is not split to spare a column that could wrap at its spaces.
+ * Wider than its card, a list scrolls inside it (below); a page whose
+ * list holds long tokens lets those cells break anywhere. In a list
+ * squeezed by a long column, a short column (a PID, a user) keeps its
+ * few characters whole. */
+.table:not(.cbi-section-table) .td {
+	overflow-wrap: anywhere;
+}
+
+.table:not(.cbi-section-table):where(:has(.tr.table-titles, .tr.cbi-section-table-titles)) .td {
+	overflow-wrap: break-word;
+}
+
+:where(.table:not(.cbi-section-table):has(.tr.table-titles, .tr.cbi-section-table-titles)) .td {
+	min-width: 4em;
+}
+
+.tr.placeholder {
+	height: 64px;
+}
+
+.tr.placeholder > .td {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	padding: 22px 0;
+	text-align: center;
+	color: var(--uf-text-3);
+	border-top: 0;
+}
+
+/* The message hangs from the table's bottom edge, so it can only do that
+ * from the last row; with a row after it (a "Total") it stays in its row. */
+.tr.placeholder:not(:last-child) {
+	height: auto;
+}
+
+.tr.placeholder:not(:last-child) > .td {
+	position: static;
+}
+
+.tr.placeholder > .td > em {
+	font-style: normal;
+}
+
+.tr.drag-over-above,
+.tr.drag-over-below {
+	border: 2px solid var(--uf-blue);
+	border-width: 2px 0 0 0;
+}
+
+.tr.drag-over-below {
+	border-width: 0 0 2px 0;
+}
+
+.cbi-section-table .tr:not(.cbi-section-table-titles):not(.table-titles):not(.cbi-section-table-descr):not(.placeholder):hover > .td {
+	background-color: var(--uf-hover);
+}
+
+/* A list (a plain table with column titles, such as Startup's scripts or
+ * the mounted file systems) is hovered like an editable one; label/value
+ * tables, which have no titles, are not lists. */
+:where(.table:not(.cbi-section-table):has(.tr.table-titles, .tr.cbi-section-table-titles)) .tr:where(:not(.table-titles, .cbi-section-table-titles, .placeholder)):hover > .td {
+	background-color: var(--uf-hover);
+}
+
+/* Its first and last column are inset, so the tint has an edge. */
+:where(.table:not(.cbi-section-table):has(.tr.table-titles, .tr.cbi-section-table-titles)) .tr > :is(.th, .td):first-child {
+	padding-left: 8px;
+}
+
+:where(.table:not(.cbi-section-table):has(.tr.table-titles, .tr.cbi-section-table-titles)) .tr > :is(.th, .td):last-child {
+	padding-right: 8px;
+}
+
+.cbi-section-table .tr:hover > .td:first-child,
+:where(.table:has(.tr.table-titles, .tr.cbi-section-table-titles)) .tr:hover > .td:first-child {
+	border-radius: var(--uf-radius-sm) 0 0 var(--uf-radius-sm);
+}
+
+.cbi-section-table .tr:hover > .td:last-child,
+:where(.table:has(.tr.table-titles, .tr.cbi-section-table-titles)) .tr:hover > .td:last-child {
+	border-radius: 0 var(--uf-radius-sm) var(--uf-radius-sm) 0;
+}
+
+/* The hover tint is the fields' own grey in the light scheme; outline the
+ * fields of a hovered row, or they dissolve into it. */
+.cbi-section-table .tr:hover > .td :where(input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="reset"], [type="file"]), select, textarea, .cbi-dropdown:not(.btn, .cbi-button)):not(:focus, [open]) {
+	border-color: var(--uf-border-strong);
+}
+
+.cbi-section-table .td:first-child {
+	padding-left: 8px;
+}
+
+.cbi-section-table .th:first-child {
+	padding-left: 8px;
+}
+
+.cbi-section-table .td:last-child,
+.cbi-section-table .th:last-child {
+	padding-right: 8px;
+}
+
+.cbi-section-table .tr.cbi-section-table-descr .th {
+	font-weight: 400;
+	color: var(--uf-text-3);
+	white-space: normal;
+}
+
+.cbi-section-table-titles {
+	font-weight: 600;
+}
+
+.cbi-section-table-descr.named::before,
+.cbi-section-table-row[data-title]::before {
+	content: none;
+}
+
+.cbi-rowstyle-2,
+.tr.table-titles,
+.tr.cbi-section-table-titles {
+	background: none;
+}
+
+.cbi-section-table-filter .th {
+	padding-top: 0;
+	border-bottom: 0;
+	font-weight: 400;
+}
+
+.cbi-section-table-filter input {
+	width: 100%;
+	min-width: 60px;
+	height: 28px;
+}
+
+th[data-sortable-row] {
+	cursor: pointer;
+}
+
+.th[data-sort-direction] {
+	color: var(--uf-blue);
+}
+
+th[data-sort-direction="asc"]::after { content: "\a0\2191"; }
+th[data-sort-direction="desc"]::after { content: "\a0\2193"; }
+
+table table td,
+.cbi-value-field table td {
+	border: none;
+}
+
+.table.cbi-section-table input[type="password"],
+.table.cbi-section-table input[type="text"],
+.table.cbi-section-table textarea,
+.table.cbi-section-table select,
+.table.cbi-section-table .cbi-select {
+	width: 100%;
+	min-width: auto;
+}
+
+.table.cbi-section-table .td.cbi-section-table-cell {
+	white-space: nowrap;
+	text-align: right;
+}
+
+.table.cbi-section-table .td.cbi-section-table-cell select,
+.table.cbi-section-table .td.cbi-section-table-cell .cbi-select {
+	width: inherit;
+}
+
+.td.cbi-section-actions {
+	width: 1%;
+	text-align: right;
+	vertical-align: middle;
+	white-space: nowrap;
+}
+
+.td.cbi-section-actions > * {
+	display: flex;
+	gap: 6px;
+	justify-content: flex-end;
+}
+
+.td.cbi-section-actions > :not(.cbi-dropdown) > *,
+.td.cbi-section-actions > * > form > * {
+	flex: 1 1 auto;
+	margin: 0;
+}
+
+.td.cbi-section-actions > * > form {
+	display: inline-flex;
+	margin: 0;
+}
+
+.td.cbi-section-actions .cbi-button {
+	height: 28px;
+	padding: 0 12px;
+}
+
+.td.cbi-section-actions .cbi-button.drag-handle {
+	flex: 0 0 auto;
+	padding: 0;
+}
+
+/* A list's row buttons are the small size and sit in a tighter cell, so
+ * a row with actions is as low as one without, about UniFi's 32px. */
+/* Kept weak (:where), so a page's own row buttons still win. */
+:where(.table:not(.cbi-section-table):has(.tr.table-titles, .tr.cbi-section-table-titles)) .td :is(.btn, .cbi-button):not(.cbi-dropdown) {
+	height: 28px;
+	padding: 0 12px;
+}
+
+:where(.table:not(.cbi-section-table):has(.tr.table-titles, .tr.cbi-section-table-titles)) .td:has(> :is(.btn, .cbi-button), > * > :is(.btn, .cbi-button)) {
+	padding-top: 2px;
+	padding-bottom: 2px;
+}
+
+.table.valign-middle .td {
+	vertical-align: middle;
+}
+
+/* Wide grids: a grid can need more room than its card has between the
+ * phone layout and a window of about 1200px with the subnav open (LuCI
+ * sizes the row actions for one line of buttons, and a MAC address or a
+ * zone does not break). As UniFi's tables do, it scrolls sideways inside
+ * its card rather than push the page, its row actions pinned at the right
+ * edge and the other columns passing under them. A grid holding LuCI's
+ * own dropdowns does not scroll, as a scroller would clip their open
+ * lists; nor does a hidden tab pane, which could then take the focus. */
+@media screen and (min-width: 641px) {
+	.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) {
+		overflow-x: auto;
+		scrollbar-width: thin;
+	}
+
+	/* Only the grid moves: the title, the description and "Add" stay. */
+	.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) > :not(.table) {
+		position: sticky;
+		left: 0;
+	}
+
+	/* Separate borders, as only those let the pinned cells cast the shadow
+	 * below. The rule under the titles would be doubled: it is the first
+	 * row's alone, which also runs under an actions column without a
+	 * title. A drop target is marked on its cells. */
+	.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) > .table {
+		border-collapse: separate;
+		border-spacing: 0;
+	}
+
+	.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) > .table > * > .tr > .th {
+		border-bottom-width: 0;
+	}
+
+	.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) > .table > .thead + .tbody > .tr:first-child > .td,
+	.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) > .table > .tr.cbi-section-table-titles + .tr > .td {
+		border-top: 1px solid var(--uf-border);
+	}
+
+	.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) > .table > * > .tr.drag-over-above > .td {
+		box-shadow: inset 0 2px 0 var(--uf-blue);
+	}
+
+	.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) > .table > * > .tr.drag-over-below > .td {
+		box-shadow: inset 0 -2px 0 var(--uf-blue);
+	}
+
+	/* Opaque, with the row's hover tint and the edge line (below) as
+	 * layers over the card colour: a translucent tint alone would let the
+	 * columns under it show through in the dark scheme. The cell stops at
+	 * the card's padding, not its edge; its shadow, in the card colour,
+	 * covers the columns passing beside it (a box there would make the
+	 * card scroll even when the grid fits; a shadow does not). */
+	.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) > .table > .tr > .cbi-section-actions,
+	.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) > .table > * > .tr > .cbi-section-actions {
+		position: sticky;
+		right: 0;
+		z-index: 1;
+		background:
+			linear-gradient(to right, var(--uf-grid-edge, transparent) 1px, transparent 1px),
+			linear-gradient(var(--uf-grid-tint, transparent), var(--uf-grid-tint, transparent))
+			var(--uf-grid-bg, var(--uf-surface));
+		box-shadow: 20px 0 0 var(--uf-grid-bg, var(--uf-surface));
+	}
+
+	.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) > .table > .tr.cbi-section-table-row:hover > .cbi-section-actions,
+	.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) > .table > * > .tr.cbi-section-table-row:hover > .cbi-section-actions {
+		--uf-grid-tint: var(--uf-hover);
+	}
+
+	.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) > .table > * > .tr.drag-over-above > .cbi-section-actions {
+		box-shadow: 20px 0 0 var(--uf-grid-bg, var(--uf-surface)), inset 0 2px 0 var(--uf-blue);
+	}
+
+	.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) > .table > * > .tr.drag-over-below > .cbi-section-actions {
+		box-shadow: 20px 0 0 var(--uf-grid-bg, var(--uf-surface)), inset 0 -2px 0 var(--uf-blue);
+	}
+}
+
+/* A list wider than its card (many columns, 961-1200px with the subnav
+ * open) scrolls inside it the same way; what else its box holds (a card's
+ * title) stays. Not around LuCI's own dropdowns, as above, nor the view
+ * itself, which would carry the page's other content along. */
+@media screen and (min-width: 641px) {
+	:not(#view):has(> .table:not(.cbi-section-table) > .tr:is(.table-titles, .cbi-section-table-titles), > .table:not(.cbi-section-table) > .thead > .tr:is(.table-titles, .cbi-section-table-titles)):not(:has(.cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) {
+		overflow-x: auto;
+		scrollbar-width: thin;
+	}
+
+	:not(#view):has(> .table:not(.cbi-section-table) > .tr:is(.table-titles, .cbi-section-table-titles), > .table:not(.cbi-section-table) > .thead > .tr:is(.table-titles, .cbi-section-table-titles)):not(:has(.cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) > :not(.table) {
+		position: sticky;
+		left: 0;
+	}
+}
+
+/* A dialog's grid sits on the dialog's colour, not a card's. */
+.modal {
+	--uf-grid-bg: var(--uf-raised);
+}
+
+/* The edge line shows while columns are under the actions: it follows the
+ * scroll position, so it goes once the grid is scrolled to its end, and a
+ * grid that fits has no scroll and so no line. */
+@keyframes uf-grid-pinned {
+	0%, 99% { --uf-grid-edge: var(--uf-border-strong); }
+	100% { --uf-grid-edge: transparent; }
+}
+
+@supports (animation-timeline: scroll()) {
+	@media screen and (min-width: 641px) {
+		.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) > .table > .tr > .cbi-section-actions,
+		.cbi-section:has(> .table.cbi-section-table):not(:has(> .table .cbi-dropdown:not(.btn, .cbi-button))):not([data-tab-title]:not([data-tab-active="true"])) > .table > * > .tr > .cbi-section-actions {
+			animation: uf-grid-pinned linear both;
+			animation-timeline: scroll(nearest inline);
+		}
+	}
+}

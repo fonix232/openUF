@@ -1,0 +1,118 @@
+/* File browser
+ * ------------ */
+
+.cbi-filebrowser {
+	display: flex;
+	flex-direction: column;
+	min-width: 240px;
+	max-width: 100%;
+	height: 0;
+	overflow: hidden;
+	opacity: 0;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border-strong);
+	border-radius: var(--uf-radius);
+}
+
+.cbi-filebrowser.open {
+	height: auto;
+	overflow: visible;
+	opacity: 1;
+	transition: opacity .2s ease-in;
+}
+
+.cbi-filebrowser > * {
+	max-width: 100%;
+	margin: 0;
+	padding: 6px 10px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	border-bottom: 1px solid var(--uf-border);
+}
+
+.cbi-filebrowser > div {
+	border-bottom: none;
+}
+
+.cbi-filebrowser > ul {
+	list-style: none;
+	padding: 4px;
+}
+
+.cbi-filebrowser > ul > li {
+	display: flex;
+	align-items: center;
+	padding: 2px 6px;
+	border-radius: var(--uf-radius-sm);
+}
+
+.cbi-filebrowser > ul > li:hover {
+	background: var(--uf-hover);
+}
+
+.cbi-filebrowser > ul > li > div:first-child {
+	flex: 10;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.cbi-filebrowser > ul > li > div:last-child {
+	flex: 3;
+	display: flex;
+	justify-content: flex-end;
+	gap: 4px;
+}
+
+.cbi-filebrowser > ul > li > div:last-child > button {
+	height: 24px;
+	margin: 1px 0;
+	padding: 0 8px;
+	font-size: 12px;
+}
+
+/* Dates are secondary, as in UniFi's tables. */
+.cbi-filebrowser .mtime {
+	padding: 0 12px;
+	color: var(--uf-text-3);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.cbi-filebrowser img {
+	opacity: .7;
+}
+
+.cbi-filebrowser > .right {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 6px;
+	padding: 8px 10px;
+}
+
+.cbi-filebrowser .upload {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 8px 10px;
+	border-bottom: 1px solid var(--uf-border);
+}
+
+.cbi-filebrowser .upload > * {
+	flex: 1;
+}
+
+.cbi-filebrowser .upload > .btn {
+	flex-basis: 60px;
+}
+
+.cbi-filebrowser .upload > div {
+	flex: 10;
+	min-width: 150px;
+}
+
+.cbi-filebrowser .upload > div > input {
+	width: 100%;
+}

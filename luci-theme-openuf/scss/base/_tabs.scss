@@ -1,0 +1,152 @@
+/* Tabs
+ * ---- */
+
+#tabmenu {
+	margin-bottom: 20px;
+}
+
+.tabs,
+.cbi-tabmenu {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0 24px;
+	margin: 0 0 20px;
+	padding: 0;
+	list-style: none;
+	box-shadow: inset 0 -1px 0 var(--uf-border);
+}
+
+#tabmenu .tabs {
+	margin-bottom: 0;
+}
+
+#tabmenu .tabs + .tabs {
+	margin-top: 4px;
+	gap: 0 20px;
+	box-shadow: none;
+}
+
+#tabmenu .tabs + .tabs > li > a {
+	font-size: 12px;
+}
+
+.tabs > li,
+.cbi-tabmenu > li {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+	margin: 0;
+	color: var(--uf-text-2);
+}
+
+.tabs > li > a,
+.cbi-tabmenu > li > a {
+	display: block;
+	padding: 10px 0 9px;
+	border-bottom: 2px solid transparent;
+	color: inherit;
+	font-weight: 500;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	text-decoration: none;
+	outline: none;
+}
+
+.tabs > li > a:hover,
+.cbi-tabmenu > li > a:hover {
+	color: var(--uf-text-1);
+}
+
+.tabs > li > a:focus-visible,
+.cbi-tabmenu > li > a:focus-visible {
+	color: var(--uf-blue);
+}
+
+.tabs > li.active > a,
+.cbi-tabmenu > li.cbi-tab > a {
+	color: var(--uf-text-1);
+	border-bottom-color: var(--uf-blue);
+}
+
+/* A tab hiding invalid fields says how many, as a small red count. */
+.cbi-tabmenu > li[data-errors] > a {
+	color: var(--uf-red-text);
+}
+
+.cbi-tabmenu > li.cbi-tab[data-errors] > a {
+	border-bottom-color: var(--uf-red);
+}
+
+.cbi-tabmenu > li[data-errors]::after {
+	content: attr(data-errors);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 16px;
+	height: 16px;
+	margin-left: 6px;
+	padding: 0 4px;
+	border-radius: 8px;
+	background: var(--uf-red-fill);
+	color: var(--uf-on-accent);
+	font-size: 11px;
+	font-weight: 600;
+}
+
+.cbi-tabmenu.map {
+	margin-top: 4px;
+}
+
+.cbi-tabmenu.map > li > a {
+	font-size: 14px;
+}
+
+/* A tab bar inside another section's tab pane is a second level (DNS
+ * records by type, a DHCP server's IPv4 and IPv6 settings): the lighter
+ * row UniFi draws, as the second row of #tabmenu is. */
+.cbi-section-node-tabbed [data-tab-title] .cbi-tabmenu {
+	gap: 0 20px;
+	margin-bottom: 14px;
+	box-shadow: none;
+}
+
+.cbi-section-node-tabbed [data-tab-title] .cbi-tabmenu > li > a {
+	padding: 6px 0 5px;
+	font-size: 12px;
+}
+
+.cbi-tab-descr {
+	margin: -8px 0 16px;
+	color: var(--uf-text-2);
+}
+
+.tab-content > .tab-pane,
+.tab-content > div {
+	display: none;
+}
+
+.tab-content > .active {
+	display: block;
+}
+
+[data-tab-title] {
+	height: 0;
+	opacity: 0;
+	overflow: hidden;
+}
+
+/* A hidden pane that is also a card would still leave its padding, border
+ * and margin behind, as an empty gap under the visible one. */
+[data-tab-title]:not([data-tab-active="true"]) {
+	margin: 0;
+	padding: 0;
+	border-width: 0;
+}
+
+[data-tab-active="true"] {
+	opacity: 1;
+	height: auto;
+	overflow: visible;
+	transition: opacity .2s ease-in;
+}

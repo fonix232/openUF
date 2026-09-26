@@ -1,0 +1,282 @@
+/* Dialogs
+ * ------- */
+
+#modal_overlay {
+	position: fixed;
+	inset: 0;
+	right: auto;
+	z-index: 900;
+	overflow: auto;
+	background: var(--uf-scrim);
+	opacity: 0;
+	visibility: hidden;
+	transition: opacity .15s ease-in;
+}
+
+body.modal-overlay-active {
+	overflow: hidden;
+	height: 100vh;
+}
+
+body.modal-overlay-active #modal_overlay {
+	right: 0;
+	opacity: 1;
+	visibility: visible;
+}
+
+.modal {
+	width: 92%;
+	max-width: 600px;
+	min-width: 270px;
+	min-height: 32px;
+	margin: 8vh auto;
+	padding: 20px 24px;
+	background: var(--uf-raised);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius-lg);
+	box-shadow: var(--uf-shadow);
+}
+
+.modal > * {
+	max-width: 100%;
+	margin-bottom: 12px;
+	line-height: 20px;
+}
+
+.modal > *:last-child {
+	margin-bottom: 0;
+}
+
+.modal > h4 {
+	font-size: 16px;
+	line-height: 24px;
+	margin-bottom: 14px;
+}
+
+.modal > pre,
+.modal > textarea {
+	width: 100%;
+	white-space: pre-wrap;
+	overflow: auto;
+}
+
+/* Dialog buttons: the dismissing one on the left, the actions on the
+ * right, the primary last. LuCI nests the row in a section at times. */
+.modal > .right,
+.modal .button-row {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	align-items: center;
+	gap: 8px;
+	margin-top: 20px;
+}
+
+.modal .button-row > button:first-of-type {
+	margin-right: auto;
+}
+
+.uci-dialog > .cbi-section > br {
+	display: none;
+}
+
+/* Options in a dialog ("Keep settings", "Force upgrade") are a checkbox
+ * that LuCI wraps in a button-styled label, around text that can be long
+ * and hold line breaks: draw a checkbox row, as a block, not a button. */
+.modal label.btn:has(> input[type="checkbox"]) {
+	--uf-btn-bg: transparent;
+	--uf-btn-line: transparent;
+	position: relative;
+	display: block;
+	height: auto;
+	padding: 0 0 0 26px;
+	color: var(--uf-text-1);
+	font-weight: 400;
+	line-height: 20px;
+	text-align: left;
+	white-space: normal;
+}
+
+.modal label.btn:has(> input[type="checkbox"]) > input {
+	position: absolute;
+	top: 2px;
+	left: 0;
+	margin: 0;
+}
+
+/* The dangerous one is a red notice, its checkbox where the icon goes. */
+.modal label.btn.alert-message:has(> input[type="checkbox"]) {
+	--uf-btn-bg: rgba(var(--uf-red-rgb), .08);
+	--uf-btn-line: rgba(var(--uf-red-rgb), .35);
+	padding: 12px 16px 12px 44px;
+}
+
+.modal label.btn.alert-message:has(> input[type="checkbox"])::before {
+	content: none;
+}
+
+.modal label.btn.alert-message:has(> input[type="checkbox"]) > input {
+	top: 14px;
+	left: 16px;
+}
+
+.modal .cbi-value label.cbi-value-title {
+	flex-basis: 180px;
+}
+
+#modal_overlay > .modal.uci-dialog,
+#modal_overlay > .modal.cbi-modal {
+	max-width: 900px;
+}
+
+#modal_overlay > .modal.login > button.important {
+	width: 100%;
+	height: 40px;
+	margin-top: 8px;
+	font-size: 14px;
+}
+
+/* Pending changes, as a diff: one line per change, tinted by what it does
+ * and marked with a bar on the leading edge. LuCI wraps option changes in
+ * a <var> around the <ins>/<del>; only the inner element is drawn, so no
+ * line is boxed twice, and option lines sit indented under their section.
+ *   ins        section added       green
+ *   del        section removed     red
+ *   var > ins  option set          green, indented
+ *   var > del  option removed      red, indented
+ *   var        renamed, reordered  grey, indented */
+.uci-change-list {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	margin-top: 12px;
+	padding: 12px;
+	background: var(--uf-canvas);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+	white-space: pre;
+}
+
+.uci-change-list > br {
+	display: none;
+}
+
+.uci-change-list > h5 {
+	margin: 10px 0 3px;
+	color: var(--uf-text-3);
+	font: 500 12px/18px var(--uf-mono);
+}
+
+.uci-change-list > h5:first-child {
+	margin-top: 0;
+}
+
+.uci-dialog del,
+.uci-dialog ins,
+.uci-dialog var {
+	display: block;
+	color: var(--uf-text-1);
+	font-family: var(--uf-mono);
+	font-size: 12px;
+	font-style: normal;
+	line-height: 18px;
+	text-decoration: none;
+}
+
+/* Long values wrap rather than hide behind an ellipsis: the value is
+ * what the dialog is there to show. */
+.uci-change-list > ins,
+.uci-change-list > del,
+.uci-change-list > var > ins,
+.uci-change-list > var > del,
+.uci-change-list > var:not(:has(> ins, > del)) {
+	padding: 3px 10px;
+	border-left: 3px solid;
+	border-radius: 0 var(--uf-radius-sm) var(--uf-radius-sm) 0;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.uci-change-list > ins,
+.uci-change-list > var > ins {
+	background: rgba(var(--uf-green-rgb), .12);
+	border-left-color: var(--uf-green);
+}
+
+.uci-change-list > del,
+.uci-change-list > var > del {
+	background: rgba(var(--uf-red-rgb), .1);
+	border-left-color: var(--uf-red);
+	color: var(--uf-text-2);
+}
+
+.uci-change-list > var {
+	margin-left: 16px;
+}
+
+.uci-change-list > var:not(:has(> ins, > del)) {
+	background: var(--uf-field);
+	border-left-color: var(--uf-border-strong);
+}
+
+.uci-dialog ins strong,
+.uci-dialog del strong,
+.uci-dialog var strong {
+	font-weight: 600;
+}
+
+.uci-dialog > .cbi-section > strong:first-child {
+	color: var(--uf-text-3);
+	font-size: 12px;
+	font-weight: 500;
+}
+
+.uci-change-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 20px;
+	margin-top: 4px;
+}
+
+.uci-change-legend-label {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--uf-text-2);
+	font-size: 12px;
+}
+
+/* The legend's swatches: the same bar and tint as the lines above, in
+ * small squares. */
+.uci-change-legend-label > ins,
+.uci-change-legend-label > del,
+.uci-change-legend-label > var {
+	display: flex;
+	width: 14px;
+	height: 14px;
+	margin: 0;
+	overflow: hidden;
+	font-size: 0;
+}
+
+.uci-change-legend-label > ins,
+.uci-change-legend-label > var > ins {
+	background: rgba(var(--uf-green-rgb), .2);
+	border-left: 3px solid var(--uf-green);
+}
+
+.uci-change-legend-label > del,
+.uci-change-legend-label > var > del {
+	background: rgba(var(--uf-red-rgb), .18);
+	border-left: 3px solid var(--uf-red);
+}
+
+/* Option swatches are indented, like option lines. */
+.uci-change-legend-label > var > * {
+	flex: 1 1 100%;
+	margin-left: 4px;
+}
+
+#applyreboot-section {
+	line-height: 300%;
+}

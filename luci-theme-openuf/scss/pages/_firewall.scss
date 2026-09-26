@@ -1,0 +1,750 @@
+/* ==== page: firewall ==== */
+/* luci-app-firewall (Network > Firewall: zones, port forwards, traffic
+ * rules, NAT rules, IP sets) and Status > Firewall (the nftables ruleset,
+ * and the legacy iptables listing behind it). Zones keep the colour LuCI
+ * gives them, as a tinted pill with a dot in the zone's own colour; verdicts
+ * take UniFi's status colours; a ruleset is a card per chain, its matches
+ * and actions as chips. */
+
+:root {
+	/* A zone pill is its colour washed over the card, edged a little
+	 * stronger; the dot is the colour shaded towards the text (dimmed, for
+	 * a bare hex colour), so pastel zone colours still show on white. */
+	--uf-firewall-zone-tint: .3;
+	--uf-firewall-zone-edge: .6;
+	--uf-firewall-zone-shade: 35%;
+	--uf-firewall-zone-dim: .65;
+	--uf-firewall-i-arrow: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'><path d='M4.5 12h15M14 6.5l5.5 5.5-5.5 5.5'/></svg>");
+	--uf-firewall-i-clock: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round'><circle cx='12' cy='12' r='8.5'/><path d='M12 7.5V12l3 2'/></svg>");
+}
+
+/* On a dark card the zone colours are light already: a fainter wash, and
+ * the dot in the colour itself. */
+:root[data-darkmode="true"] {
+	--uf-firewall-zone-tint: .16;
+	--uf-firewall-zone-edge: .4;
+	--uf-firewall-zone-shade: 0%;
+	--uf-firewall-zone-dim: 1;
+}
+
+/* Zones
+ * ----- */
+
+/* Inline-block, not flex, so the name sits on the text baseline around it
+ * ("From wan, IP ..."). */
+body[data-page^="admin-network-firewall"] .zonebadge {
+	display: inline-block;
+	max-width: 100%;
+	height: 22px;
+	padding: 0 9px 0 8px;
+	border-radius: 11px;
+	color: var(--uf-text-1);
+	font-size: 12px;
+	line-height: 22px;
+	white-space: nowrap;
+	vertical-align: baseline;
+}
+
+/* The zone colour arrives inline, as --zone-color-rgb and a solid
+ * background (the base maps LuCI's fixed hex colours back to it); wash it
+ * out instead. */
+body[data-page^="admin-network-firewall"] .zonebadge[style]:where(:not([style^="background-color:#"]:not([style*="#90f090"], [style*="#f09090"], [style*="#eeeeee"]))) {
+	background: rgba(var(--zone-color-rgb, 204, 204, 204), var(--uf-firewall-zone-tint)) !important;
+	box-shadow: inset 0 0 0 1px rgba(var(--zone-color-rgb, 204, 204, 204), var(--uf-firewall-zone-edge));
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge[style]::before {
+	content: "";
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	margin-right: 6px;
+	vertical-align: 1px;
+	border-radius: 50%;
+	background: color-mix(in srgb, rgb(var(--zone-color-rgb, 204, 204, 204)), var(--uf-text-1) var(--uf-firewall-zone-shade));
+}
+
+/* Any other colour comes as a bare hex (a derived zone colour in the port
+ * forwards' Action column) that CSS cannot take apart: a veil of card
+ * colour under the name washes it out, leaving the edge and the dot in the
+ * colour itself. It shows once the base leaves such a background alone. */
+body[data-page^="admin-network-firewall"] .zonebadge[style^="background-color:#"]:not([style*="#90f090"], [style*="#f09090"], [style*="#eeeeee"]) {
+	position: relative;
+	isolation: isolate;
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge[style^="background-color:#"]:not([style*="#90f090"], [style*="#f09090"], [style*="#eeeeee"])::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	border: 1px solid color-mix(in srgb, var(--uf-surface) calc(100% - var(--uf-firewall-zone-edge) * 100%), transparent);
+	border-radius: inherit;
+	background: color-mix(in srgb, var(--uf-surface) calc(100% - var(--uf-firewall-zone-tint) * 100%), transparent);
+	opacity: 1;
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge[style^="background-color:#"]:not([style*="#90f090"], [style*="#f09090"], [style*="#eeeeee"])::before {
+	background: inherit;
+	filter: brightness(var(--uf-firewall-zone-dim));
+}
+
+/* "This device" and "any zone" are LuCI's grey: a plain neutral chip. */
+body[data-page^="admin-network-firewall"] .zonebadge[style*="238, 238, 238"],
+body[data-page^="admin-network-firewall"] .zonebadge[style*="#eeeeee"] {
+	background: var(--uf-field) !important;
+	box-shadow: inset 0 0 0 1px var(--uf-border);
+	color: var(--uf-text-2);
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge[style*="238, 238, 238"]::before,
+body[data-page^="admin-network-firewall"] .zonebadge[style*="#eeeeee"]::before {
+	display: none;
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge > strong,
+body[data-page^="admin-network-firewall"] .zonebadge > em {
+	margin: 0;
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge > strong {
+	font-weight: 600;
+}
+
+/* What follows the name ("(empty)", the networks in a zone picker) is
+ * quieter text, upright like the rest of UniFi's labels. */
+body[data-page^="admin-network-firewall"] .zonebadge em {
+	font-style: normal;
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge > strong + em {
+	margin-left: 4px;
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge > strong + em,
+body[data-page^="admin-network-firewall"] .zonebadge > .ifacebadge {
+	color: var(--uf-text-2);
+}
+
+/* "REJECT all others": the default, not a zone. The base draws its dashed
+ * outline; its grey is repeated here over the pill text colour above. */
+body[data-page^="admin-network-firewall"] .zonebadge-empty {
+	line-height: 20px;
+	color: var(--uf-text-3);
+	font-size: 11px;
+	font-style: normal;
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge-empty > strong {
+	font-weight: 500;
+}
+
+/* Hovering a zone lists its networks in a small menu under it, not over
+ * the name. */
+body[data-page^="admin-network-firewall"] .zonebadge.cbi-tooltip-container {
+	position: relative;
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge .cbi-tooltip {
+	top: calc(100% + 4px);
+	margin: 0;
+	padding: 6px;
+	background: var(--uf-raised);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+	white-space: nowrap;
+}
+
+body[data-page^="admin-network-firewall"] .zonebadge .cbi-tooltip > .ifacebadge {
+	margin: 0;
+	color: var(--uf-text-1);
+	font-weight: 400;
+}
+
+/* Zone => Forwards: compact pills and a quiet arrow, not full-width bars. */
+body[data-page^="admin-network-firewall"] .zone-forwards {
+	align-items: center;
+	gap: 8px;
+}
+
+body[data-page^="admin-network-firewall"] .zone-forwards > * {
+	flex: 0 0 auto;
+	padding: 0;
+}
+
+body[data-page^="admin-network-firewall"] .zone-forwards > span {
+	width: 16px;
+	height: 16px;
+	flex-basis: 16px;
+	background: var(--uf-text-4);
+	font-size: 0;
+	-webkit-mask: var(--uf-firewall-i-arrow) center / contain no-repeat;
+	mask: var(--uf-firewall-i-arrow) center / contain no-repeat;
+}
+
+body[data-page^="admin-network-firewall"] .zone-forwards .zone-src,
+body[data-page^="admin-network-firewall"] .zone-forwards .zone-dest {
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 4px;
+}
+
+body[data-page^="admin-network-firewall"] .zone-forwards .zone-dest {
+	flex: 0 1 auto;
+	min-width: 0;
+}
+
+/* A policy shows its verdict the way UniFi shows one: accept in green,
+ * reject and drop in red. The open list stays neutral. */
+body[data-page^="admin-network-firewall"] select:has(> option[value="ACCEPT"]:checked) {
+	color: var(--uf-green-text);
+}
+
+body[data-page^="admin-network-firewall"] select:has(> option[value="REJECT"]:checked),
+body[data-page^="admin-network-firewall"] select:has(> option[value="DROP"]:checked) {
+	color: var(--uf-red-text);
+}
+
+/* The zone matrix's policies keep room for their word when a narrow window
+ * squeezes the table ("a…" says nothing); the forwards wrap instead. */
+body[data-page^="admin-network-firewall"] #cbi-firewall-zone .td:is([data-name="input"], [data-name="output"], [data-name="forward"]) select {
+	min-width: 92px;
+}
+
+/* Rule tables: port forwards, traffic rules, NAT rules, IP sets
+ * ------------------------------------------------------------- */
+
+/* A rule's name labels its row, in UniFi's regular weight, and keeps a
+ * readable width; the action stays on one line. The match is the column
+ * that wraps. */
+body[data-page^="admin-network-firewall"] .cbi-section-table-row > .td.cbi-section-table-titles {
+	min-width: 140px;
+	color: var(--uf-text-1);
+	font-weight: 500;
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name="_target"],
+body[data-page^="admin-network-firewall"] .td[data-name="_dest"] {
+	white-space: nowrap;
+}
+
+/* The match is a sentence: the protocol on one line, "From zone" and "To
+ * zone" side by side under it, and anything further on lines of its own. */
+body[data-page^="admin-network-firewall"] .td[data-name="_match"] > small,
+body[data-page^="admin-network-firewall"] .td[data-name="_dest"] > small {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 2px 14px;
+	color: var(--uf-text-3);
+	font-size: 12px;
+	line-height: 22px;
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name="_match"] > small > br,
+body[data-page^="admin-network-firewall"] .td[data-name="_dest"] > small > br {
+	display: none;
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name="_match"] > small > span {
+	flex: 1 0 100%;
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name="_match"] > small > span:has(> .zonebadge) {
+	flex: 0 1 auto;
+}
+
+/* Values in primary text, as in UniFi's detail rows; blue is for links.
+ * A value never breaks inside ("27015-" over "27030"). */
+body[data-page^="admin-network-firewall"] .td[data-name^="_"] var {
+	color: var(--uf-text-1);
+	font-weight: 500;
+	white-space: nowrap;
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name^="_"] var[data-tooltip],
+body[data-page^="admin-network-firewall"] .td[data-name^="_"] var.cbi-tooltip-container {
+	border-bottom-color: var(--uf-text-4);
+}
+
+/* Values quoted inside a value's tooltip are the tip's text, not ink. */
+body[data-page^="admin-network-firewall"] .td[data-name^="_"] .cbi-tooltip var {
+	color: inherit;
+}
+
+/* The verdict opens the action as a status pill: accept green, reject and
+ * drop red, rewrites and the rest blue. */
+body[data-page^="admin-network-firewall"] .td[data-name="_target"] var[data-tooltip],
+body[data-page^="admin-network-firewall"] .td[data-name="_dest"] var[data-tooltip] {
+	display: inline-flex;
+	align-items: center;
+	height: 20px;
+	margin-right: 2px;
+	padding: 0 8px;
+	border: 0;
+	border-radius: 10px;
+	background: var(--uf-blue-soft);
+	color: var(--uf-blue);
+	font-size: 12px;
+	font-weight: 500;
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name^="_"] var[data-tooltip="ACCEPT"] {
+	background: rgba(var(--uf-green-rgb), .14);
+	color: var(--uf-green-text);
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name^="_"] var[data-tooltip="REJECT"],
+body[data-page^="admin-network-firewall"] .td[data-name^="_"] var[data-tooltip="DROP"] {
+	background: rgba(var(--uf-red-rgb), .12);
+	color: var(--uf-red-text);
+}
+
+/* A disabled entry greys out, like an offline client in UniFi's lists. */
+body[data-page^="admin-network-firewall"] .cbi-section-table-row:has(> .td[data-name="enabled"] input:not(:checked)) > .td:not(.cbi-section-actions):not([data-name="enabled"]) {
+	color: var(--uf-text-3);
+}
+
+body[data-page^="admin-network-firewall"] .cbi-section-table-row:has(> .td[data-name="enabled"] input:not(:checked)) > .td:not(.cbi-section-actions):not([data-name="enabled"]) > * {
+	opacity: .55;
+}
+
+/* LuCI flags a rule with a schedule by a warning emoji; a clock says it. */
+body[data-page^="admin-network-firewall"] .td[data-name="enabled"] .cbi-checkbox > label.cbi-tooltip-container {
+	position: relative;
+	display: inline-flex;
+	width: 16px;
+	height: 16px;
+	font-size: 0;
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name="enabled"] .cbi-checkbox > label.cbi-tooltip-container::before {
+	content: "";
+	width: 16px;
+	height: 16px;
+	background: var(--uf-orange);
+	-webkit-mask: var(--uf-firewall-i-clock) center / contain no-repeat;
+	mask: var(--uf-firewall-i-clock) center / contain no-repeat;
+}
+
+body[data-page^="admin-network-firewall"] .td[data-name="enabled"] .cbi-checkbox > label.cbi-tooltip-container > .cbi-tooltip {
+	top: calc(100% + 4px);
+}
+
+/* IP sets: the set's name leads, addresses and fields are code. */
+body[data-page="admin-network-firewall-ipsets"] .td[data-name="name"] {
+	color: var(--uf-text-1);
+	font-weight: 500;
+}
+
+body[data-page="admin-network-firewall-ipsets"] .td:is([data-name="match"], [data-name="entry"], [data-name="loadfile"]) {
+	font-family: var(--uf-mono);
+	font-size: 12px;
+	word-spacing: .4em;
+}
+
+/* "none" is a word, not a value: quiet and in the text face. */
+body[data-page="admin-network-firewall-ipsets"] .td:is([data-name="entry"], [data-name="loadfile"]) > em {
+	color: var(--uf-text-3);
+	font-family: var(--uf-font);
+	font-size: 13px;
+	font-style: normal;
+	word-spacing: normal;
+}
+
+/* "Your device runs firewall4." is a note, not a card of its own. */
+body[data-page^="admin-network-firewall"] #cbi-firewall-fwver {
+	position: relative;
+	padding: 10px 16px 10px 42px;
+	background: var(--uf-blue-soft);
+	border-color: rgba(var(--uf-blue-rgb), .3);
+}
+
+body[data-page^="admin-network-firewall"] #cbi-firewall-fwver::before {
+	content: "";
+	position: absolute;
+	top: 11px;
+	left: 16px;
+	width: 18px;
+	height: 18px;
+	background: var(--uf-blue);
+	-webkit-mask: var(--uf-i-info) center / contain no-repeat;
+	mask: var(--uf-i-info) center / contain no-repeat;
+}
+
+body[data-page^="admin-network-firewall"] #cbi-firewall-fwver > .cbi-section-descr {
+	margin: 0;
+	color: var(--uf-text-1);
+}
+
+/* Status > Firewall: the nftables ruleset
+ * --------------------------------------- */
+
+/* The ruleset has no heading of its own; the table's name is the title. */
+body[data-page^="admin-status-nftables"] .nft-table > h3 {
+	margin: 0 0 16px;
+	font-size: 20px;
+	line-height: 28px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-table ~ .nft-table {
+	margin-top: 32px;
+}
+
+/* One card per chain. */
+body[data-page^="admin-status-nftables"] .nft-chains {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-chain {
+	min-width: 0;
+	padding: 16px 20px 10px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+body[data-page^="admin-status-nftables"] .nft-chain > h4 {
+	margin: 0 0 10px;
+	font-size: 14px;
+	line-height: 20px;
+}
+
+/* A base chain's hook and policy: a line of label/value pairs. */
+body[data-page^="admin-status-nftables"] .nft-chain > h4:has(+ .nft-chain-hook) {
+	margin-bottom: 2px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-chain-hook > ul {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 2px 20px;
+	margin: 0 0 10px;
+	list-style: none;
+	color: var(--uf-text-3);
+	font-size: 12px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-chain-hook li {
+	line-height: 18px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-chain-hook strong {
+	color: var(--uf-text-1);
+	font-weight: 600;
+}
+
+/* The column titles repeat on every card; keep them quiet. */
+body[data-page^="admin-status-nftables"] .nft-rules .th {
+	padding-top: 4px;
+	padding-bottom: 6px;
+	color: var(--uf-text-3);
+	font-size: 12px;
+	font-weight: 500;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .td {
+	padding: 5px 8px !important; /* over the view's own */
+	line-height: 24px;
+	vertical-align: middle;
+}
+
+/* An empty chain says so in one quiet line, without column titles. */
+body[data-page^="admin-status-nftables"] .nft-rules:has(.td[colspan]) .table-titles {
+	display: none;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .td[colspan] {
+	padding: 0 0 6px !important; /* over the view's own */
+	border-top: 0;
+	text-align: left !important; /* over .center */
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .td[colspan] > em {
+	color: var(--uf-text-3);
+	font-style: normal;
+}
+
+/* Matches are filled chips, actions outlined ones: the two columns read
+ * apart at a glance. */
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge {
+	display: inline-block;
+	margin: 2px 4px 2px 0;
+	padding: 1px 8px;
+	border: 0;
+	border-radius: var(--uf-radius-sm);
+	background: var(--uf-field);
+	color: var(--uf-text-2);
+	font-size: 12px;
+	line-height: 18px;
+	vertical-align: middle;
+}
+
+/* A long match (a set of ICMP types) breaks across lines like a text
+ * highlight instead of dropping whole below the tags before it; each line
+ * keeps the chip's padding, so the text never touches its edge. */
+body[data-page^="admin-status-nftables"] .nft-rules .td:first-child > .ifacebadge {
+	display: inline;
+	padding: 3px 8px;
+	-webkit-box-decoration-break: clone;
+	box-decoration-break: clone;
+}
+
+/* A hovered row takes the fields' grey, the chips' own fill: there the
+ * chips take the card's colour, or they vanish into the row. */
+body[data-page^="admin-status-nftables"] .nft-rules .tr:hover > .td:not(:last-child) .ifacebadge:not(.nft-counter, .nft-comment) {
+	background: var(--uf-surface);
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .td:last-child .ifacebadge {
+	background: transparent;
+	box-shadow: inset 0 0 0 1px var(--uf-border-strong);
+	color: var(--uf-text-1);
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge var,
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge em {
+	color: var(--uf-text-3);
+	font-style: normal;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge strong {
+	color: var(--uf-text-1);
+	font-weight: 600;
+}
+
+/* Byte counters and rule comments lead a row as small quiet tags. */
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge.nft-counter,
+body[data-page^="admin-status-nftables"] .nft-rules .ifacebadge.nft-comment {
+	background: transparent;
+	box-shadow: inset 0 0 0 1px var(--uf-border);
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .nft-counter > var {
+	font-variant-numeric: tabular-nums;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .nft-comment {
+	padding: 1px 6px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .nft-comment:hover > var {
+	color: var(--uf-blue);
+}
+
+/* A set spells out all its members, not the first 200px and an ellipsis;
+ * the braces and the tooltip repeating the list go. */
+body[data-page^="admin-status-nftables"] .nft-rules .nft-set,
+body[data-page^="admin-status-nftables"] .nft-rules .nft-list {
+	display: inline;
+	font-size: 0;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .nft-set-items,
+body[data-page^="admin-status-nftables"] .nft-rules .nft-list-items {
+	display: inline;
+	max-width: none;
+	overflow: visible;
+	font-size: 12px;
+}
+
+body[data-page^="admin-status-nftables"] .nft-rules .nft-set > .cbi-tooltip,
+body[data-page^="admin-status-nftables"] .nft-rules .nft-list > .cbi-tooltip {
+	display: none;
+}
+
+/* A verdict map's branches, one per line: "established: Accept packet". */
+body[data-page^="admin-status-nftables"] .nft-rules .td > div:not([class]) {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--uf-text-3);
+	font-size: 12px;
+}
+
+/* The legacy iptables listing (Status > Firewall > iptables), card per
+ * chain as well. */
+body[data-page="admin-status-nftables-iptables"] [data-table] > h3 {
+	margin: 20px 0 12px;
+}
+
+body[data-page="admin-status-nftables-iptables"] [data-chain] {
+	margin-bottom: 16px;
+	padding: 16px 20px 10px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+body[data-page="admin-status-nftables-iptables"] [data-chain] > h4 {
+	margin-bottom: 8px;
+	font-size: 14px;
+}
+
+body[data-page="admin-status-nftables-iptables"] [data-chain] > h4 em {
+	font-style: normal;
+}
+
+body[data-page="admin-status-nftables-iptables"] [data-chain] > h4 > span {
+	color: var(--uf-text-3);
+	font-size: 12px;
+	font-weight: 400;
+}
+
+body[data-page="admin-status-nftables-iptables"] [data-chain] > h4 > span em {
+	color: var(--uf-text-1);
+	font-weight: 500;
+}
+
+/* The view underlines jumps and tooltips in pure blue; use the accent. */
+body[data-page="admin-status-nftables-iptables"] span.jump,
+body[data-page="admin-status-nftables-iptables"] .cbi-tooltip-container {
+	border-bottom-color: var(--uf-blue-line);
+}
+
+body[data-page="admin-status-nftables-iptables"] [data-chain] .td {
+	padding-top: 6px;
+	padding-bottom: 6px;
+}
+
+body[data-page="admin-status-nftables-iptables"] .td .target {
+	color: var(--uf-text-1);
+	font-weight: 500;
+}
+
+body[data-page="admin-status-nftables-iptables"] .td .target.jump,
+body[data-page="admin-status-nftables-iptables"] span.jump {
+	color: var(--uf-blue);
+}
+
+body[data-page="admin-status-nftables-iptables"] .td[data-title="Pkts."],
+body[data-page="admin-status-nftables-iptables"] .td[data-title="Traffic"] {
+	font-variant-numeric: tabular-nums;
+}
+
+body[data-page="admin-status-nftables-iptables"] .td[data-title="Options"] {
+	font-family: var(--uf-mono);
+	font-size: 12px;
+}
+
+body[data-page="admin-status-nftables-iptables"] .td .ifacebadge {
+	padding: 1px 8px;
+	font-size: 12px;
+}
+
+/* An empty chain: its title and one quiet line. */
+body[data-page="admin-status-nftables-iptables"] [data-empty="true"] .table-titles {
+	display: none;
+}
+
+body[data-page="admin-status-nftables-iptables"] [data-empty="true"] .tr.placeholder {
+	height: auto;
+}
+
+body[data-page="admin-status-nftables-iptables"] [data-empty="true"] .tr.placeholder > .td {
+	position: static;
+	padding: 0 0 6px;
+	text-align: left;
+}
+
+/* Without NET_ADMIN, or before fw4 runs, there is nothing to list. */
+body[data-page^="admin-status-nftables"] #view > em {
+	display: block;
+	padding: 48px 20px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+	color: var(--uf-text-3);
+	font-style: normal;
+	text-align: center;
+}
+
+/* Phones
+ * ------ */
+
+@media screen and (max-width: 640px) {
+	/* Each rule is a card of its own here, and its name the card's title. */
+	body[data-page^="admin-network-firewall"] .cbi-section-table-row > .td.cbi-section-table-titles {
+		font-size: 14px;
+		font-weight: 600;
+	}
+
+	/* The match needs the width; action and switch share a line under it,
+	 * the action wrapping rather than cut short. */
+	body[data-page^="admin-network-firewall"] .td[data-name="_match"] {
+		flex-basis: 100%;
+	}
+
+	body[data-page^="admin-network-firewall"] .td[data-name="_target"],
+	body[data-page^="admin-network-firewall"] .td[data-name="_dest"] {
+		flex: 1 1 60%;
+		white-space: normal;
+	}
+
+	body[data-page^="admin-network-firewall"] .td[data-name="_target"] ~ .td[data-name="enabled"],
+	body[data-page^="admin-network-firewall"] .td[data-name="_dest"] ~ .td[data-name="enabled"] {
+		flex: 1 1 30%;
+	}
+
+	/* The three policies of a zone side by side. */
+	body[data-page="admin-network-firewall-zones"] .td:is([data-name="input"], [data-name="output"], [data-name="forward"]) {
+		flex: 1 1 30%;
+		min-width: 0;
+	}
+
+	body[data-page^="admin-network-firewall"] #cbi-firewall-zone .td:is([data-name="input"], [data-name="output"], [data-name="forward"]) select {
+		min-width: 0;
+	}
+
+	/* A long address may break here rather than push the card sideways. */
+	body[data-page^="admin-network-firewall"] .td[data-name^="_"] var {
+		white-space: normal;
+	}
+
+	/* The column's name over a code cell stays in the text face. */
+	body[data-page="admin-network-firewall-ipsets"] .td:is([data-name="match"], [data-name="entry"], [data-name="loadfile"])::before {
+		font-family: var(--uf-font);
+		word-spacing: normal;
+	}
+
+	body[data-page="admin-network-firewall-zones"] .td[data-name="_info"],
+	body[data-page="admin-network-firewall-zones"] .td[data-name="masq"] {
+		flex-basis: 100%;
+	}
+
+	body[data-page^="admin-status-nftables"] .nft-chain,
+	body[data-page="admin-status-nftables-iptables"] [data-chain] {
+		padding: 14px 14px 8px;
+	}
+
+	/* The toolbar wraps here, so it no longer shares a line with the
+	 * table's title. */
+	body[data-page="admin-status-nftables-iptables"] #view > .right {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		margin-bottom: 8px !important; /* over the view's inline -1.5em */
+	}
+
+	body[data-page="admin-status-nftables-iptables"] #view > .right > .cbi-button {
+		flex: 1 1 40%;
+	}
+
+	body[data-page="admin-status-nftables-iptables"] .td[data-title="Options"]::before {
+		font-family: var(--uf-font);
+	}
+
+	/* A rule's matches over its actions, rather than two thin columns. */
+	body[data-page^="admin-status-nftables"] .nft-rules .td {
+		flex: 1 1 100%;
+		padding: 2px 0 !important; /* over the view's own */
+	}
+
+	body[data-page^="admin-status-nftables"] .nft-rules .td:last-child:not([colspan]) {
+		padding-left: 16px !important; /* over the view's own */
+	}
+}
+/* ==== end page: firewall ==== */

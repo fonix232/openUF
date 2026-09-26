@@ -1,0 +1,93 @@
+/* Sign-in
+ * ------- */
+
+body.uf-blank {
+	display: flex;
+	flex-direction: column;
+	background: var(--uf-topbar);
+}
+
+.uf-login {
+	flex: 1 0 auto;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	padding: 48px 16px;
+}
+
+.uf-login-card {
+	width: 100%;
+	max-width: 380px;
+	padding: 32px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius-lg);
+	box-shadow: 0 1px 2px rgba(0, 0, 0, .04), 0 16px 40px -20px rgba(0, 0, 0, .2);
+}
+
+.uf-login-brand {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 28px;
+	color: var(--uf-text-3);
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.uf-login-brand .uf-appicon {
+	width: 28px;
+	height: 28px;
+	background: radial-gradient(circle, var(--uf-blue) 0 4.5px, transparent 5px 7.5px, var(--uf-blue) 8px);
+}
+
+.uf-login-title {
+	margin: 0 0 2px;
+	font-size: 22px;
+	line-height: 30px;
+	overflow-wrap: anywhere;
+}
+
+.uf-login-sub {
+	margin-bottom: 24px;
+	color: var(--uf-text-3);
+}
+
+.uf-field {
+	display: block;
+	margin-bottom: 16px;
+	cursor: default;
+}
+
+.uf-field > span {
+	display: block;
+	margin-bottom: 6px;
+	color: var(--uf-text-2);
+	font-size: 12px;
+	font-weight: 500;
+}
+
+.uf-field > input {
+	width: 100%;
+	height: 40px;
+	font-size: 14px;
+}
+
+.uf-login-submit {
+	width: 100%;
+	height: 40px !important;
+	margin-top: 8px;
+	font-size: 14px !important;
+}
+
+.uf-login .alert-message {
+	margin-bottom: 20px;
+}
+
+.uf-login-foot {
+	margin: 20px 0 0;
+	color: var(--uf-text-3);
+	font-size: 12px;
+	text-align: center;
+}

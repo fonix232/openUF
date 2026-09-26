@@ -1,0 +1,50 @@
+/*!
+ * luci-theme-openuf
+ *
+ * A LuCI theme modelled on the UniFi Network Application 10.x: a pale app
+ * bar with app tabs, a white icon rail, a secondary navigation column, and
+ * white cards on a near-white canvas; one accent blue, hairline dividers,
+ * outlined secondary buttons and 13px type throughout.
+ *
+ * The palette was sampled from screenshots of UniFi Network 10.4 (see
+ * docs/img in openUF) and completed from the UniFi design language.
+ *
+ * Selector coverage follows luci-theme-bootstrap, which LuCI's own views are
+ * written against:
+ *   Copyright 2012 Nut & Bolt, David Menting <david@nut-bolt.nl>
+ *   Copyright 2011 Twitter, Inc
+ * Licensed under the Apache License v2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
+ */
+
+@use 'base/tokens';
+@use 'base/reset';
+@use 'base/typography';
+@use 'base/app-bar';
+@use 'base/shell';
+@use 'base/tabs';
+@use 'base/sections';
+@use 'base/form-rows';
+@use 'base/controls';
+@use 'base/buttons';
+@use 'base/dropdowns';
+@use 'base/tables';
+@use 'base/feedback';
+@use 'base/badges';
+@use 'base/dialogs';
+@use 'base/motion';
+@use 'base/fade';
+@use 'base/file-browser';
+@use 'base/page-touches';
+@use 'base/sign-in';
+@use 'base/narrow';
+@use 'pages/dashboard';
+@use 'pages/status';
+@use 'pages/network';
+@use 'pages/firewall';
+@use 'pages/system';
+@use 'pages/usteer';
+@use 'pages/uhttpd';
+@use 'pages/switch';
+@use 'pages/ports';
+@use 'pages/openuf-theme';
