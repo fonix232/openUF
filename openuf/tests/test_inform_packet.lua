@@ -4,7 +4,7 @@
 OPENUF_TEST_MODE = true
 dofile("src/lib/lib.lua")	-- needed by announce (loaded by inform)
 
-local crypto = dofile("src/crypto.lua")
+local crypto = dofile("src/unifi/crypto.lua")
 local state  = dofile("src/state.lua")
 local inform = dofile("src/inform.lua")
 local cjson  = require("cjson")
@@ -49,7 +49,7 @@ end
 -- test_ucihelper.lua's, including option-level delete and cursor:get).
 -- Returns the ucihelper module and the backing db table.
 local function new_apply_env()
-	local ucihelper = dofile("src/ucihelper.lua")
+	local ucihelper = dofile("src/openwrt/ucihelper.lua")
 	local db = {}
 	local section_order = {}
 	local cursor = {}
@@ -3541,7 +3541,7 @@ return {
 		name = "inform: an unknown cmd, response type and field land in the ledger, redacted",
 		fn = function()
 			local orig = inform._unhandled
-			local u = dofile("src/unhandled.lua")
+			local u = dofile("src/unifi/unhandled.lua")
 			u._reset(false)
 			inform._unhandled = u
 			local st = sample_state({adopted = true})
@@ -3564,7 +3564,7 @@ return {
 		name = "inform: config keys no pass reads are ledgered, values redacted",
 		fn = function()
 			local orig = inform._unhandled
-			local u = dofile("src/unhandled.lua")
+			local u = dofile("src/unifi/unhandled.lua")
 			u._reset(false)
 			inform._unhandled = u
 			inform._report_dropped_keys("system_cfg",

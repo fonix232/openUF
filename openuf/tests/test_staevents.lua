@@ -1,7 +1,7 @@
--- Tests for src/staevents.lua (the controller's STA_ASSOC_TRACKER events).
+-- Tests for src/unifi/staevents.lua (the controller's STA_ASSOC_TRACKER events).
 -- Run from project root: lua tests/run_tests.lua
 
-local ev = dofile("src/staevents.lua")
+local ev = dofile("src/unifi/staevents.lua")
 
 local A = "aa:bb:cc:00:00:01"
 local B = "aa:bb:cc:00:00:02"
@@ -134,7 +134,7 @@ return {
 	{
 		name = "dnswatch: remove drops the DNS-answer table",
 		fn = function()
-			local dw = dofile("src/dnswatch.lua")
+			local dw = dofile("src/openwrt/dnswatch.lua")
 			local cmds = {}
 			dw._exec = function(c) cmds[#cmds + 1] = c return 0 end
 			dw.remove()

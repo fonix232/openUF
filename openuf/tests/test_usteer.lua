@@ -1,10 +1,10 @@
--- Tests for src/usteer.lua (Band Steering via the usteer daemon).
+-- Tests for src/openwrt/usteer.lua (Band Steering via the usteer daemon).
 -- Run from project root: lua tests/run_tests.lua
 --
 -- Uses the same in-memory mock UCI cursor shape as test_ucihelper.lua
 -- (cursor:set/get/commit).
 
-local usteer = dofile("src/usteer.lua")
+local usteer = dofile("src/openwrt/usteer.lua")
 
 local function new_mock_uci()
 	local db = {}  -- db[config][section] = { [".name"]=.., [".type"]=.., key=val, ... }

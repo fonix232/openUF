@@ -1,7 +1,7 @@
--- Tests for src/sysinfo.lua (/proc and iw parsing).
+-- Tests for src/openwrt/sysinfo.lua (/proc and iw parsing).
 -- Run from project root: lua tests/run_tests.lua
 
-local sysinfo = dofile("src/sysinfo.lua")
+local sysinfo = dofile("src/openwrt/sysinfo.lua")
 
 -- Fixture file loader
 local function fixture(name)

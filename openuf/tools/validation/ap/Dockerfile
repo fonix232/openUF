@@ -89,9 +89,9 @@ RUN ln -sf /usr/share/openuf/hook/syswrapper.sh /usr/bin/syswrapper.sh \
     && mkdir -p /etc/openuf /var/log \
     && echo 'config.debug_dump_file = "/var/log/openuf-informs.log"' > /etc/openuf/local.lua \
     && sed -i 's/lan_cpueth\t= "eth1"/lan_cpueth\t= "eth0"/' \
-        /usr/share/openuf/modelmap/generic-dualband-ap.lua \
+        /usr/share/openuf/openwrt/modelmap/generic-dualband-ap.lua \
     && sed -i 's/{idx = 2, ifname = "eth1"}/{idx = 2, ifname = "eth0"}/' \
-        /usr/share/openuf/modelmap/generic-dualband-ap.lua \
+        /usr/share/openuf/openwrt/modelmap/generic-dualband-ap.lua \
     && printf '1735689600 ca:fe:be:ef:00:01 192.168.1.101 printer *\n' > /tmp/dhcp.leases
 
 # generic-dualband-ap.lua assumes real hardware's switch topology (eth0=WAN,

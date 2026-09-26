@@ -1,9 +1,9 @@
--- Tests for src/unhandled.lua (the ledger of unhandled protocol surfaces).
+-- Tests for src/unifi/unhandled.lua (the ledger of unhandled protocol surfaces).
 -- Run from project root: lua tests/run_tests.lua
 
 OPENUF_TEST_MODE = true
 local cjson = require("cjson")
-local unhandled = dofile("src/unhandled.lua")
+local unhandled = dofile("src/unifi/unhandled.lua")
 
 local FILE = "/tmp/openuf_test_unhandled.json"
 

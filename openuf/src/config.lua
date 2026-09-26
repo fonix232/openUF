@@ -83,7 +83,7 @@ end
 
 M._dofile = dofile
 M._run = function(name) return require("loader").run(name) end
-M._exists_map = function(name) return require("loader").path("modelmap." .. name) ~= nil end
+M._exists_map = function(name) return require("loader").path("openwrt.modelmap." .. name) ~= nil end
 
 -- One raw UCI value as its option's type; the default for anything unset or
 -- unreadable (a typo must not take a feature away silently, so it is logged).
@@ -162,7 +162,7 @@ end
 function M.load(cursor)
 	local s = M.section(cursor)
 	local config = M.options(s)
-	local dev = M._run("modelmap." .. M.modelmap_name(s.modelmap))
+	local dev = M._run("openwrt.modelmap." .. M.modelmap_name(s.modelmap))
 	if M._exists(M.LOCAL_FILE) then
 		local prev_dev, prev_config = rawget(_G, "dev"), rawget(_G, "config")
 		_G.dev, _G.config = dev, config

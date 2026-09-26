@@ -1,8 +1,8 @@
--- Tests for src/modelmatch.lua against the generated catalogue.
+-- Tests for src/unifi/modelmatch.lua against the generated catalogue.
 -- Run from project root: lua tests/run_tests.lua
 
-local match   = dofile("src/modelmatch.lua")
-local catalog = dofile("src/ufmodel/catalog.lua")
+local match   = dofile("src/unifi/modelmatch.lua")
+local catalog = dofile("src/unifi/ufmodel/catalog.lua")
 
 -- /etc/board.json as board.d wrote it on the two real APs this was built for.
 local E8450 = {   -- Linksys E8450: MT7622 2.4 GHz 4x4 n, MT7915 5 GHz 4x4 HE160, 4 LAN + WAN

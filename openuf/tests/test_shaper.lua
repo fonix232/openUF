@@ -1,4 +1,4 @@
--- Tests for src/shaper.lua ("WiFi Speed Limit" tc enforcement).
+-- Tests for src/openwrt/shaper.lua ("WiFi Speed Limit" tc enforcement).
 -- Run from project root: lua tests/run_tests.lua
 --
 -- Every command shape pinned here was checked against a real tc
@@ -6,7 +6,7 @@
 -- the explicit `quantum`, without which HTB warns about r2q. These tests
 -- pin the shape so a regression in it is visible.
 
-local shaper = dofile("src/shaper.lua")
+local shaper = dofile("src/openwrt/shaper.lua")
 
 -- Capture tc invocations instead of running them.
 local function with_shaper(fn)

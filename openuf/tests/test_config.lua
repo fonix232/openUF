@@ -67,7 +67,7 @@ return {
 			assert_eq(g.timezone, true, "timezone on")
 			assert_eq(g.ntp, false, "ntp off")
 			assert_eq(g.cron, true, "cron on")
-			local sysconf = dofile("src/sysconf.lua")
+			local sysconf = dofile("src/openwrt/sysconf.lua")
 			assert_false(sysconf.enabled(g, "ntp"), "sysconf reads the gate as meant")
 			assert_true(sysconf.enabled(g, "cron"), "and the other parts stay on")
 		end
@@ -114,7 +114,7 @@ return {
 			local before = rawget(_G, "config")
 			local dev, c = config.load(cursor({modelmap = "bench", l2guard = "0"}))
 			config._exists, config._dofile, config._exists_map, config._run = orig[1], orig[2], orig[3], orig[4]
-			assert_eq(loaded[1], "modelmap.bench", "model map first")
+			assert_eq(loaded[1], "openwrt.modelmap.bench", "model map first")
 			assert_eq(loaded[2], config.LOCAL_FILE, "then local.lua")
 			assert_eq(c.l2guard, false, "UCI applied")
 			assert_eq(c.debug_caps.fw_caps, 1, "local.lua set a research table")

@@ -10,7 +10,7 @@
 # introspect, so those commands would otherwise always fail).
 # Field names deliberately match the real iw(8) binary's own format
 # strings (confirmed via `strings /usr/sbin/iw`) -- see the accompanying
-# src/sysinfo.lua fix, which found the *parser* previously expected
+# src/openwrt/sysinfo.lua fix, which found the *parser* previously expected
 # names iw never actually prints.
 REAL_IW=/usr/sbin/iw
 
@@ -115,7 +115,7 @@ EOF
 		exit 0
 		;;
 	"wlan0 scan" | "wlan1 scan")
-		# Feeds src/sysinfo.lua's M.scan_table() -> inform.lua's
+		# Feeds src/openwrt/sysinfo.lua's M.scan_table() -> inform.lua's
 		# scan_radio_table -> controller's Insights/AirView/Environment tab
 		# (stat/rogueap). Fake neighboring BSSes so that pipeline can be
 		# proven end-to-end, same rationale as the fake stations above: this
@@ -170,7 +170,7 @@ EOF
 		exit 0
 		;;
 	"wlan0 info" | "wlan1 info")
-		# Feeds src/sysinfo.lua's M.radio_caps() -> inform.lua's per-radio
+		# Feeds src/openwrt/sysinfo.lua's M.radio_caps() -> inform.lua's per-radio
 		# capability fields (is_11ac/is_11ax/is_11be/has_dfs/has_ht160/nss)
 		# -> controller's Radios (channel-planning) tab MIMO/capability
 		# filters, which previously excluded the device entirely ("We

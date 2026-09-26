@@ -40,25 +40,25 @@ end)()
 -- in test environments that do not have luasocket installed.
 local cjson  = require("cjson")
 
-local crypto    = require("crypto")
+local crypto    = require("unifi.crypto")
 local state     = require("state")
-local sysinfo   = require("sysinfo")
-local lldp      = require("lldp")
-local ucihelper = require("ucihelper")
-local led       = require("led")
-local netconfig = require("netconfig")
-local firewall  = require("firewall")
-local usteer    = require("usteer")
-local switchvlan = require("switchvlan")
-local rrmscan   = require("rrmscan")
-local netmodel  = require("netmodel")
-local stun      = require("stun")
-local upgrade   = require("upgrade")
-local unhandled = require("unhandled")
-local sysconf   = require("sysconf")
-local l2guard   = require("l2guard")
-local staevents = require("staevents")
-local dnswatch  = require("dnswatch")
+local sysinfo   = require("openwrt.sysinfo")
+local lldp      = require("openwrt.lldp")
+local ucihelper = require("openwrt.ucihelper")
+local led       = require("openwrt.led")
+local netconfig = require("openwrt.netconfig")
+local firewall  = require("openwrt.firewall")
+local usteer    = require("openwrt.usteer")
+local switchvlan = require("openwrt.switchvlan")
+local rrmscan   = require("openwrt.rrmscan")
+local netmodel  = require("openwrt.netmodel")
+local stun      = require("unifi.stun")
+local upgrade   = require("openwrt.upgrade")
+local unhandled = require("unifi.unhandled")
+local sysconf   = require("openwrt.sysconf")
+local l2guard   = require("openwrt.l2guard")
+local staevents = require("unifi.staevents")
+local dnswatch  = require("openwrt.dnswatch")
 
 local M = {}
 
@@ -425,7 +425,7 @@ function M.parse_packet(raw, st)
 		-- ...otherwise fall back to the in-tree pure-Lua inflater (OpenWrt 25.12
 		-- ships no Lua zlib binding, so this is the normal path there).
 		if not done then
-			local inflate = require("inflate")
+			local inflate = require("unifi.inflate")
 			payload = inflate.zlib_decompress(payload)
 		end
 	end
@@ -4667,7 +4667,7 @@ if not OPENUF_TEST_MODE then
 		if type(config.inform_url) == "string" and config.inform_url ~= "" then
 			M._state.DEFAULT_INFORM_URL = config.inform_url
 		end
-		local ufhw = {uap = require("loader").run("ufmodel." .. dev.openuf.uap.ufmodel)}
+		local ufhw = {uap = require("loader").run("unifi.ufmodel." .. dev.openuf.uap.ufmodel)}
 		-- The options travel under dev.conf.config: every consumer reads
 		-- cfg.config.<option>.
 		dev.conf.config = config

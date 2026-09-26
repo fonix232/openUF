@@ -19,7 +19,7 @@ strip_tree() {
 	# Model maps are the files a user may still read on the device to see
 	# what a board's ports and radios are; their comments are the
 	# explanation, so they ship intact.
-	find "$dir" -name '*.lua' ! -path "$dir/modelmap/*" | while read -r f; do
+	find "$dir" -name '*.lua' ! -path "*/modelmap/*" | while read -r f; do
 		"$lua" "$TOOLS/strip.lua" "$f" > "$f.stripped" && mv "$f.stripped" "$f"
 	done
 	# Shell hooks: full-line comments only, and never line 1 -- the shebang is

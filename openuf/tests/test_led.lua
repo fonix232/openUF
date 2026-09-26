@@ -1,7 +1,7 @@
--- Tests for src/led.lua (locate LED sysfs control).
+-- Tests for src/openwrt/led.lua (locate LED sysfs control).
 -- Run from project root: lua tests/run_tests.lua
 
-local led = dofile("src/led.lua")
+local led = dofile("src/openwrt/led.lua")
 
 local function with_capture(fn, trigger)
 	local writes = {}

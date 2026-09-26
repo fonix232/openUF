@@ -14,9 +14,9 @@ local M = {}
 M._uci        = nil  -- override with a mock UCI table; nil = require("uci")
 -- "Multicast and Broadcast Blocker" enforcement (nftables). Injectable so
 -- tests can capture the reconciled rules without shelling out to real nft.
-M._bcfilter   = nil  -- nil = load src/bcfilter.lua on first use
+M._bcfilter   = nil  -- nil = load src/openwrt/bcfilter.lua on first use
 -- "WiFi Speed Limit" enforcement (tc). Injectable for the same reason.
-M._shaper     = nil  -- nil = load src/shaper.lua on first use
+M._shaper     = nil  -- nil = load src/openwrt/shaper.lua on first use
 M._run_cmd    = function(cmd) return os.execute(cmd) end
 
 -- Injectable: command execution that captures stdout (for read-only introspection,
@@ -87,8 +87,8 @@ local function get_sibling(name, override)
 	return (ok and type(mod) == "table") and mod or nil
 end
 
-local function get_bcfilter() return get_sibling("bcfilter", M._bcfilter) end
-local function get_shaper()   return get_sibling("shaper",   M._shaper)   end
+local function get_bcfilter() return get_sibling("openwrt.bcfilter", M._bcfilter) end
+local function get_shaper()   return get_sibling("openwrt.shaper",   M._shaper)   end
 
 -- Map a UCI wifi-device's channel number to the controller's band identifier.
 -- The real controller's radio_table schema requires this "radio" field
@@ -1358,7 +1358,7 @@ end
 --       that VLAN on a DSA board lives in the same bridge. opts.band_steering_active (boolean) forces 802.11k +
 --       BSS Transition on for every managed iface regardless of each WLAN's
 --       own bss_transition setting, since usteer (Band Steering) needs it
---       network-wide to function at all -- see src/usteer.lua. nil/false
+--       network-wide to function at all -- see src/openwrt/usteer.lua. nil/false
 --       leaves each vap's own setting in effect. opts.device_name is the
 --       controller-assigned device name, used as the WPS Device Name value
 --       when a vap has advertise_ap_name enabled ("Show Access Point Name in

@@ -1,8 +1,8 @@
--- Tests for src/crypto.lua (AES-128-CBC/GCM wrappers).
+-- Tests for src/unifi/crypto.lua (AES-128-CBC/GCM wrappers).
 -- Run from project root: lua tests/run_tests.lua
 -- Requires: lua-openssl or luacrypto (or the openssl CLI for CBC fallback)
 
-local crypto = dofile("src/crypto.lua")
+local crypto = dofile("src/unifi/crypto.lua")
 
 -- Fixed IV for deterministic tests
 local FIXED_IV = string.rep("\0", 16)

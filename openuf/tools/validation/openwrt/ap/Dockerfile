@@ -12,7 +12,7 @@ RUN mkdir -p /var/lock /var/run \
 COPY src/ /usr/share/openuf/
 COPY files/openuf.init /etc/init.d/openuf
 COPY files/openuf.config /etc/config/openuf
-COPY tools/validation/openwrt/ap/bench-modelmap.lua /usr/share/openuf/modelmap/bench.lua
+COPY tools/validation/openwrt/ap/bench-modelmap.lua /usr/share/openuf/openwrt/modelmap/bench.lua
 COPY tools/validation/openwrt/ap/network.bifrost /etc/config/network.bench
 COPY tools/validation/openwrt/ap/prepare.sh /usr/local/sbin/bench-prepare
 RUN chmod +x /usr/local/sbin/bench-prepare /etc/init.d/openuf /usr/share/openuf/hook/*.sh \

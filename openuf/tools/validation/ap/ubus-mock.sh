@@ -1,7 +1,7 @@
 #!/bin/sh
 # Fake `ubus` CLI for the disposable validation AP container ONLY.
 #
-# This is not part of openUF -- it exists purely so src/ucihelper.lua's
+# This is not part of openUF -- it exists purely so src/openwrt/ucihelper.lua's
 # get_ifname_for_radio()/get_ifname_for_vap() (which shell out to `ubus call
 # network.wireless status` to resolve a UCI radio name like "radio0" to its
 # live wireless netdev name like "wlan0") resolve to something real inside this
@@ -13,7 +13,7 @@
 # Only handles the one subcommand ucihelper.lua actually calls.
 #
 # The radio->netdev base mapping is static (radio0=wlan0, radio1=wlan1),
-# matching src/modelmap/generic-dualband-ap.lua's hwassign -- real hardware's
+# matching src/openwrt/modelmap/generic-dualband-ap.lua's hwassign -- real hardware's
 # phy->netdev mapping is likewise static per device. But the *interfaces* list
 # is built from whatever VAPs are currently provisioned, with the per-interface
 # "config": {"ssid": ...} that real netifd reports, because per-WLAN features

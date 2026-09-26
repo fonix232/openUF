@@ -1,7 +1,7 @@
--- Tests for src/netconfig.lua (IP Settings: DHCP/Static network config).
+-- Tests for src/openwrt/netconfig.lua (IP Settings: DHCP/Static network config).
 -- Run from project root: lua tests/run_tests.lua
 
-local netconfig = dofile("src/netconfig.lua")
+local netconfig = dofile("src/openwrt/netconfig.lua")
 
 local function with_capture(fn)
 	local cmds = {}

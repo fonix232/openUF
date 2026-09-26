@@ -1,7 +1,7 @@
--- Tests for src/upgrade.lua (OpenWrt upgrades through UniFi's upgrade flow).
+-- Tests for src/openwrt/upgrade.lua (OpenWrt upgrades through UniFi's upgrade flow).
 -- Run from project root: lua tests/run_tests.lua
 
-local upgrade = dofile("src/upgrade.lua")
+local upgrade = dofile("src/openwrt/upgrade.lua")
 
 -- Real `owut check` output from an E8450 on SNAPSHOT (2026-09-25).
 local CHECK_NEWER = [[

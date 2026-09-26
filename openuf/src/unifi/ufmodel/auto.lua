@@ -31,8 +31,8 @@ end
 
 local ok, uap = pcall(function()
 	local cjson = require("cjson")
-	local match = sibling("modelmatch.lua")
-	local catalog = sibling("ufmodel/catalog.lua")
+	local match = sibling("unifi/modelmatch.lua")
+	local catalog = sibling("unifi/ufmodel/catalog.lua")
 	local saved = read(STATE_FILE)
 	local ok_s, st = pcall(cjson.decode, saved or "")
 	local chosen = ok_s and type(st) == "table" and match.find(catalog, st.model) or nil
@@ -56,4 +56,4 @@ end)
 
 if ok and uap then return uap end
 if not ok then io.stderr:write("openuf: identity: auto match failed (" .. tostring(uap) .. "), using u6iw\n") end
-return sibling("ufmodel/u6iw.lua")
+return sibling("unifi/ufmodel/u6iw.lua")

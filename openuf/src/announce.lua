@@ -407,7 +407,7 @@ if not OPENUF_TEST_MODE then
 		local dev, config = require("config").load()
 
 		local ufhw = {}
-		ufhw.uap = require("loader").run("ufmodel." .. dev.openuf.uap.ufmodel)
+		ufhw.uap = require("loader").run("unifi.ufmodel." .. dev.openuf.uap.ufmodel)
 
 		local iface = dev.conf.net.lan_cpueth or "eth1"
 		-- A map may pin the identity (modelmap/auto.lua does, for boards whose

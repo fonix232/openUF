@@ -1,4 +1,4 @@
--- Tests for src/netmodel.lua (the controller's L2 model as one
+-- Tests for src/openwrt/netmodel.lua (the controller's L2 model as one
 -- vlan-filtering bridge, bridge takeover, rollback).
 -- Run from project root: lua tests/run_tests.lua
 --
@@ -7,7 +7,7 @@
 --                                 port 2 native VLAN 3 with VLAN 2 excluded
 --   system_cfg_10_6_mgmt_vlan.txt the same plus Management VLAN 50
 
-local netmodel = dofile("src/netmodel.lua")
+local netmodel = dofile("src/openwrt/netmodel.lua")
 local inform_switch_parse
 do
 	OPENUF_TEST_MODE = true

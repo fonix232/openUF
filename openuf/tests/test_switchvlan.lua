@@ -1,10 +1,10 @@
--- Tests for src/switchvlan.lua (per-port VLAN assignment, swconfig boards).
+-- Tests for src/openwrt/switchvlan.lua (per-port VLAN assignment, swconfig boards).
 -- Run from project root: lua tests/run_tests.lua
 --
 -- In-memory mock UCI cursor, same shape as test_ucihelper.lua's plus the
 -- cursor:get() switchvlan.lua needs for its no-op check.
 
-local switchvlan = dofile("src/switchvlan.lua")
+local switchvlan = dofile("src/openwrt/switchvlan.lua")
 
 local function new_mock_uci()
 	local db, order = {}, {}

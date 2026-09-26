@@ -1,4 +1,4 @@
--- Structural tests for every file in src/modelmap/.
+-- Structural tests for every file in src/openwrt/modelmap/.
 -- Run from project root: lua tests/run_tests.lua
 --
 -- Nothing loaded the modelmaps before this file existed, so a syntax error or
@@ -19,7 +19,7 @@ local lfs_ls = function(dir)
 	return names
 end
 
-local MODELMAP_DIR = "src/modelmap"
+local MODELMAP_DIR = "src/openwrt/modelmap"
 
 local function each_modelmap(fn)
 	local files = lfs_ls(MODELMAP_DIR)
@@ -46,8 +46,8 @@ return {
 					name .. ": names a ufmodel")
 				-- conf.lua dofiles "ufmodel/<name>.lua"; a typo here is a
 				-- startup crash on the device, not a warning.
-				local f = io.open("src/ufmodel/" .. ufmodel .. ".lua", "r")
-				assert_not_nil(f, name .. ": ufmodel file src/ufmodel/" .. ufmodel .. ".lua exists")
+				local f = io.open("src/unifi/ufmodel/" .. ufmodel .. ".lua", "r")
+				assert_not_nil(f, name .. ": ufmodel file src/unifi/ufmodel/" .. ufmodel .. ".lua exists")
 				if f then f:close() end
 			end)
 		end

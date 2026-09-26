@@ -1,8 +1,8 @@
--- Tests for src/l2guard.lua (the controller's ebtables.* rules in nft).
+-- Tests for src/openwrt/l2guard.lua (the controller's ebtables.* rules in nft).
 -- Run from project root: lua tests/run_tests.lua
 
 OPENUF_TEST_MODE = true
-local l2guard = dofile("src/l2guard.lua")
+local l2guard = dofile("src/openwrt/l2guard.lua")
 
 -- The ten rules exactly as AP2 received them on 2026-09-15.
 local CAPTURE = table.concat({

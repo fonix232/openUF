@@ -150,7 +150,7 @@ local function restore_wireless()
 end
 
 local function cmd_netmodel_restore()
-	local ok, nm = pcall(require, "netmodel")
+	local ok, nm = pcall(require, "openwrt.netmodel")
 	if not ok then
 		io.stderr:write("syswrapper: netmodel.lua not found\n")
 		return false

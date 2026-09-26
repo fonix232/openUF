@@ -1127,7 +1127,7 @@ return {
 			-- live iw fixture has negotiated channel 6, which must win.
 			-- Pre-fix the payload reported this 2.4GHz radio as "na" (5GHz).
 			inject_sysinfo(false, false, false, true)  -- with_radio_caps
-			local real_uci = dofile("src/ucihelper.lua")
+			local real_uci = dofile("src/openwrt/ucihelper.lua")
 			local sections = {
 				{[".name"] = "radio0", [".type"] = "wifi-device", channel = "auto"},
 				{[".name"] = "openuf_radio0_test", [".type"] = "wifi-iface",
@@ -1188,7 +1188,7 @@ return {
 				if cmd:find("phy#0 info", 1, true) then return fixture("iw_phy_info_5g.txt") end
 				return ""
 			end
-			local real_uci = dofile("src/ucihelper.lua")
+			local real_uci = dofile("src/openwrt/ucihelper.lua")
 			local sections = {
 				{[".name"] = "radio1", [".type"] = "wifi-device", channel = "auto"},
 			}

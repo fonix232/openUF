@@ -1,8 +1,8 @@
--- Tests for src/sysconf.lua (timezone, NTP, cron from the controller).
+-- Tests for src/openwrt/sysconf.lua (timezone, NTP, cron from the controller).
 -- Run from project root: lua tests/run_tests.lua
 
 OPENUF_TEST_MODE = true
-local sysconf = dofile("src/sysconf.lua")
+local sysconf = dofile("src/openwrt/sysconf.lua")
 
 -- A UCI mock with the same contract libuci-lua has for what this module
 -- uses: get() of a list option returns a table; set() with a table writes a

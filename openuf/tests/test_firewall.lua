@@ -1,7 +1,7 @@
--- Tests for src/firewall.lua (client block/unblock enforcement).
+-- Tests for src/openwrt/firewall.lua (client block/unblock enforcement).
 -- Run from project root: lua tests/run_tests.lua
 
-local firewall = dofile("src/firewall.lua")
+local firewall = dofile("src/openwrt/firewall.lua")
 
 local function with_capture(fn)
 	local cmds = {}

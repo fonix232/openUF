@@ -36,7 +36,7 @@ done
 
 # zlib is optional: OpenWrt 25.12 has no Lua zlib binding. openUF sends
 # uncompressed and decompresses controller responses with the in-tree
-# pure-Lua inflate (src/inflate.lua), so this is informational only.
+# pure-Lua inflate (src/unifi/inflate.lua), so this is informational only.
 if lua -e "require('zlib')" 2>/dev/null; then
 	ok "lua require('zlib') (optional; enables outbound compression)"
 else

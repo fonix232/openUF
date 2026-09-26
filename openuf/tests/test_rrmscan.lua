@@ -1,4 +1,4 @@
--- Tests for src/rrmscan.lua (802.11k client-assisted RF environment
+-- Tests for src/openwrt/rrmscan.lua (802.11k client-assisted RF environment
 -- enrichment). Run from project root: lua tests/run_tests.lua
 --
 -- Both fixtures are REAL captures taken 2026-09-02 off an Archer C5 and an
@@ -7,7 +7,7 @@
 -- flight, and ubus_get_clients_rrm.txt carries the four distinct RRM
 -- capability shapes actually seen on the network.
 
-local rrmscan = dofile("src/rrmscan.lua")
+local rrmscan = dofile("src/openwrt/rrmscan.lua")
 
 local function read_fixture(name)
 	local f = assert(io.open("tests/fixtures/" .. name, "r"))

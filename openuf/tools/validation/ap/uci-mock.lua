@@ -1,7 +1,7 @@
 --[[
 	Fake `uci` Lua module for the disposable validation AP container ONLY.
 
-	This is not part of openUF -- it exists purely so `src/ucihelper.lua`'s
+	This is not part of openUF -- it exists purely so `src/openwrt/ucihelper.lua`'s
 	`require("uci")` fallback resolves to something real inside this
 	hardware-less Alpine container, unblocking the parts of
 	PROTOCOL-VALIDATION.md that need a non-empty radio_table (SSID push, VLAN
@@ -18,7 +18,7 @@
 	exposed as a real requirable module instead of an in-process table.
 
 	Seeded with two wifi-device radio sections (radio0 = 2.4GHz, radio1 =
-	5GHz) matching src/modelmap/generic-dualband-ap.lua's
+	5GHz) matching src/openwrt/modelmap/generic-dualband-ap.lua's
 	`dev.openuf.uap.hwassign` -- the real target hardware's documented radio
 	naming convention -- so get_radio_table() returns real, non-empty
 	entries immediately, exactly as real OpenWrt's wireless driver would

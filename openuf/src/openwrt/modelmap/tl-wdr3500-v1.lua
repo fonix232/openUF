@@ -18,8 +18,8 @@
 	Even then, expect nftables NOT to fit alongside everything else (~490 KB
 	with its kernel modules). Without it these two features are unavailable and
 	openUF logs the fact rather than pretending:
-	  • client Block / Unblock       (src/firewall.lua)
-	  • Multicast and Broadcast Blocker (src/bcfilter.lua)
+	  • client Block / Unblock       (src/openwrt/firewall.lua)
+	  • Multicast and Broadcast Blocker (src/openwrt/bcfilter.lua)
 	Everything else -- adoption, SSID provisioning, 802.11r/k/v, Band Steering,
 	Minimum RSSI, WiFi Speed Limit -- works, given hostapd-utils, usteer,
 	ip-bridge and tc-tiny in the image.

@@ -107,7 +107,7 @@ stop_service() {
 	# Driven through rrmscan.lua rather than a pkill here so the subscribe
 	# pattern and the file path stay defined in exactly one place.
 	# Best-effort: this must not block a stop.
-	(cd "$OPENUF_DIR" 2>/dev/null && lua -e 'dofile("rrmscan.lua").collector_stop()') \
+	(cd "$OPENUF_DIR" 2>/dev/null && lua -e 'require("openwrt.rrmscan").collector_stop()') \
 		>/dev/null 2>&1
 	return 0
 }
