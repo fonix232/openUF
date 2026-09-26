@@ -7,11 +7,14 @@
  * design (luci-static/openuf/network/wireless-settings.css). LuCI writes a
  * row's facts as "Label: value" runs that CSS cannot tell apart, and puts
  * no column titles over these lists. This names each fact (data-uf-key),
- * sets the translated column titles on the list (--uf-th-*), and adds,
- * from the configuration, what a UniFi list shows but LuCI's rows leave
- * out: a radio's band and channel, a wireless network's security and the
- * network it serves. It also splits each station's rates from their PHY
- * details.
+ * sets the translated column titles on the list (--uf-th-*), words each
+ * radio's state (data-uf-state, data-uf-status), and adds, from the
+ * configuration, what a UniFi list shows but LuCI's rows leave out: a
+ * radio's band and channel, a wireless network's security and the network
+ * it serves. It also splits each station's rates from their PHY details,
+ * names the icon that disconnects a station, and marks the long names
+ * (SSIDs, hosts, their networks) that fade out at their end
+ * (data-uf-fade).
  *
  * It only adds attributes to LuCI's nodes (and takes back its own), never
  * moves, removes or re-renders them. LuCI redraws the rows every few
@@ -61,6 +64,21 @@ function prop(node, name, value) {
 		node.style.setProperty(name, value);
 }
 
+/* A long name fades out at its end and slides into view on hover:
+ * fade.js measures what is marked and rewrites the mark, so it is set
+ * only once. */
+function fade(node) {
+	if (node && !node.hasAttribute('data-uf-fade'))
+		node.setAttribute('data-uf-fade', '');
+}
+
+/* A run's value, without its label. */
+function value(item) {
+	const label = item.querySelector(':scope > strong');
+
+	return (label ? item.textContent.slice(label.textContent.length) : item.textContent).trim();
+}
+
 return baseclass.extend({
 	enhance() {
 		const view = document.querySelector('#view');
@@ -81,6 +99,13 @@ return baseclass.extend({
 		this.values = {
 			[_('Wireless is disabled')]: 'disabled',
 			[_('Device is not active')]: 'inactive'
+		};
+
+		/* A radio's state, as its chip reads. */
+		this.words = {
+			active: _('Active'),
+			down: _('Down'),
+			disabled: _('Disabled')
 		};
 
 		/* Tag after LuCI's redraw has settled, once per frame at most. */
@@ -116,8 +141,11 @@ return baseclass.extend({
 		}
 	},
 
-	/* "Label: value" runs (L.itemlist) and bare notes, named by label. */
+	/* "Label: value" runs (L.itemlist) and bare notes, named by label;
+	 * returns the first run of each name. */
 	tagItems(list) {
+		const found = {};
+
 		for (const item of list.children) {
 			let key = null;
 
@@ -126,10 +154,8 @@ return baseclass.extend({
 
 				key = label ? (this.labels[label.textContent.replace(/:\s*$/, '')] ?? 'other') : 'note';
 
-				if (key == 'info' || key == 'note') {
-					const value = label ? item.textContent.slice(label.textContent.length) : item.textContent;
-					key = this.values[value.trim()] ?? key;
-				}
+				if (key == 'note')
+					key = this.values[value(item)] ?? key;
 			}
 			else if (item.matches('em')) {
 				key = this.values[item.textContent.trim()] ?? 'note';
@@ -138,9 +164,13 @@ return baseclass.extend({
 				key = 'note';
 			}
 
-			if (key)
+			if (key) {
 				attr(item, 'data-uf-key', key);
+				found[key] = found[key] ?? item;
+			}
 		}
+
+		return found;
 	},
 
 	titles(node, titles) {
@@ -161,47 +191,88 @@ return baseclass.extend({
 		for (const row of section.querySelectorAll('.cbi-section-table-row[data-sid]')) {
 			const sid = row.getAttribute('data-sid');
 			const stat = row.querySelector('[data-name="_stat"]');
-			const type = uci.get('wireless', sid, '.type');
 
 			if (!stat)
 				continue;
 
-			if (type == 'wifi-device') {
-				const band = uci.get('wireless', sid, 'band');
-				const channel = uci.get('wireless', sid, 'channel');
-				const width = (uci.get('wireless', sid, 'htmode') || '').match(/(\d+)$/);
+			/* A radio names its hardware in <big>, except for the moment it
+			 * restarts. */
+			if (uci.get('wireless', sid, '.type') == 'wifi-device' || stat.querySelector(':scope > div > big'))
+				this.tagRadio(row, stat, sid);
+			else
+				this.tagNetwork(row, stat, sid);
+		}
+	},
 
-				attr(row, 'data-uf-row', 'radio');
-				attr(stat, 'data-uf-band', BANDS[band] ?? null);
-				attr(stat, 'data-uf-channel', channel ? '%s %s%s'.format(_('Channel'),
-					channel == 'auto' ? _('auto') : channel,
-					width ? ' · %s %s'.format(width[1], _('MHz')) : '') : null);
+	/* A radio heads its group: its state as a chip after its name, its
+	 * band and channel as configured, then its hardware and bitrate. While
+	 * it is up, the channel "auto" chose; while it is down, the configured
+	 * one. The stylesheet then leaves out LuCI's live runs, which say
+	 * nothing more. */
+	tagRadio(row, stat, sid) {
+		const badge = row.querySelector('[data-name="_badge"] .ifacebadge');
+		const hardware = stat.querySelector(':scope > div > big');
+		const band = uci.get('wireless', sid, 'band');
+		const channel = uci.get('wireless', sid, 'channel') || 'auto';
+		const width = (uci.get('wireless', sid, 'htmode') || '').match(/(\d+)$/);
+		const items = {};
 
-				/* Then the live channel says which one "auto" chose. */
-				attr(stat, 'data-uf-auto', channel == 'auto' ? '' : null);
+		for (const list of stat.querySelectorAll(':scope > div > div'))
+			Object.assign(items, this.tagItems(list));
 
-				for (const list of stat.querySelectorAll(':scope > div > div'))
-					this.tagItems(list);
-			}
-			else if (type == 'wifi-iface') {
-				/* "psk2+ccmp" is WPA2 with its cipher named. */
-				const enc = (uci.get('wireless', sid, 'encryption') || 'none').replace(/\+(tkip|ccmp|ccmp256|gcmp|gcmp256|aes)\b/g, '');
-				const label = ENCRYPTION[enc];
-				const networks = L.toArray(uci.get('wireless', sid, 'network')).join(', ');
+		let state = null;
 
-				attr(row, 'data-uf-row', 'network');
-				attr(stat, 'data-uf-network', networks || null);
-				attr(stat, 'data-uf-security', label ? (typeof(label) == 'function' ? label() : label) : null);
-				attr(stat, 'data-uf-open', enc == 'none' ? '' : null);
+		if (uci.get('wireless', sid, 'disabled') == '1')
+			state = 'disabled';
+		else if (items.channel || items.bitrate)
+			state = 'active';
+		else if (items.inactive)
+			state = 'down';
 
-				for (const list of stat.querySelectorAll(':scope > div'))
-					this.tagItems(list);
-			}
+		/* "6 (2.437 GHz)" is channel 6. */
+		const live = (state == 'active' && items.channel) ? value(items.channel).replace(/\s*\(.*$/, '') : null;
+
+		attr(row, 'data-uf-row', 'radio');
+		attr(row, 'data-uf-state', state);
+
+		if (badge)
+			attr(badge, 'data-uf-status', this.words[state] ?? null);
+
+		if (hardware)
+			attr(hardware, 'data-uf-bitrate', (state == 'active' && items.bitrate) ? value(items.bitrate) : null);
+
+		attr(stat, 'data-uf-band', BANDS[band] ?? null);
+		attr(stat, 'data-uf-channel', '%s %s%s'.format(_('Channel'),
+			channel != 'auto' ? channel : (live && live != '?') ? '%s (%s)'.format(live, _('auto')) : _('auto'),
+			width ? ' · %s %s'.format(width[1], _('MHz')) : ''));
+	},
+
+	tagNetwork(row, stat, sid) {
+		/* "psk2+ccmp" is WPA2 with its cipher named. */
+		const enc = (uci.get('wireless', sid, 'encryption') || 'none').replace(/\+(tkip|ccmp|ccmp256|gcmp|gcmp256|aes)\b/g, '');
+		const label = ENCRYPTION[enc];
+		const known = uci.get('wireless', sid) != null;
+		const networks = L.toArray(uci.get('wireless', sid, 'network')).join(', ');
+
+		attr(row, 'data-uf-row', 'network');
+		attr(stat, 'data-uf-network', networks || null);
+		attr(stat, 'data-uf-security', (known && label) ? (typeof(label) == 'function' ? label() : label) : null);
+		attr(stat, 'data-uf-open', (known && enc == 'none') ? '' : null);
+
+		for (const list of stat.querySelectorAll(':scope > div')) {
+			const items = this.tagItems(list);
+
+			fade(items.ssid);
+
+			/* The BSSID shows without its label; the label stays its tooltip. */
+			if (items.bssid)
+				attr(items.bssid, 'title', items.bssid.textContent.trim());
 		}
 	},
 
 	/* A rate is its figure, with the PHY details ("80 MHz, VHT-MCS 9, ...")
-	 * after it; name both, and keep the whole as the tooltip. */
+	 * after it; name both, and keep the whole as the tooltip. LuCI's
+	 * Disconnect button is drawn as an icon: its name stays with it. */
 	tagStations(table) {
 		for (const rates of table.querySelectorAll('.tr > .td > span:has(> span + br + span)')) {
 			rates.querySelectorAll(':scope > span').forEach((rate, i) => {
@@ -215,6 +286,17 @@ return baseclass.extend({
 				if (i == 0)
 					attr(rates, 'data-uf-phy', cut > 0 ? text.slice(cut + 2).replace(/, /g, ' · ') : '');
 			});
+		}
+
+		/* A station's host, and the network it is on ("HomeNet (phy1-ap0)"). */
+		for (const row of table.querySelectorAll('.tr:not(.table-titles, .placeholder)')) {
+			fade(row.querySelector(':scope > .td:nth-child(3)'));
+			fade(row.querySelector(':scope > .td:first-child .ifacebadge:not([data-signal]) > span'));
+		}
+
+		for (const button of table.querySelectorAll('.tr > .td > .cbi-button-remove')) {
+			attr(button, 'title', _('Disconnect'));
+			attr(button, 'aria-label', _('Disconnect'));
 		}
 	}
 });
