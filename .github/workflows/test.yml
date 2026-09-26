@@ -34,6 +34,10 @@ jobs:
           sudo ln -sf /usr/bin/lua5.1 /usr/local/bin/lua
           sh tools/strip-tree.sh --verify
 
+      - name: No stray globals
+        working-directory: openuf
+        run: sh tools/globals-check.sh
+
   simulate:
     name: End-to-end adoption simulation
     runs-on: ubuntu-latest
