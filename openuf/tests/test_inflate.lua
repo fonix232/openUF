@@ -1,12 +1,10 @@
--- Tests for src/inflate.lua (pure-Lua DEFLATE / zlib).
+-- Tests for src/unifi/inflate.lua (pure-Lua DEFLATE / zlib).
 -- Run from project root: lua tests/run_tests.lua
 --
 -- WHY THIS FILE EXISTS
 --
--- This is not a fallback path. inform.lua prefers a native `zlib` binding and
--- falls back to this module -- but OpenWrt 25.12 ships no Lua zlib binding, so
--- on every real target the fallback IS the path: every FLAG_COMPRESSED
--- response from the controller is decompressed by the code under test here. A
+-- OpenWrt ships no Lua zlib binding, so every FLAG_COMPRESSED response from
+-- the controller is decompressed by the code under test here. A
 -- bug in it fails the inform outright, and until now 225 lines of hand-written
 -- bitstream reader, Huffman table builder and dynamic-table decoder had no
 -- test of any kind.
@@ -22,7 +20,7 @@
 -- The block type of a stream is bits 1-2 of its first DEFLATE byte, i.e.
 -- (byte(data, 3) >> 1) % 4 counting the two-byte zlib header.
 
-local inflate = dofile("src/inflate.lua")
+local inflate = dofile("src/unifi/inflate.lua")
 
 -- Hex string -> binary. Fixtures are hex so a byte-level diff is readable.
 local function unhex(h)

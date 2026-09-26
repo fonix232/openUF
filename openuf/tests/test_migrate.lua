@@ -17,8 +17,11 @@ return {
 		fn = function()
 			local legacy, modelmap = migrate.read(read("tests/fixtures/conf.lua.legacy"))
 			assert_eq(modelmap, "generic-dualband-ap", "the model map it named")
+			local err = io.stderr
+			io.stderr = {write = function() end}
 			local o = migrate.options(legacy, modelmap)
-			assert_eq(o.modelmap, "generic-dualband-ap", "model map kept")
+			io.stderr = err
+			assert_nil(o.modelmap, "no model map option any more")
 			assert_eq(o.l2guard, "0", "switched off")
 			assert_eq(o.bridge_rollback_timeout, "60", "number")
 			assert_eq(o.system_ntp, "0", "one system part off")
@@ -56,16 +59,19 @@ return {
 				end,
 				commit = function(_, pkg) committed = (pkg == "openuf") end,
 			}
+			local err = io.stderr
+			io.stderr = {write = function() end}
 			local lf = "/tmp/openuf_test_local.lua"
 			os.remove(lf)
 			local orig = migrate._config.LOCAL_FILE
 			migrate._config.LOCAL_FILE = lf
 			local keys = migrate.apply("tests/fixtures/conf.lua.legacy", cursor)
 			migrate._config.LOCAL_FILE = orig
+			io.stderr = err
 			assert_eq(set[".main"], "openuf", "section created")
 			assert_eq(set.l2guard, "0", "option set")
 			assert_true(committed, "committed")
-			assert_true(#keys >= 6, "reported")
+			assert_true(#keys >= 5, "reported")
 			local f = io.open(lf, "r")
 			assert_not_nil(f, "local.lua written for the research table")
 			assert_true(f:read("*a"):find("config.debug_caps", 1, true) ~= nil, "with debug_caps")
@@ -81,7 +87,7 @@ return {
 			local o = migrate.options(legacy, mm)
 			assert_eq(o.rrm_enrichment, "0", "absent meant off")
 			assert_eq(o.use_only_unifi_wlan, "0", "absent meant off")
-			assert_nil(o.modelmap, "auto is the default")
+			assert_nil(o.modelmap, "never written")
 		end
 	},
 }

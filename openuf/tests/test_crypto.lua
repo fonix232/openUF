@@ -1,8 +1,8 @@
--- Tests for src/crypto.lua (AES-128-CBC/GCM wrappers).
+-- Tests for src/unifi/crypto.lua (AES-128-CBC/GCM wrappers).
 -- Run from project root: lua tests/run_tests.lua
--- Requires: lua-openssl or luacrypto (or the openssl CLI for CBC fallback)
+-- Requires: lua-openssl
 
-local crypto = dofile("src/crypto.lua")
+local crypto = dofile("src/unifi/crypto.lua")
 
 -- Fixed IV for deterministic tests
 local FIXED_IV = string.rep("\0", 16)
@@ -148,22 +148,8 @@ return {
 		end
 	},
 	{
-		-- The GCM path (the post-adoption inform crypto) needs a Lua binding
-		-- (lua-openssl/luacrypto). Locally a missing binding downgrades the
-		-- GCM tests to a LOUD skip; in CI OPENUF_REQUIRE_GCM=1 turns a
-		-- missing backend into a hard failure, so the pipeline can never
-		-- silently lose GCM coverage again (it did: for a long stretch no
-		-- environment executed the GCM code at all -- the old tests quietly
-		-- returned without asserting).
 		name = "crypto: GCM known-answer vector (16-byte IV, 40-byte AAD, cross-implementation)",
 		fn = function()
-			if not crypto.gcm_available() then
-				if os.getenv("OPENUF_REQUIRE_GCM") == "1" then
-					error("OPENUF_REQUIRE_GCM=1 but no GCM backend -- CI must install lua-openssl")
-				end
-				print("SKIP  GCM known-answer vector (no backend -- luarocks install --local openssl)")
-				return
-			end
 			-- Vector generated once with pycryptodome (an independent AES-GCM
 			-- implementation, the same library tools/test_controller.py runs
 			-- on), so a shared misunderstanding on both sides -- dropped AAD,
@@ -191,13 +177,6 @@ return {
 	{
 		name = "crypto: GCM decrypt fails on tampered AAD or tag",
 		fn = function()
-			if not crypto.gcm_available() then
-				if os.getenv("OPENUF_REQUIRE_GCM") == "1" then
-					error("OPENUF_REQUIRE_GCM=1 but no GCM backend -- CI must install lua-openssl")
-				end
-				print("SKIP  GCM tamper test (no backend)")
-				return
-			end
 			local key = crypto.DEFAULT_KEY
 			local pt  = "GCM secret body!"
 			local aad = string.rep("\1", 40)
@@ -212,36 +191,6 @@ return {
 			assert_error(function()
 				crypto.aes_gcm_decrypt(key, FIXED_IV, ct, bad_tag, aad)
 			end, "wrong tag must fail verification")
-		end
-	},
-	{
-		name = "crypto: GCM without a backend raises a clear error (never silent garbage)",
-		fn = function()
-			if crypto.gcm_available() then
-				print("SKIP  no-backend contract (a GCM backend is installed here)")
-				return
-			end
-			local ok, err = pcall(crypto.aes_gcm_encrypt,
-				crypto.DEFAULT_KEY, FIXED_IV, "x", string.rep("\1", 40))
-			assert_false(ok, "gcm_encrypt must error without a backend")
-			assert_contains(tostring(err), "no GCM backend", "actionable error message")
-		end
-	},
-	{
-		name = "crypto: module table has no top-level encrypt field (require self-collision guard)",
-		fn = function()
-			-- crypto.lua does pcall(require, "crypto") to detect a luacrypto
-			-- binding. Lua's default package.path includes "./?.lua", so when
-			-- this file runs from its own directory (e.g. /usr/share/openuf, exactly
-			-- how install.sh deploys it) with neither lua-openssl nor
-			-- luacrypto installed, require("crypto") can resolve right back to
-			-- this same crypto.lua instead of failing. The fix checks the
-			-- returned table has luacrypto's shape (an `encrypt` function)
-			-- before trusting it, so a self-match falls through to the
-			-- openssl(1) CLI backend instead of erroring. That guard only
-			-- works because this module's own public API has no top-level
-			-- `encrypt` field -- assert that invariant holds.
-			assert_true(crypto.encrypt == nil, "module has no top-level encrypt field")
 		end
 	},
 }

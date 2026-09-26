@@ -14,6 +14,4 @@ dev.conf.net = {
 	},
 }
 dev.conf.led = nil
-dev.openuf = {}
-dev.openuf.uap = {ufmodel = "u6iw", hwassign = {"radio0", "radio1"}}
 return dev

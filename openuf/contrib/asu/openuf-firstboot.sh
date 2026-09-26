@@ -19,7 +19,6 @@
 
 # ─── Settings ────────────────────────────────────────────────────────────────
 INFORM_URL=""                   # e.g. http://10.0.0.1:8080/inform (empty: http://unifi:8080/inform)
-MODELMAP="auto"                 # auto (derive from /etc/board.json) or a map name
 BRIDGE_BACKEND="auto"           # auto | vlan_filtering (controller owns the bridge) | bridges
 L2_ANNOUNCE="0"                 # 1: broadcast L2 discovery (the controller adopts over SSH)
 AP_MODE="1"                     # 1: a fresh board boots as an AP ready to adopt (below)
@@ -81,10 +80,9 @@ if [ "$AP_MODE" = 1 ] && [ ! -f /etc/openuf/state.json ] && [ ! -f /etc/openuf/a
 	uci -q commit wireless
 	date > /etc/openuf/ap-mode.done
 fi
-# An AP-mode DSA board: the controller owns the bridge from its first push
-# (netmodel.lua). A swconfig board has no per-socket netdevs to filter.
-if [ -f /etc/openuf/ap-mode.done ] && [ "$BRIDGE_BACKEND" = auto ] \
-		&& ! jsonfilter -i /etc/board.json -e '@.switch' >/dev/null 2>&1; then
+# An AP-mode board: the controller owns the bridge from its first push
+# (netmodel.lua).
+if [ -f /etc/openuf/ap-mode.done ] && [ "$BRIDGE_BACKEND" = auto ]; then
 	BRIDGE_BACKEND=vlan_filtering
 fi
 
@@ -93,7 +91,6 @@ fi
 if [ ! -f /etc/config/openuf ]; then
 	cat > /etc/config/openuf <<EOF
 config openuf 'main'
-	option modelmap '$MODELMAP'
 	option inform_url '${INFORM_URL:-http://unifi:8080/inform}'
 	option bridge_backend '$BRIDGE_BACKEND'
 	option l2_announce '$L2_ANNOUNCE'

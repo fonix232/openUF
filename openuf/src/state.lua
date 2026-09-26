@@ -8,9 +8,8 @@
 	-- so a field added by a caller and not added here is written to disk,
 	looks persisted in the file, and comes back nil on the next start. Ten of
 	them had accumulated that way, and the failures were all silent:
-	  • swvlan_backup, the per-port VLAN reversibility ledger -- so unticking
-	    Port VLAN after any restart restored nothing and left the switch on
-	    openUF's config for good;
+	  • the per-port VLAN reversibility ledger -- so unticking Port VLAN
+	    after any restart restored nothing and left openUF's config for good;
 	  • led_enabled, so the controller's Manage > LED toggle forgot itself on
 	    every reboot while the controller went on believing it took;
 	  • locating, so a Locate could never be cleaned up by a later start;
@@ -73,7 +72,7 @@ M.FIELDS = {
 	blocked_stas              = "table",
 	-- Identity, re-derived at startup by inform's _populate_net_info. Kept
 	-- here so the PREVIOUS run's values are still readable at that moment:
-	-- M.run compares the loaded mac against the live one to catch a modelmap
+	-- M.run compares the loaded mac against the live one to catch a layout
 	-- change that silently re-identifies an adopted device.
 	mac                       = "string",
 	ip                        = "string",
@@ -92,13 +91,10 @@ M.FIELDS = {
 	led_enabled               = "boolean",
 	locating                  = "boolean",
 	locate_prev_trigger       = "string",
-	-- The per-port VLAN reversibility ledger: the stock `ports` strings of
-	-- every switch_vlan section openUF overwrote. Without it restore() has
-	-- nothing to put back and the board keeps openUF's VLAN config forever.
-	swvlan_backup             = "table",
-	-- The DSA counterpart: br-lan's port list exactly as the board shipped
-	-- it, before per-port VLAN moved any socket out of it. Same job, and the
-	-- same "only record of what to put back".
+	-- The per-port VLAN reversibility ledger: br-lan's port list exactly as
+	-- the board shipped it, before per-port VLAN moved any socket out of it.
+	-- Without it restore() has nothing to put back and the board keeps
+	-- openUF's VLAN config forever.
 	dsa_brlan_ports           = "table",
 	-- netmodel.lua (vlan_filtering backend). pending is the rollback window
 	-- of the last applied network plan -- it must survive a restart, or a
@@ -116,7 +112,7 @@ M.FIELDS = {
 	-- so the channel is up before the first push after a reboot.
 	stun_url                  = "string",
 	-- The catalogue firmware version learned from the controller's own
-	-- `upgrade` commands, reported instead of the ufmodel's (upgrade.lua).
+	-- `upgrade` commands, reported instead of the identity's (upgrade.lua).
 	fw_version                = "string",
 	-- The controller's ebtables.* hardening intent ({bpdu, tagdrop, ifnames}),
 	-- so the nft rules l2guard builds from it come back after a reboot.

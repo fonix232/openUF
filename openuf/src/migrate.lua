@@ -12,14 +12,7 @@
 
 local M = {}
 
-local function sibling(name)
-	for _, p in ipairs({name .. ".lua", "src/" .. name .. ".lua"}) do
-		local f = io.open(p, "r")
-		if f then f:close(); return dofile(p) end
-	end
-	error("migrate: cannot find " .. name .. ".lua")
-end
-local config = sibling("config")
+local config = require("config")
 M._config = config
 
 -- The legacy options that were off when the line was missing: the old daemon
@@ -42,7 +35,12 @@ end
 -- UCI option -> string, for everything that differs from the defaults.
 function M.options(legacy, modelmap)
 	local out = {}
-	if modelmap and modelmap ~= "auto" then out.modelmap = modelmap end
+	-- Hand-written model maps are gone: every board is described from its
+	-- own board.json (openwrt/board.lua). Worth a line in the log.
+	if modelmap and modelmap ~= "auto" then
+		io.stderr:write("openuf: conf.lua named model map " .. modelmap .. "; the board is now "
+			.. "described automatically (openwrt/board.lua)\n")
+	end
 	for _, o in ipairs(config.OPTIONS) do
 		local name, kind, default = o[1], o[2], o[3]
 		local v = legacy[name]

@@ -1,11 +1,11 @@
--- Tests for src/ucihelper.lua (UCI-backed WiFi provisioning, VLAN tagging).
+-- Tests for src/openwrt/ucihelper.lua (UCI-backed WiFi provisioning, VLAN tagging).
 -- Run from project root: lua tests/run_tests.lua
 --
 -- Uses an in-memory mock UCI cursor (mirrors the subset of the real `uci`
 -- Lua binding's API that ucihelper.lua relies on: cursor:foreach/set/get/delete/commit,
 -- including option-level delete(config, section, option)).
 
-local ucihelper = dofile("src/ucihelper.lua")
+local ucihelper = dofile("src/openwrt/ucihelper.lua")
 
 local function new_mock_uci()
 	local db           = {}  -- db[config][section] = { [".name"]=.., [".type"]=.., key=val, ... }
@@ -99,7 +99,7 @@ end
 -- shell commands ucihelper._run_cmd was asked to execute (e.g. "wifi reload")
 -- -- capture, don't discard: the reload and its ordering are load-bearing.
 -- _bcfilter/_shaper are stubbed to no-ops BY DEFAULT: without stubs
--- apply_config get_sibling()-loads the real src/bcfilter.lua + shaper.lua
+-- apply_config get_sibling()-loads the real src/openwrt/bcfilter.lua + shaper.lua
 -- from disk, whose default _exec is os.execute -- i.e. this suite used to
 -- run real `nft`/`tc` commands on any Linux host. Tests that need to capture
 -- the enforcement calls override the stubs inside fn; every seam (including
@@ -2472,7 +2472,7 @@ return {
 			-- Speed Limit silently no-op while apply_config reports success.
 			-- The degradation must be loud (once), never silent. Fresh module
 			-- instance: the cjson probe is cached per instance.
-			local fresh = dofile("src/ucihelper.lua")
+			local fresh = dofile("src/openwrt/ucihelper.lua")
 			fresh._load_cjson = function() return nil end
 			fresh._popen = function() return '{"radio0":{"interfaces":[{"ifname":"wlan0"}]}}' end
 			local buf = {}

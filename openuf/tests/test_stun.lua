@@ -1,7 +1,7 @@
--- Tests for src/stun.lua (the controller's STUN wake-up channel).
+-- Tests for src/unifi/stun.lua (the controller's STUN wake-up channel).
 -- Run from project root: lua tests/run_tests.lua
 
-local stun = dofile("src/stun.lua")
+local stun = dofile("src/unifi/stun.lua")
 
 local function u16(n) return string.char(math.floor(n / 256) % 256, n % 256) end
 

@@ -1,4 +1,4 @@
--- Tests for src/bcfilter.lua ("Multicast and Broadcast Blocker" nftables
+-- Tests for src/openwrt/bcfilter.lua ("Multicast and Broadcast Blocker" nftables
 -- enforcement). Run from project root: lua tests/run_tests.lua
 --
 -- The generated nft syntax was checked against a real nftables 1.0.9 while
@@ -6,7 +6,7 @@
 -- pkttype vs the invalid `ether daddr type multicast`); these tests pin the
 -- command shape so a regression in it is visible.
 
-local bcfilter = dofile("src/bcfilter.lua")
+local bcfilter = dofile("src/openwrt/bcfilter.lua")
 
 -- Capture nft invocations instead of running them. `status` (optional) is a
 -- function(cmd) returning what os.execute would return for that command, so a

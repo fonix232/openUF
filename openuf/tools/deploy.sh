@@ -32,7 +32,11 @@ for h in "$@"; do
 	done
 	echo "  installing: $files"
 	started=$(date +%s)
-	$SSH "root@$h" 'cd /tmp/openuf-deploy && apk add --allow-untrusted ./*.apk' || exit 1
+	# A package added from a file is pinned in /etc/apk/world by checksum, and
+	# apk upgrade then never moves it; re-adding it by name keeps the installed
+	# build but lets the feed replace it later.
+	names="openuf"; [ "$luci" = 1 ] && names="$names luci-app-openuf"
+	$SSH "root@$h" "cd /tmp/openuf-deploy && apk add --allow-untrusted ./*.apk && apk add $names" || exit 1
 	n=0
 	until $SSH "root@$h" "ok=\$(sed -n 's/^last_ok=//p' /tmp/openuf-status); [ \"\${ok:-0}\" -ge $started ]" 2>/dev/null; do
 		n=$((n + 1)); [ $n -ge 18 ] && { echo "  no completed inform within 90 s -- stopping here"; exit 1; }

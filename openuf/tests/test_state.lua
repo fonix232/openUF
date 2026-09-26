@@ -267,7 +267,7 @@ return {
 					adopted = true, authkey = "f00d",
 					mac = "00:00:5e:00:53:16", led_enabled = false,
 					locating = true, locate_prev_trigger = "phy0tpt",
-					ip_mode = "static", swvlan_backup = {["10"] = "0t 2 3"},
+					ip_mode = "static", dsa_brlan_ports = {"lan1", "lan2"},
 				})
 				local st = state.load()
 				assert_eq(st.mac, "00:00:5e:00:53:16", "identity mac survives")
@@ -275,14 +275,14 @@ return {
 				assert_true(st.locating, "locating survives")
 				assert_eq(st.locate_prev_trigger, "phy0tpt", "the LED's trigger survives")
 				assert_eq(st.ip_mode, "static", "the static-vs-DHCP guard survives")
-				assert_eq(st.swvlan_backup["10"], "0t 2 3", "the VLAN ledger survives")
+				assert_eq(st.dsa_brlan_ports[2], "lan2", "the VLAN ledger survives")
 
 				-- Absent stays absent: readers test `~= nil` for "never set",
 				-- so a field must not materialise out of nowhere.
 				state.save({adopted = true, authkey = "f00d"})
 				local bare = state.load()
 				assert_nil(bare.led_enabled, "an unset field loads as nil, not false")
-				assert_nil(bare.swvlan_backup, "and not as an empty table")
+				assert_nil(bare.dsa_brlan_ports, "and not as an empty table")
 
 				-- state.json is hand-editable and syswrapper-written; a wrong
 				-- type must be dropped at the boundary rather than reaching a

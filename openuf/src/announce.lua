@@ -9,21 +9,12 @@
 	When run as a script, call M.run(cfg) at the bottom of this file.
 ]]--
 
-local bit = (function()
-	local ok, b = pcall(require, "bit")
-	if ok then return b end
-	ok, b = pcall(require, "bit32")
-	if ok then return b end
-	local _l = load or loadstring
-	local function _f(e) return _l("return function(a,b) return "..e.." end")() end
-	return {band=_f("a&b"), bor=_f("a|b"), lshift=_f("a<<b"), rshift=_f("a>>b")}
-end)()
+local bit = require("bit")
 
 local M = {}
 
--- Discovery destination addresses and port
+-- Discovery destination address and port
 M.BROADCAST_ADDR = "255.255.255.255"
-M.MULTICAST_ADDR = "233.89.188.1"
 M.PORT = 10001
 
 -- Appended to the firmware version strings in the discovery packet. One
@@ -45,6 +36,41 @@ local PKT = {
 	FWVER_SHORT    = 0x16,
 	FWVER_FACTORY  = 0x1b,
 }
+
+-- TLV writer: a record is {type, 0x00, len, value bytes...} built as a byte
+-- table, then appended to the packet.
+local tlv = {}
+
+function tlv.init(kind)
+	return {kind, 0x00, 0x00}
+end
+
+-- Append the elements of src to dst.
+function tlv.cattbl(dst, src)
+	for _, v in ipairs(src) do dst[#dst + 1] = v end
+end
+
+-- Append each byte of string src to dst.
+function tlv.catstr(dst, src)
+	for i = 1, #src do dst[#dst + 1] = src:byte(i) end
+end
+
+-- Fill in rec's length byte and append the whole record to dst.
+function tlv.finish(rec, dst)
+	rec[3] = #rec - 3
+	tlv.cattbl(dst, rec)
+end
+
+-- A 32-bit value as four bytes, most significant first.
+function tlv.gen4(n)
+	return {
+		bit.rshift(         n, 24),
+		bit.band(bit.rshift(n, 16), 0xff),
+		bit.band(bit.rshift(n,  8), 0xff),
+		bit.band(           n,      0xff),
+	}
+end
+M._tlv = tlv
 
 -- Build TLV blob for types 0x17–0x1a.
 -- 0x17 = IsDefault (1 = unadopted, 0 = adopted) — must reflect actual adoption state.
@@ -78,68 +104,68 @@ function M.build_packet(cfg)
 	local w
 
 	-- 0x02: IP address (MAC + IP concatenated)
-	w = ufpkt.init(PKT.IP_ADDR)
-	ufpkt.cattbl(w, cfg.mac)
-	ufpkt.cattbl(w, cfg.ip)
-	ufpkt.finish(w, packet)
+	w = tlv.init(PKT.IP_ADDR)
+	tlv.cattbl(w, cfg.mac)
+	tlv.cattbl(w, cfg.ip)
+	tlv.finish(w, packet)
 
 	-- 0x01: Hardware address
-	w = ufpkt.init(PKT.HW_ADDR)
-	ufpkt.cattbl(w, cfg.mac)
-	ufpkt.finish(w, packet)
+	w = tlv.init(PKT.HW_ADDR)
+	tlv.cattbl(w, cfg.mac)
+	tlv.finish(w, packet)
 
 	-- 0x0a: Uptime (32-bit big-endian seconds)
-	w = ufpkt.init(PKT.UPTIME)
-	ufpkt.cattbl(w, ufpkt.gen4(cfg.uptime or 0))
-	ufpkt.finish(w, packet)
+	w = tlv.init(PKT.UPTIME)
+	tlv.cattbl(w, tlv.gen4(cfg.uptime or 0))
+	tlv.finish(w, packet)
 
 	-- 0x0b: Hostname
-	w = ufpkt.init(PKT.HOSTNAME)
-	ufpkt.catstr(w, cfg.hostname or "openUF")
-	ufpkt.finish(w, packet)
+	w = tlv.init(PKT.HOSTNAME)
+	tlv.catstr(w, cfg.hostname or "openUF")
+	tlv.finish(w, packet)
 
 	-- 0x0c: Platform string
-	w = ufpkt.init(PKT.PLATFORM)
-	ufpkt.catstr(w, cfg.platform)
-	ufpkt.finish(w, packet)
+	w = tlv.init(PKT.PLATFORM)
+	tlv.catstr(w, cfg.platform)
+	tlv.finish(w, packet)
 
 	-- 0x03: Firmware version verbose
 	local suffix = cfg.version_suffix or M.VERSION_SUFFIX
-	w = ufpkt.init(PKT.FWVER_VERBOSE)
-	ufpkt.catstr(w, cfg.fw_pre)
-	ufpkt.catstr(w, cfg.fw_ver)
-	ufpkt.catstr(w, suffix .. ".")
-	ufpkt.catstr(w, cfg.fw_buildtime)
-	ufpkt.finish(w, packet)
+	w = tlv.init(PKT.FWVER_VERBOSE)
+	tlv.catstr(w, cfg.fw_pre)
+	tlv.catstr(w, cfg.fw_ver)
+	tlv.catstr(w, suffix .. ".")
+	tlv.catstr(w, cfg.fw_buildtime)
+	tlv.finish(w, packet)
 
 	-- 0x16: Firmware version short
-	w = ufpkt.init(PKT.FWVER_SHORT)
-	ufpkt.catstr(w, cfg.fw_ver)
-	ufpkt.catstr(w, suffix)
-	ufpkt.finish(w, packet)
+	w = tlv.init(PKT.FWVER_SHORT)
+	tlv.catstr(w, cfg.fw_ver)
+	tlv.catstr(w, suffix)
+	tlv.finish(w, packet)
 
 	-- 0x15: Platform2 (same as platform)
-	w = ufpkt.init(PKT.PLATFORM2)
-	ufpkt.catstr(w, cfg.platform)
-	ufpkt.finish(w, packet)
+	w = tlv.init(PKT.PLATFORM2)
+	tlv.catstr(w, cfg.platform)
+	tlv.finish(w, packet)
 
 	-- Opaque blob 0x17–0x1a (IsDefault reflects adoption state)
-	ufpkt.cattbl(packet, make_blob_17_1a(cfg.adopted))
+	tlv.cattbl(packet, make_blob_17_1a(cfg.adopted))
 
 	-- 0x13: Hardware address 2
-	w = ufpkt.init(PKT.HW_ADDR2)
-	ufpkt.cattbl(w, cfg.mac)
-	ufpkt.finish(w, packet)
+	w = tlv.init(PKT.HW_ADDR2)
+	tlv.cattbl(w, cfg.mac)
+	tlv.finish(w, packet)
 
 	-- 0x12: Incrementing counter (32-bit big-endian)
-	w = ufpkt.init(PKT.INC_COUNTER)
-	ufpkt.cattbl(w, ufpkt.gen4(cfg.counter or 0))
-	ufpkt.finish(w, packet)
+	w = tlv.init(PKT.INC_COUNTER)
+	tlv.cattbl(w, tlv.gen4(cfg.counter or 0))
+	tlv.finish(w, packet)
 
 	-- 0x1b: Factory firmware version
-	w = ufpkt.init(PKT.FWVER_FACTORY)
-	ufpkt.catstr(w, cfg.fw_factoryver)
-	ufpkt.finish(w, packet)
+	w = tlv.init(PKT.FWVER_FACTORY)
+	tlv.catstr(w, cfg.fw_factoryver)
+	tlv.finish(w, packet)
 
 	-- Write full 16-bit packet length (big-endian) into bytes 3–4.
 	-- BUG IN ORIGINAL: packet[4] = (len & 0xff) only wrote the low byte.
@@ -297,21 +323,15 @@ function M.get_hostname()
 		or clean(M._popen("hostname"))
 end
 
--- Lazily loaded state module (injectable), for the adopted flag below. The
--- same sibling lookup inform.lua uses; nil when state.lua cannot be found.
+-- Lazily loaded state module (injectable), for the adopted flag below; nil
+-- when state.lua cannot be loaded.
 M._state = nil
 local function state_module()
 	if M._state then return M._state end
-	for _, p in ipairs({"state.lua", "src/state.lua"}) do
-		local f = io.open(p, "r")
-		if f then
-			f:close()
-			local ok, mod = pcall(dofile, p)
-			if ok and type(mod) == "table" then
-				M._state = mod
-				return mod
-			end
-		end
+	local ok, mod = pcall(require, "state")
+	if ok and type(mod) == "table" then
+		M._state = mod
+		return mod
 	end
 	return nil
 end
@@ -409,17 +429,16 @@ end
 
 if not OPENUF_TEST_MODE then
 	local ok, err = pcall(function()
-		if not ufpkt then dofile("lib/lib.lua") end
-		local dev, config = dofile("config.lua").load()
+		local dev, config = require("config").load()
 
 		local ufhw = {}
-		ufhw.uap = dofile("ufmodel/" .. dev.openuf.uap.ufmodel .. ".lua")
+		ufhw.uap = dev.identity
 
 		local iface = dev.conf.net.lan_cpueth or "eth1"
-		-- A map may pin the identity (modelmap/auto.lua does, for boards whose
-		-- socket MAC is random per boot); discovery must announce the same
-		-- MAC the informs arrive under.
-		local mac   = M.parse_mac and M.parse_mac(dev.conf.net.identity_mac)
+		-- The identity MAC (board.lua: the one the network knows the AP by,
+		-- since some boards' socket MAC is random per boot); discovery must
+		-- announce the same MAC the informs arrive under.
+		local mac   = M.parse_mac(dev.conf.net.identity_mac)
 			or M.get_mac(iface) or {0x24, 0xa4, 0x3c, 0x00, 0xd3, 0xad}
 		local ip    = M.get_ip(iface)  or {192, 168, 1, 1}
 		local hostname = M.get_hostname() or "openUF"

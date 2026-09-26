@@ -146,17 +146,15 @@ return {
 			package.loaded["uci"] = {cursor = function()
 				return {get_all = function() return {state_file = "/srv/openuf/state.json"} end}
 			end}
-			local got = sw._conf_state_file("src/")
+			local got = sw._conf_state_file()
 			package.loaded["uci"] = {cursor = function()
 				return {get_all = function() return nil end}
 			end}
-			local default = sw._conf_state_file("src/")
+			local default = sw._conf_state_file()
 			package.loaded["uci"] = nil
 			conf._cursor = orig
 			assert_eq(got, "/srv/openuf/state.json", "the option is read")
 			assert_eq(default, "/etc/openuf/state.json", "unset: the default path")
-			assert_nil(sw._conf_state_file("/nonexistent-dir-openuf/"),
-				"no config.lua beside the hook is not an error either")
 		end
 	},
 	{

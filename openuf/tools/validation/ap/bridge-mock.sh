@@ -18,7 +18,7 @@
 # stays correctly optional rather than being invented.
 #
 # Unlike iw-mock.sh's station counters, no monotonically-increasing state
-# is needed here: src/sysinfo.lua's mac_table() derives `age`/`uptime`
+# is needed here: src/openwrt/sysinfo.lua's mac_table() derives `age`/`uptime`
 # itself (age=0, uptime from a first-seen cache) rather than parsing them
 # out of `bridge fdb show` output, so static fdb content is sufficient.
 #

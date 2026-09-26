@@ -15,24 +15,26 @@ jobs:
       - name: Install Lua and dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y lua5.1 lua-bitop luarocks openssl
+          sudo apt-get install -y lua5.1 lua-bitop luarocks
           # lua-cjson requires lua5.1 dev headers; lua-openssl needs libssl-dev
           sudo apt-get install -y liblua5.1-dev libssl-dev
           sudo luarocks --lua-version 5.1 install lua-cjson
-          # lua-openssl (rock name "openssl"): the GCM backend. Without it the
-          # AES-GCM tests skip -- OPENUF_REQUIRE_GCM below turns that skip into
-          # a hard failure so CI can never silently lose GCM coverage.
+          # lua-openssl (rock name "openssl"): the AES backend, as on the device.
           sudo luarocks --lua-version 5.1 install openssl LUA_INCDIR=/usr/include/lua5.1
 
       - name: Run tests
         working-directory: openuf
-        run: OPENUF_REQUIRE_GCM=1 lua5.1 tests/run_tests.lua
+        run: lua5.1 tests/run_tests.lua
 
       - name: Stripped tree (what the package ships) is equivalent and passes
         working-directory: openuf
         run: |
           sudo ln -sf /usr/bin/lua5.1 /usr/local/bin/lua
           sh tools/strip-tree.sh --verify
+
+      - name: No stray globals
+        working-directory: openuf
+        run: sh tools/globals-check.sh
 
   simulate:
     name: End-to-end adoption simulation
@@ -43,17 +45,18 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y lua5.1 liblua5.1-dev lua-bitop luarocks openssl python3-pip
+          sudo apt-get install -y lua5.1 liblua5.1-dev lua-bitop luarocks libssl-dev python3-pip
           sudo ln -sf /usr/bin/lua5.1 /usr/local/bin/lua
           # LUA_INCDIR must be given explicitly or luarocks fails with
           # "Failed finding Lua header files" on a clean runner.
           sudo luarocks --lua-version 5.1 install lua-cjson LUA_INCDIR=/usr/include/lua5.1
           sudo luarocks --lua-version 5.1 install luasocket LUA_INCDIR=/usr/include/lua5.1
+          sudo luarocks --lua-version 5.1 install openssl LUA_INCDIR=/usr/include/lua5.1
           # pip (not apt python3-pycryptodome, which ships the Cryptodome namespace)
           # so the controller's `import Crypto` resolves.
           pip3 install --break-system-packages pycryptodome
 
-      # Drives crypto (openssl-CLI CBC), TCP/HTTP POST, the http_post partial-read
+      # Drives crypto (lua-openssl CBC), TCP/HTTP POST, the http_post partial-read
       # path, and TNBU parse — i.e. the integration a device performs at adoption.
       # This exercises what unit tests can't and guards against runtime-only
       # regressions like the ones this OpenWrt 25.12 pass fixed.
@@ -78,7 +81,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check the package's shell scripts
         run: |
-          for f in openuf/tools/check.sh openuf/tools/strip-tree.sh openuf/tools/deploy.sh \
+          for f in openuf/tools/strip-tree.sh openuf/tools/deploy.sh openuf/tools/globals-check.sh \
                    openuf/files/openuf.uci-defaults openuf/files/openuf.init \
                    openuf/files/openuf-bootstrap.init openuf/src/hook/*.sh \
                    .github/scripts/sdk-build.sh; do

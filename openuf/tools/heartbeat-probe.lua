@@ -41,8 +41,8 @@ local MODE = ...
 -- self-executing run() block at the bottom of inform.lua (and announce.lua's
 -- broadcast loop, which _populate_net_info would otherwise start).
 OPENUF_TEST_MODE = true
-pcall(dofile, "lib/lib.lua")
-local ok_conf, dev, config = pcall(function() return dofile("config.lua").load() end)
+package.path = "./?.lua;" .. package.path
+local ok_conf, dev, config = pcall(function() return require("config").load() end)
 if not ok_conf then
 	io.stderr:write("probe: cannot load the settings -- run with cwd = the install "
 		.. "dir (e.g. `cd /usr/share/openuf`): " .. tostring(dev) .. "\n")
@@ -52,7 +52,7 @@ local inform = dofile("inform.lua")
 if type(config.state_file) == "string" and config.state_file ~= "" then
 	inform._state._state_file = config.state_file
 end
-local ufhw = {uap = dofile("ufmodel/" .. dev.openuf.uap.ufmodel .. ".lua")}
+local ufhw = {uap = dev.identity}
 dev.conf.config = config
 dev.conf.uap    = dev.openuf and dev.openuf.uap
 local st = inform._state.load()

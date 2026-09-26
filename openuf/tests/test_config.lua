@@ -67,7 +67,7 @@ return {
 			assert_eq(g.timezone, true, "timezone on")
 			assert_eq(g.ntp, false, "ntp off")
 			assert_eq(g.cron, true, "cron on")
-			local sysconf = dofile("src/sysconf.lua")
+			local sysconf = dofile("src/openwrt/sysconf.lua")
 			assert_false(sysconf.enabled(g, "ntp"), "sysconf reads the gate as meant")
 			assert_true(sysconf.enabled(g, "cron"), "and the other parts stay on")
 		end
@@ -81,39 +81,24 @@ return {
 		end
 	},
 	{
-		name = "config: the model map is auto unless UCI names one that exists",
+		name = "config: load returns the board description and the options, and local.lua may change either",
 		fn = function()
-			local orig = config._exists
-			config._exists = function(p) return p == "modelmap/bench.lua" end
-			local warned = quietly(function()
-				assert_eq(config.modelmap_name(nil), "auto", "unset")
-				assert_eq(config.modelmap_name("bench"), "bench", "present")
-				assert_eq(config.modelmap_name("missing"), "auto", "absent")
-				assert_eq(config.modelmap_name("../../etc/passwd"), "auto", "not a name")
-			end)
-			config._exists = orig
-			assert_eq(#warned, 2, "both bad names reported")
-		end
-	},
-	{
-		name = "config: load returns the model map and the options, and local.lua may change either",
-		fn = function()
-			local orig_exists, orig_dofile = config._exists, config._dofile
+			local orig = {config._exists, config._dofile, config._describe}
 			local loaded = {}
-			config._exists = function(p) return p == config.LOCAL_FILE or p == "modelmap/bench.lua" end
+			config._exists = function(p) return p == config.LOCAL_FILE end
+			config._describe = function()
+				loaded[#loaded + 1] = "board"
+				return {conf = {net = {}}}
+			end
 			config._dofile = function(p)
 				loaded[#loaded + 1] = p
-				if p == config.LOCAL_FILE then
-					_G.config.debug_caps = {fw_caps = 1}
-					_G.dev.tweaked = true
-					return
-				end
-				return {conf = {net = {}}, openuf = {uap = {ufmodel = "auto"}}}
+				_G.config.debug_caps = {fw_caps = 1}
+				_G.dev.tweaked = true
 			end
 			local before = rawget(_G, "config")
-			local dev, c = config.load(cursor({modelmap = "bench", l2guard = "0"}))
-			config._exists, config._dofile = orig_exists, orig_dofile
-			assert_eq(loaded[1], "modelmap/bench.lua", "model map first")
+			local dev, c = config.load(cursor({l2guard = "0"}))
+			config._exists, config._dofile, config._describe = orig[1], orig[2], orig[3]
+			assert_eq(loaded[1], "board", "the board first")
 			assert_eq(loaded[2], config.LOCAL_FILE, "then local.lua")
 			assert_eq(c.l2guard, false, "UCI applied")
 			assert_eq(c.debug_caps.fw_caps, 1, "local.lua set a research table")

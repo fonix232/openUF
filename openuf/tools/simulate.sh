@@ -58,8 +58,9 @@ lua - "$STATE_FILE" "$PORT" "$RESULT_FILE" << 'LUAEOF'
 local state_file, port, result_file = arg[1], tonumber(arg[2]), arg[3]
 
 OPENUF_TEST_MODE = true
-dofile("src/lib/lib.lua")
-local crypto = dofile("src/crypto.lua")
+-- openUF's modules load each other by name; run from the package directory.
+package.path = "src/?.lua;" .. package.path
+local crypto = dofile("src/unifi/crypto.lua")
 local state  = dofile("src/state.lua")
 local inform = dofile("src/inform.lua")
 

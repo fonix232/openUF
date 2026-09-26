@@ -3,7 +3,7 @@
 # openUF.
 #
 # Seeds /proc/net/arp with static entries for bridge-mock.sh's two fake
-# wired hosts, so src/sysinfo.lua's mac_table() resolves a real IP for
+# wired hosts, so src/openwrt/sysinfo.lua's mac_table() resolves a real IP for
 # each fake MAC exactly like it would from a genuine kernel ARP table --
 # `ip neigh` entries are runtime state, not something an image layer can
 # bake in, so this must run at container start, not build time.

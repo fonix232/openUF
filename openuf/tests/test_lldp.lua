@@ -1,7 +1,7 @@
--- Tests for src/lldp.lua (lldpctl JSON parsing).
+-- Tests for src/openwrt/lldp.lua (lldpctl JSON parsing).
 -- Run from project root: lua tests/run_tests.lua
 
-local lldp = dofile("src/lldp.lua")
+local lldp = dofile("src/openwrt/lldp.lua")
 
 local function fixture(name)
 	local f = io.open("tests/fixtures/" .. name, "r")

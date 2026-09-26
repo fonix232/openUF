@@ -42,7 +42,7 @@ return {
 	{
 		name = "package: every option the LuCI settings page writes is one the daemon reads",
 		fn = function()
-			local known = {modelmap = true}
+			local known = {}
 			for _, o in ipairs(config.OPTIONS) do known[o[1]] = true end
 			local js = read("../luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js")
 			local n = 0
@@ -62,9 +62,25 @@ return {
 		fn = function()
 			local s = {}
 			for k, v in read("files/openuf.config"):gmatch("option ([%w_]+) '([^']*)'") do s[k] = v end
-			assert_eq(s.modelmap, "auto", "auto model map")
+			assert_nil(s.modelmap, "no model map option")
 			local c = config.options(s)
 			assert_eq(c.inform_url, "http://unifi:8080/inform", "default inform URL")
+		end
+	},
+	{
+		name = "package: every install path the LuCI backend reads is a file the package ships",
+		fn = function()
+			local src = read("../luci-app-openuf/root/usr/share/rpcd/ucode/luci.openuf")
+			local n = 0
+			for rel in src:gmatch("%${OPENUF}/([%w_/%.%-]+)") do
+				if rel ~= "BUILD" then   -- written at build time
+					local f = io.open("src/" .. rel, "r")
+					assert_not_nil(f, "the backend reads " .. rel .. ", which src/ does not have")
+					if f then f:close() end
+					n = n + 1
+				end
+			end
+			assert_true(n >= 2, "found the backend's paths (" .. n .. ")")
 		end
 	},
 }

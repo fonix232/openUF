@@ -33,7 +33,7 @@ function badge(ok, yes, no) {
 	}, ok ? yes : no);
 }
 
-// Values from state files and conf.lua are inserted as text, never as markup
+// Values from state files and UCI are inserted as text, never as markup
 // (LuCI's E() treats a string child as HTML).
 function T(s) {
 	return document.createTextNode(String(s));
@@ -117,7 +117,6 @@ return view.extend({
 			]),
 
 			section(_('Hardware'), [
-				[ _('Model map'), value(hw.modelmap) ],
 				[ _('Uplink socket'), value(hw.uplink) ],
 				[ _('Ports'), ports.length ? E('span', {}, ports.map(function(p) { return E('div', {}, T(p)); })) : E('em', {}, _('none')) ],
 				[ _('Radios'), (hw.radios || []).length ? T(hw.radios.join(', ')) : E('em', {}, _('none')) ],

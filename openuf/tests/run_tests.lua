@@ -22,6 +22,21 @@ end
 local passed = 0
 local failed = 0
 
+-- openUF's modules load each other by name (require). The suite runs from the
+-- package directory, so src/ goes in front of the path.
+package.path = "src/?.lua;" .. package.path
+
+-- A module one test file loaded (and possibly stubbed) must not leak into the
+-- next: everything loaded after this point is forgotten between files, so
+-- each file starts from fresh modules.
+local baseline = {}
+for k in pairs(package.loaded) do baseline[k] = true end
+local function forget_modules()
+	for k in pairs(package.loaded) do
+		if not baseline[k] then package.loaded[k] = nil end
+	end
+end
+
 -- Global assert helpers available to all test files
 
 function assert_eq(got, expected, label)
@@ -121,15 +136,13 @@ local function run_suite(tests)
 end
 
 -- Test files to run in order.
--- Files that don't exist yet are silently skipped so the runner
--- remains useful during incremental development.
 local test_files = {
-	"tests/test_lib.lua",
 	"tests/test_announce.lua",
 	"tests/test_state.lua",
 	"tests/test_config.lua",
 	"tests/test_migrate.lua",
 	"tests/test_package.lua",
+	"tests/test_architecture.lua",
 	"tests/test_crypto.lua",
 	"tests/test_inflate.lua",
 	"tests/test_inform_packet.lua",
@@ -154,17 +167,15 @@ local test_files = {
 	"tests/test_l2guard.lua",
 	"tests/test_staevents.lua",
 	"tests/test_modelmatch.lua",
-	"tests/test_modelmap.lua",
+	"tests/test_board.lua",
 }
 
 for _, filepath in ipairs(test_files) do
+	forget_modules()
 	local fn, err = loadfile(filepath)
 	if not fn then
-		-- Missing file during incremental development — skip silently
-		if err and not err:find("No such file") and not err:find("cannot open") then
-			print("ERROR loading " .. filepath .. ": " .. tostring(err))
-			failed = failed + 1
-		end
+		print("ERROR loading " .. filepath .. ": " .. tostring(err))
+		failed = failed + 1
 	else
 		local ok, result = pcall(fn)
 		if not ok then
