@@ -131,7 +131,12 @@ if [ -n "$setup_only" ]; then
 fi
 
 mkdir -p "$out"
-UF_PORTS=$ports NODE_PATH=${NODE_PATH:-$(npm root -g)} node "$here/smoke.cjs" "http://127.0.0.1:$port" "$password" "$out"
+if ! UF_PORTS=$ports NODE_PATH=${NODE_PATH:-$(npm root -g)} node "$here/smoke.cjs" "http://127.0.0.1:$port" "$password" "$out"; then
+	# What the device was doing, for a failure only CI sees.
+	echo "--- logread and ps on the device" >&2
+	docker exec "$name" sh -c 'logread | tail -n 80; ps w' >&2 || true
+	exit 1
+fi
 
 # Again as Firefox and Safari see it, without the CSS only Chromium has.
 if [ "${UF_COMPAT:-1}" != 0 ]; then

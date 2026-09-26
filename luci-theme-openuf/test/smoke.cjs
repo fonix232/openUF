@@ -55,6 +55,31 @@ function watch(page) {
 		if (res.status() >= 400 && url.pathname.startsWith('/luci-static/'))
 			fail(`${url.pathname}: HTTP ${res.status()}`);
 	});
+
+	/* "XHR request timed out" names no call: name the slow and failed ones. */
+	page.on('requestfinished', (req) => {
+		const took = req.timing().responseEnd;
+
+		if (isRpc(req) && took > 5000)
+			console.log(`  slow rpc ${rpcNames(req)}: ${Math.round(took)} ms`);
+	});
+	page.on('requestfailed', (req) => {
+		if (isRpc(req))
+			console.log(`  rpc ${rpcNames(req)} failed: ${req.failure()?.errorText}`);
+	});
+}
+
+const isRpc = (req) => new URL(req.url()).pathname.startsWith('/ubus');
+
+/* LuCI batches JSON-RPC calls: [ sid, object, method, args ] each. */
+function rpcNames(req) {
+	try {
+		return [].concat(JSON.parse(req.postData() || '[]'))
+			.map((c) => (Array.isArray(c.params) ? `${c.params[1]}.${c.params[2]}` : c.method)).join(', ');
+	}
+	catch (e) {
+		return req.url();
+	}
 }
 
 async function settle(page) {
