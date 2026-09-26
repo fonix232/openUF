@@ -48,7 +48,7 @@ Real OpenWrt target hardware has genuine `uci`/`iw`/`ubus`/`hostapd` and hits no
    controller will never provision the device — see
    [the GCM provisioning gate](#the-gcm-provisioning-gate). `tools/validation/ap/Dockerfile`
    builds the `zhaozg/lua-openssl` rock (`luarocks-5.1 install openssl`); no prebuilt Alpine
-   apk exists. `install.sh` already installs `lua-openssl` on real OpenWrt hardware.
+   apk exists. The `openuf` package depends on `lua-openssl` on real OpenWrt hardware.
 2. **Set the Inform Host Override before adopting anything.** Devices → Device Updates and
    Settings → Device SSH Settings. It must be the controller container's **literal IP** —
    the controller rejects a bare hostname with `ERROR inform - dev[<mac>] invalid inform_ip
@@ -580,7 +580,7 @@ The complete set, per `InformServlet`: `noop`, `setparam`, `cmd`, `upgrade`, `re
 
 | `_type` | Shape | Notes |
 |---|---|---|
-| `noop` | `{"_type":"noop","interval":…}` | Steady state. `interval` is the heartbeat cadence in seconds the controller wants; openUF waits that long before the next inform, clamped to 5–300 s (pre-adoption noops are unauthenticated), and goes back to its own 10 s when a noop carries none. |
+| `noop` | `{"_type":"noop","interval":…}` | Steady state. `interval` is the heartbeat cadence in seconds the controller wants; openUF waits that long before the next inform, clamped to 5–300 s (pre-adoption noops are unauthenticated), and goes back to its own 10 s when a noop carries none. A failed inform backs off from that cadence, never faster. |
 | `setparam` | `{"_type":"setparam","mgmt_cfg":"…","system_cfg":"…","server_time_in_utc":"…"}` | Both configs are flat `key=value` blobs. See [system_cfg](#system_cfg-the-real-config-channel). |
 | `cmd` | `{"_type":"cmd","cmd":"…","mac":"…","device_id":"…",…}` | See command table below. |
 | `upgrade` | `{"_type":"upgrade","version":"6.8.2.15592","md5sum":"…","url":"http://fw-download.ubnt.com/…"}` | Fire-and-forget, sent exactly once; no retry, no confirmation expected. |
@@ -938,25 +938,6 @@ reflected. Two details worth keeping:
 A disabled WLAN is still provisioned, just with `disabled=1`, so its configuration survives
 a re-enable.
 
-### `ebtables.*` — L2 hardening
-
-Carried by every full push (the yesrab/openUF fork's capture, 2026-09-15): literal
-ebtables fragments, which the stock firmware replays against its `ath<n>` VAPs.
-
-```
-ebtables.status=enabled
-ebtables.add_vlan.status=disabled
-ebtables.<n>.cmd=-t nat -A PREROUTING --in-interface ath0 -d BGA -j DROP     # per VAP
-ebtables.<n>.cmd=-t nat -A POSTROUTING --out-interface ath0 -d BGA -j DROP   # per VAP
-ebtables.<n>.cmd=-t broute -A BROUTING -i ath1 -p 802_1Q -j DROP             # the tagged SSID's VAP
-ebtables.<n>.cmd=-t broute -A BROUTING --vlan-id 10 -p 802_1Q -j DROP        # bridge-wide
-```
-
-The `ath<n>` names are the stock firmware's, and they do not map onto OpenWrt netdevs. So
-`l2guard.lua` keeps only the two ideas (BPDU drop, tag drop) and applies them to the live
-AP VAPs. A rule of any other shape is logged verbatim and not applied.
-`ebtables.add_vlan.status` is not read.
-
 ### `system.timezone` / `ntpclient.*` / `cron.*` — system settings
 
 Carried by every full push, and not read by openUF until 2026-09-25. The yesrab/openUF
@@ -978,8 +959,32 @@ cron.1.job.1.cmd=syswrapper.sh 11k-scan
 
 The cron job is how the controller schedules the nightly neighbour scan: it runs through
 the AP's own crond at 04:00 device-local time. That is why the timezone matters. See USAGE
-§ 6 for what `sysconf.lua` does with each block. `cron.<n>.user` is deliberately left
-unrecognized, so it shows in the dropped-key report.
+§ 6 (Controller-managed system settings) for what `sysconf.lua` does with each block.
+Upstream openUF answers `11k-scan` with an `iw scan ap-force` of every radio; openUF
+deliberately asks a client for an 802.11k beacon report instead, for the 12% packet loss
+measured under *Enriching it without scanning* below.
+`cron.<n>.user` is deliberately left unrecognized, so it shows in the dropped-key report and
+the unhandled ledger.
+
+### `ebtables.*` — L2 hardening
+
+Carried by every full push (the yesrab/openUF fork's capture, 2026-09-15): literal
+ebtables fragments, which the stock firmware replays against its `ath<n>` VAPs.
+
+```
+ebtables.status=enabled
+ebtables.add_vlan.status=disabled
+ebtables.<n>.cmd=-t nat -A PREROUTING --in-interface ath0 -d BGA -j DROP     # per VAP
+ebtables.<n>.cmd=-t nat -A POSTROUTING --out-interface ath0 -d BGA -j DROP   # per VAP
+ebtables.<n>.cmd=-t broute -A BROUTING -i ath1 -p 802_1Q -j DROP             # the tagged SSID's VAP
+ebtables.<n>.cmd=-t broute -A BROUTING --vlan-id 10 -p 802_1Q -j DROP        # bridge-wide
+```
+
+The `ath<n>` names are the stock firmware's, and they do not map onto OpenWrt netdevs. So
+`unifi/hardening.lua` keeps only the two ideas (BPDU drop, tag drop) and
+`openwrt/l2guard.lua` applies them to the live AP VAPs. A rule of any other shape is logged
+verbatim and not applied. `ebtables.add_vlan.status` is not read, and stays in the
+unhandled ledger.
 
 ---
 
@@ -1355,6 +1360,39 @@ hop on the AX3000T, with the IoT WLAN on VLAN 10:
 What that leaves unproven is only the 802.11 association itself, which is not openUF's code:
 no second radio in the house can act as a station on the IoT WLAN's band, so no client was
 put on it. Every hop the AP is responsible for carries traffic.
+
+### Connection timing: what the WiFi Connectivity view counts (2026-09-26)
+
+The Connectivity view (Initial WiFi Connections, the Association/Authentication/DHCP/DNS/Success
+percentages and latencies) read **0** with openUF APs while roaming worked. Its data is
+`ace_stat.wifi_connectivity_event`, `_class: WIFI_CONNECTION`, and there were none. Traced in
+10.6.106 (`devmgr.w.a.VsCpQiCuGEvNvUNmH`, `wifi.connectivity.a.ctfbDsCjrxgkv`,
+`wifi.k.fdwW`) and confirmed with hand-sent events:
+
+- For an AP on firmware **6.2.1 or later** (`hyFnQ.supportTrafficStaTrackerEvents`; openUF
+  presents 6.8.2) a `success` counts as successful only with **`traffic_delta > 0` and
+  `dns_responses > 0`**. `dns_resp_seen: "yes"` is what older firmware is judged by and is not
+  read. Anything else goes to a ten-minute in-memory cache and is dropped with its empty
+  counters. A hand-sent success with the two fields was stored at once.
+- The deltas are **microseconds, cumulative** from the start of the connection, accepted when
+  `0 < delta <= 60 000 000` (`Duration.ofMinutes(1).toMillis() * 1000`). The view derives the
+  phases as differences: Association = `assoc_delta`; Authentication = the largest of
+  `wpa_auth_delta`/`radius_auth_delta`/`auth_delta` beyond `assoc_delta`; DHCP = `ip_delta`
+  minus that; DNS = `traffic_delta` minus `ip_delta`; the total is `traffic_delta`. Each phase is
+  only counted when it is later than the one before.
+- A connection with RSSI below -75 dBm and no success keeps no counters (ignored as weak).
+- Failures: `auth_failures`, `wpa_auth_failures`, `radius_auth_status: "failure"`,
+  `ip_failures`, `dns_timeouts`, `traffic_failures`, `dns_resp_seen: "no"` each count against
+  their phase; zero counts are dropped before storing.
+
+On the AP: hostapd's per-BSS ubus notifications carry `auth` (per Authentication frame, so
+several for SAE), `assoc`, `sta-authorized` (with `auth-alg`) and `key-mismatch`. A captured
+SAE join on heimdall: three `auth`, `assoc` 260 ms after the first, `sta-authorized` at 310 ms,
+DHCP ACK about a second later. A wrong SAE passphrase ends in `key-mismatch` about 3 ms after
+`auth`, **with no `assoc`**: SAE checks it in the Authentication exchange. With usteer running
+(`notify_response` on), `auth`/`assoc`/`probe` are requests: hostapd waits up to 100 ms and
+**rejects the client on any non-zero answer**, and a ucode subscriber whose handler returns
+nothing answers `UBUS_STATUS_NO_DATA`. `openwrt/staphase.uc` returns 0 explicitly.
 
 ## Outbound payload field reference
 

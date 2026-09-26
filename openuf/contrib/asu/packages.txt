@@ -1,0 +1,28 @@
+# Packages an openUF image needs, one per line; a leading "-" removes a default.
+# Paste into firmware-selector's "Installed Packages" box (space-separated),
+# pass to `owut upgrade -a`, or to ImageBuilder's PACKAGES=.
+#
+# Required -- openUF cannot adopt or report without these. lua-openssl carries
+# AES-GCM: a 10.x controller will not finish provisioning without a GCM
+# inform, and an image rebuilt WITHOUT it strands an adopted AP (the
+# controller refuses to go back to CBC).
+lua
+lua-cjson
+luasocket
+lua-openssl
+luabitop
+libuci-lua
+iw
+ip-bridge
+# Features (each one silently disables one controller feature when absent)
+hostapd-utils
+usteer
+lldpd
+nftables
+kmod-nft-bridge
+tc-tiny
+kmod-sched-act-police
+# A full hostapd: BSS Transition / Band Steering need 802.11k/v, which the
+# default wpad-basic-* builds lack. openssl matches lua-openssl's library.
+-wpad-basic-mbedtls
+wpad-openssl

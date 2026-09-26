@@ -1,0 +1,6 @@
+/etc/openuf/
+/etc/config/openuf
+/etc/init.d/openuf-bootstrap
+/etc/rc.d/S98openuf-bootstrap
+/etc/apk/keys/openuf.pem
+/etc/apk/repositories.d/openuf.list
