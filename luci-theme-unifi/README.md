@@ -33,25 +33,42 @@ Three entries appear under *System → System → Language and Style*:
 
 ## Install
 
-### From a feed (buildroot or SDK)
-
-openUF is a valid package feed as it stands:
+### From the openUF feed (OpenWrt 25.12 and later)
 
 ```sh
-echo 'src-git openuf https://github.com/fonix232/openUF.git' >> feeds.conf
-./scripts/feeds update openuf luci
-./scripts/feeds install luci-theme-unifi
-make package/luci-theme-unifi/compile
+wget -O /etc/apk/keys/openuf.pem https://fonix232.github.io/openUF/openuf.pem
+apk add -X https://fonix232.github.io/openUF/apk/packages.adb luci-theme-unifi
 ```
 
-The package is architecture-independent (`all`), so one build serves every
-target. Installing it switches LuCI to the theme; removing it switches back to
-Bootstrap.
+Installing selects the theme; `apk del luci-theme-unifi` switches LuCI back to
+Bootstrap. The package is architecture-independent, and needs only
+`luci-base`: it works with or without openUF.
 
-### Without a buildroot
+**Updates and firmware upgrades.** With openUF installed, its package already
+lists the feed, so `apk upgrade` updates the theme too, and after a firmware
+upgrade that keeps settings openUF's bootstrap reinstalls the theme along with
+itself (and its owut integration leaves the theme out of the ASU image
+request, which the ASU server could not build). Without openUF, add the feed to
+your own feed list so `apk upgrade` sees it:
 
-The theme is nothing but files, so `install.sh` can put it on a running
-device over SSH (it needs `tar` on both ends, which every OpenWrt has):
+```sh
+echo https://fonix232.github.io/openUF/apk/packages.adb >> /etc/apk/repositories.d/customfeeds.list
+```
+
+and reinstall the theme after a firmware upgrade (`apk update && apk add
+luci-theme-unifi`); until then LuCI falls back to Bootstrap on its own.
+
+### Building it
+
+The theme is a package in openUF's feed. In a buildroot or SDK with the feed
+added (see the top-level README), `make package/luci-theme-unifi/compile`;
+`.github/scripts/sdk-build.sh` builds it with openUF's other packages inside
+the official SDK container, which is what the feed's CI publishes.
+
+### Straight from a checkout
+
+To try changes on a device without building a package, `install.sh` copies
+the files over SSH (it needs `tar` on both ends, which every OpenWrt has):
 
 ```sh
 sh luci-theme-unifi/install.sh root@192.168.1.1
@@ -59,8 +76,10 @@ sh luci-theme-unifi/install.sh --uninstall root@192.168.1.1
 ```
 
 Run on the device itself, it installs locally. It does what the package's
-postinst would: unpacks the files, registers the three theme entries, selects
-UniFi on a first install, and drops LuCI's caches.
+post-install would: unpacks the files, registers the three theme entries,
+selects UniFi on a first install, and drops LuCI's caches. Do not mix it with
+the package on one device; `apk del` would not know about files it did not
+install.
 
 ## Testing
 
@@ -70,10 +89,12 @@ UniFi on a first install, and drops LuCI's caches.
 sh luci-theme-unifi/test/run.sh
 ```
 
-It boots the official `openwrt/rootfs` image (which ships LuCI, uhttpd and rpcd,
-so nothing comes from the package feeds), adds luci-mod-dashboard from LuCI's
-sources and a two-radio wireless config so the Wireless pages have something to
-show, installs the theme with `install.sh`, and then drives LuCI in headless
+It boots the official `openwrt/rootfs` image (which ships LuCI, uhttpd and
+rpcd, so nothing comes from the package feeds), adds luci-mod-dashboard from
+LuCI's sources and a two-radio wireless config so the Wireless pages have
+something to show, and installs the theme: this checkout via `install.sh`, or,
+with `UF_APK` naming a built `.apk`, the package via `apk`, which is how the
+feed's CI tests exactly what it publishes. Then it drives LuCI in headless
 Chromium: it signs in, visits every page the menu offers, and fails on any
 script error, failed asset, page that never finishes loading, or layout wider
 than the window. Screenshots of the main views, in light, dark and at phone

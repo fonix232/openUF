@@ -1,7 +1,8 @@
 name: Package feed
 
-# Builds the openuf and luci-app-openuf packages (apk; OpenWrt 25.12 and
-# later) with the official OpenWrt SDK image and, on main, publishes them as a
+# Builds the openuf, luci-app-openuf and luci-theme-unifi packages (apk;
+# OpenWrt 25.12 and later) with the official OpenWrt SDK image, tests the
+# built theme in a stock OpenWrt container and, on main, publishes them as a
 # signed feed on GitHub Pages:
 #
 #   https://fonix232.github.io/openUF/apk/packages.adb
@@ -45,9 +46,47 @@ jobs:
           name: packages
           path: out/
 
+  # The theme as the feed ships it: the built .apk, installed with apk into the
+  # stock OpenWrt image (which carries LuCI), then every menu page in light,
+  # dark and phone layouts, failing on script errors, broken assets or
+  # sideways overflow (luci-theme-unifi/test/run.sh).
+  theme:
+    name: Test luci-theme-unifi
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: out
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Playwright and Chromium
+        run: |
+          npm install --no-save --prefix "$RUNNER_TEMP/pw" playwright
+          npx --prefix "$RUNNER_TEMP/pw" playwright install --with-deps chromium
+
+      - name: Boot OpenWrt, install the package, walk every page
+        run: |
+          UF_APK=$(ls out/luci-theme-unifi-*.apk | head -n 1) \
+          NODE_PATH="$RUNNER_TEMP/pw/node_modules" sh luci-theme-unifi/test/run.sh
+
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-theme-unifi-screenshots
+          path: luci-theme-unifi/test/out/
+          if-no-files-found: ignore
+
   publish:
     name: Publish to GitHub Pages
-    needs: build
+    needs: [build, theme]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
@@ -71,7 +110,7 @@ jobs:
       - name: Add the new builds, keep the last ${{ env.KEEP }} of each package
         run: |
           cp new/packages/*.apk site/apk/
-          for pkg in openuf luci-app-openuf; do
+          for pkg in openuf luci-app-openuf luci-theme-unifi; do
             ls site/apk | grep -E "^${pkg}-[0-9]" | sort -V | head -n -"$KEEP" \
               | while read -r f; do rm -f "site/apk/$f"; done
           done

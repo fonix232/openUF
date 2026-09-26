@@ -1,6 +1,7 @@
 #!/bin/sh
 #
-# Boot a stock OpenWrt container, install the theme into it with install.sh,
+# Boot a stock OpenWrt container, install the theme into it (the built package
+# when UF_APK names one, as the feed's CI does, else this checkout via install.sh),
 # and drive LuCI in headless Chromium (test/smoke.cjs): every page in the menu
 # has to render with no script error, no failed asset and no sideways scroll,
 # in light, dark and phone layouts. Screenshots land in test/out/.
@@ -20,6 +21,8 @@
 #   UF_NAME        container name             (luci-theme-unifi-test)
 #   UF_PORT        host port for LuCI         (8080)
 #   UF_OUT         screenshot directory       (test/out)
+#   UF_APK         a built luci-theme-unifi .apk to install instead of this
+#                  checkout's files (what the feed publishes)
 
 set -eu
 
@@ -81,7 +84,15 @@ if [ -n "$packages" ]; then
 	fi
 fi
 
-UF_REMOTE_SHELL="docker exec -i" sh "$here/../install.sh" "$name"
+if [ -n "${UF_APK:-}" ]; then
+	# The lab is offline: resolve luci-base from the installed packages.
+	docker cp "$UF_APK" "$name:/tmp/luci-theme-unifi.apk"
+	docker exec "$name" apk add --no-network --allow-untrusted /tmp/luci-theme-unifi.apk 2>&1 | { grep -v '^WARNING: opening from cache' || true; }
+	docker exec "$name" sh -c 'uci -q get luci.main.mediaurlbase' | grep -qx /luci-static/unifi \
+		|| { echo "the package did not select the theme" >&2; exit 1; }
+else
+	UF_REMOTE_SHELL="docker exec -i" sh "$here/../install.sh" "$name"
+fi
 
 if [ -n "$setup_only" ]; then
 	echo "ready: http://127.0.0.1:$port/ (root / $password), container $name"

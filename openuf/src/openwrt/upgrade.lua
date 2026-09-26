@@ -62,10 +62,11 @@ M._exists = function(path)
 end
 M._exec = function(cmd) return os.execute(cmd) end
 
--- openUF's own packages, which the ASU server does not know and would refuse
--- to build: owut leaves them out of the image and the bootstrap puts them
--- back from the openUF feed on its first boot.
-M.OWN_PACKAGES = {"openuf", "luci-app-openuf"}
+-- The openUF feed's packages, which the ASU server does not know and would
+-- refuse to build: owut leaves them out of the image and the bootstrap puts
+-- them back from the openUF feed on its first boot (the theme only when the
+-- kept LuCI settings still register it).
+M.OWN_PACKAGES = {"openuf", "luci-app-openuf", "luci-theme-unifi"}
 M._installed = function(pkg)
 	return M._exec("apk info -e " .. pkg .. " >/dev/null 2>&1") == 0
 end
