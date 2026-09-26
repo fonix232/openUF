@@ -1,1311 +1,818 @@
-/* Network > Wireless as UniFi's device cards: the "cards" design
- * (luci.openuf_theme.wireless=cards). Each radio is a card like UniFi's device
- * panel (an icon on a tile, the name, a status chip, the actions, a
- * channel line) holding its SSIDs as compact rows; the associated
- * stations are UniFi's client list. LuCI draws them as table rows; the
- * rows become the cards, laid out in their section's card.
- * view/openuf-theme/network/wireless-cards.js only labels LuCI's nodes: a
- * chip's word, which fact a row holds, a label without its colon, a
- * radio's band and width, whether an SSID is switched on, a rate apart
- * from its details. Without it a chip is a dot and the rows keep LuCI's
- * order and words.
- *
- * header.ut links this after cascade.css on this page only; the rules the
- * other network pages share stay in cascade.css ("page: network"). */
+// Network > Wireless as UniFi's device cards: the "cards" design
+// (luci.openuf_theme.wireless=cards). Each radio is a card like UniFi's device
+// panel (an icon on a tile, the name, a status chip, the actions, a channel
+// line) holding its SSIDs as compact rows; the associated stations are
+// UniFi's client list.
+// view/openuf-theme/network/wireless-cards.js only labels LuCI's nodes: a
+// chip's word, which fact a row holds, a label without its colon, a radio's
+// band and width, whether an SSID is switched on, a rate apart from its
+// details. Without it a chip is a dot and the rows keep LuCI's order and words.
+//
+// header.ut links this after cascade.css on this page only; the rules the
+// other network pages share stay in cascade.css ("page: network").
+@use '../abstracts' as *;
+@use 'cards-kit' as cards;
+
+// A radio's row, told from its SSIDs' by the radio's own "Add".
+$radio: ':has(> .cbi-section-actions .cbi-button-add)';
+$icon-buttons: ':is(.cbi-button-neutral:not(.enable-disable), .remove)';
 
 :root {
-	--uf-network-i-restart: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M19.25 12a7.25 7.25 0 1 1-2.12-5.13'/><path d='M19.25 4.5v3.75H15.5'/></svg>");
-	--uf-network-i-trash: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='M4.75 6.75h14.5M9.75 6.5V4.75h4.5V6.5M6.75 6.75l.75 12.1c.05.9.8 1.4 1.7 1.4h5.6c.9 0 1.65-.5 1.7-1.4l.75-12.1M10.25 10.5v6M13.75 10.5v6'/></svg>");
-	--uf-network-i-plus: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'><path d='M12 5.5v13M5.5 12h13'/></svg>");
-	--uf-network-i-disconnect: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'><circle cx='12' cy='12' r='8.25'/><path d='m9.25 9.25 5.5 5.5M14.75 9.25l-5.5 5.5'/></svg>");
-}
-
-/* The signal meter at the size of the text beside it. */
-[data-page="admin-network-wireless"] img[src*="/icons/signal-"] {
-	width: 20px;
-	height: 20px;
-	vertical-align: middle;
-}
-
-/* Values LuCI marks as unset ("none", "unspecified", "any") are grey, as
- * UniFi's "-" is, not italic. */
-[data-page="admin-network-wireless"] .cbi-section-table .td.cbi-value-field > em {
-	font-style: normal;
-	color: var(--uf-text-3);
-}
-
-/* Card sections
- * -------------
- * The wireless overview is a card as every section is, its title on
- * top; the cards it holds follow, one per radio. It does not scroll
- * sideways as the base's wide grids do. */
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto;
-	align-items: center;
-	gap: 0 16px;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device.cbi-section {
-	overflow: visible;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device > h3 {
-	position: static;
-	grid-column: 1;
-	margin: 0 0 14px;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device > :not(h3) {
-	position: static;
-	grid-column: 1 / -1;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device > .table {
-	display: block;
-	margin: 0;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device > .table > :is(.tbody, .thead) {
-	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
-	gap: 16px;
-}
-
-/* A card: the row itself. Cells lose the table's rules and padding, and
- * the row actions the base pins for scrolling grids. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr.cbi-section-table-row {
-	--uf-network-state: var(--uf-text-4);
-	--uf-network-chip: var(--uf-field);
-	--uf-network-chip-text: var(--uf-text-2);
-
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto;
-	align-items: start;
-	gap: 0 12px;
-	margin: 0;
-	padding: 16px 20px 10px;
-	background: var(--uf-surface);
-	border: 1px solid var(--uf-border);
-	border-radius: var(--uf-radius);
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr.cbi-section-table-row > :where(.td) {
-	display: block;
-	width: auto;
-	min-width: 0;
-	padding: 0;
-	border: 0;
-	border-radius: 0;
-	background: none;
-	overflow: visible;
-	text-align: left;
-	white-space: normal;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr.cbi-section-table-row > .td.cbi-section-actions {
-	position: static;
-	width: auto !important; /* over LuCI's inline width, measured for a row of text buttons */
-	min-width: 0 !important;
-	background: none;
-	box-shadow: none;
-	animation: none;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr.cbi-section-table-row > .td.cbi-section-actions > div {
-	display: flex;
-	align-items: center;
-	justify-content: flex-end;
-	gap: 4px;
-}
-
-/* (Kept weak, so the icon buttons and the switch below can reshape them.) */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device :where(.tr.cbi-section-table-row > .td.cbi-section-actions) .cbi-button {
-	flex: none;
-	height: 28px;
-	padding: 0 12px;
-}
-
-/* Actions on a card: UniFi's quiet icon buttons for the quick ones
- * (restart a radio, remove an SSID; the base's spinner replaces the icon
- * while one works), text for those that open a dialog (Scan, Add, Edit),
- * outlined blue as secondary actions are everywhere else (LuCI marks Edit
- * and Scan as primary, a solid blue on every row). */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .cbi-section-actions .cbi-button-action.important {
-	--uf-btn-fg: var(--uf-blue);
-	--uf-btn-bg: var(--uf-surface);
-	--uf-btn-line: var(--uf-blue-line);
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .cbi-section-actions .cbi-button-action.important:hover {
-	--uf-btn-fg: var(--uf-blue);
-	--uf-btn-bg: var(--uf-blue-soft);
-	--uf-btn-line: var(--uf-blue);
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .cbi-section-actions :is(.cbi-button-neutral:not(.enable-disable), .remove) {
-	--uf-btn-fg: var(--uf-text-3);
-	--uf-btn-bg: transparent;
-	--uf-btn-line: transparent;
-
-	width: 28px;
-	padding: 0;
-	font-size: 0;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .cbi-section-actions .remove {
-	--uf-network-icon: var(--uf-network-i-trash);
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .cbi-section-actions :is(.cbi-button-neutral:not(.enable-disable), .remove):not(.spinning)::before {
-	content: "";
-	flex: none;
-	width: 18px;
-	height: 18px;
-	background: currentColor;
-	-webkit-mask: var(--uf-network-icon, var(--uf-network-i-restart)) center / contain no-repeat;
-	mask: var(--uf-network-icon, var(--uf-network-i-restart)) center / contain no-repeat;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .cbi-section-actions .cbi-button-neutral:not(.enable-disable):not([disabled]):hover {
-	--uf-btn-fg: var(--uf-text-1);
-	--uf-btn-bg: var(--uf-hover);
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .cbi-section-actions .remove:not([disabled]):hover {
-	--uf-btn-fg: var(--uf-red-text);
-	--uf-btn-bg: rgba(var(--uf-red-rgb), .08);
-}
-
-/* A radio's "Add" stays outlined beside Scan, with the plus the theme's
- * other "Add" buttons carry. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .cbi-section-actions .cbi-button-add {
-	gap: 4px;
-	padding: 0 12px 0 8px;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .cbi-section-actions .cbi-button-add::before {
-	content: "";
-	flex: none;
-	width: 14px;
-	height: 14px;
-	background: currentColor;
-	-webkit-mask: var(--uf-network-i-plus) center / contain no-repeat;
-	mask: var(--uf-network-i-plus) center / contain no-repeat;
-}
-
-/* The status chip: a dot and a word, tinted by the state. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device span.ifacebadge::after {
-	content: attr(data-uf-state-label);
-	flex: none;
-	display: inline-flex;
-	align-items: center;
-	height: 18px;
-	padding: 0 8px 0 17px;
-	border-radius: 9px;
-	background: radial-gradient(circle at 9px 50%, var(--uf-network-state) 3px, transparent 3.5px), var(--uf-network-chip);
-	color: var(--uf-network-chip-text);
-	font-size: 11px;
-	font-weight: 500;
-	line-height: 18px;
-	white-space: nowrap;
-}
-
-/* No word to show (no enhancement script): the dot alone. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device span.ifacebadge:not([data-uf-state-label])::after {
-	width: 8px;
-	height: 8px;
-	margin: 0 2px;
-	padding: 0;
-	background: var(--uf-network-state);
-}
-
-/* States. wireless-cards.js names them (a radio restarting, an SSID
- * with changes not yet applied are orange); without it LuCI's text tells
- * (below). */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr[data-uf-state="up"] {
-	--uf-network-state: var(--uf-green);
-	--uf-network-chip: rgba(var(--uf-green-rgb), .13);
-	--uf-network-chip-text: var(--uf-green-text);
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:is([data-uf-state="busy"], [data-uf-state="pending"]) {
-	--uf-network-state: var(--uf-orange);
-	--uf-network-chip: rgba(var(--uf-orange-rgb), .15);
-	--uf-network-chip-text: var(--uf-orange-text);
-}
-
-/* A label as the script words it: "Bitrate", not LuCI's "Bitrate: ".
- * Its own text stays for screen readers. */
-[data-page="admin-network-wireless"] :is(#cbi-wireless-wifi-device [data-name="_stat"], .modal .ifacebadge.large) .nowrap > strong[data-uf-label] {
-	font-size: 0;
-}
-
-[data-page="admin-network-wireless"] :is(#cbi-wireless-wifi-device [data-name="_stat"], .modal .ifacebadge.large) .nowrap > strong[data-uf-label]::before {
-	content: attr(data-uf-label);
-	content: attr(data-uf-label) / "";
-	margin-right: 4px;
-	font-size: 13px;
-}
-
-/* Dialog status
- * -------------
- * The status at the top of the wireless dialog: the card's
- * body in a tinted block, the meter beside label/value rows,
- * two to a line where there is room. */
-
-[data-page="admin-network-wireless"] .modal .ifacebadge.large {
-	display: flex;
-	align-items: flex-start;
-	gap: 14px;
-	width: 100%;
-	max-width: 100%;
-	min-width: 0;
-	padding: 12px 16px;
-	background: var(--uf-field);
-	border: 0;
-	border-radius: var(--uf-radius);
-	color: var(--uf-text-1);
-	font-weight: 400;
-	line-height: 18px;
-	white-space: normal;
-}
-
-[data-page="admin-network-wireless"] .modal .ifacebadge.large > span {
-	flex: 1 1 auto;
-	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-	gap: 0 24px;
-	min-width: 0;
-	font-size: 0; /* the " | " LuCI puts between facts */
-}
-
-[data-page="admin-network-wireless"] .modal .ifacebadge.large > span > br {
-	display: none;
-}
-
-[data-page="admin-network-wireless"] .modal .ifacebadge.large > span > :is(.nowrap, em) {
-	display: flex;
-	justify-content: space-between;
-	align-items: baseline;
-	gap: 12px;
-	padding: 5px 0;
-	border-bottom: 1px solid var(--uf-border);
-	color: var(--uf-text-1);
-	font-size: 13px;
-	font-style: normal;
-	white-space: normal;
-	text-align: right;
-	overflow-wrap: anywhere;
-	font-variant-numeric: tabular-nums;
-}
-
-[data-page="admin-network-wireless"] .modal .ifacebadge.large > span > .nowrap > strong {
-	flex: none;
-	color: var(--uf-text-3);
-	font-weight: 400;
-	text-align: left;
-}
-
-[data-page="admin-network-wireless"] .modal .ifacebadge.large > span > em {
-	grid-column: 1 / -1;
-	justify-content: flex-start;
-	border-bottom: 0;
-	color: var(--uf-text-3);
-}
-
-/* LuCI parts the wireless status's facts with " | " as well as line
- * breaks; as bare text those would take cells of a grid, so these rows
- * flow two to a line instead. */
-[data-page="admin-network-wireless"] .modal .ifacebadge.large > span {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 0;
-	justify-content: space-between;
-	align-content: flex-start;
-}
-
-[data-page="admin-network-wireless"] .modal .ifacebadge.large > span > :is(.nowrap, em) {
-	flex: 0 0 calc(50% - 12px);
-}
-
-[data-page="admin-network-wireless"] .modal .ifacebadge.large > span > em {
-	flex-basis: 100%;
-}
-
-/* The wireless dialog's meter, larger, over its reading. */
-[data-page="admin-network-wireless"] .modal .ifacebadge.large > small {
-	flex: 0 0 auto;
-	min-width: 64px;
-	padding-top: 4px;
-	text-align: center;
-}
-
-[data-page="admin-network-wireless"] .modal .ifacebadge.large > small img[src*="/icons/signal-"] {
-	width: 32px;
-	height: 32px;
-}
-
-/* Wireless
- * --------
- * A card per radio, as UniFi's device panel shows an access point: the
- * radio's tile, name and chip, its chipset, then its channel line
- * ("Channel 36 (5 GHz, 80 MHz)  WiFi 6") in a tinted band; its SSIDs
- * follow as compact rows, a status dot, the name over its mode, security
- * and BSSID, the signal, then the actions. LuCI lists radios and SSIDs as
- * sibling rows, so a card is its radio's row and the rows up to the next
- * radio, drawn as one: the first rounds the top, the last the bottom. */
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device > .table > .tbody {
-	display: flex;
-	flex-direction: column;
-	gap: 0;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr.cbi-section-table-row {
-	padding: 10px 20px;
-	border-width: 0 1px;
-	border-radius: 0;
-	/* The rule between rows, inside the card's padding. */
-	background: linear-gradient(var(--uf-divider), var(--uf-divider)) 20px 0 / calc(100% - 40px) 1px no-repeat, var(--uf-surface);
-}
-
-/* A radio's row: the card's top. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr.cbi-section-table-row:has(> .cbi-section-actions .cbi-button-add) {
-	grid-template-columns: 52px minmax(0, 1fr) auto;
-	grid-template-rows: 20px auto auto;
-	align-items: center;
-	gap: 0;
-	padding-top: 16px;
-	padding-bottom: 14px;
-	border-top-width: 1px;
-	border-radius: var(--uf-radius) var(--uf-radius) 0 0;
-	background: var(--uf-surface);
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr.cbi-section-table-row:has(> .cbi-section-actions .cbi-button-add):not(:first-child) {
-	margin-top: 12px;
-}
-
-/* The last row before the next radio, or the last of all: its bottom. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr.cbi-section-table-row:is(:last-child, :has(+ .tr > .cbi-section-actions .cbi-button-add)) {
-	padding-bottom: 14px;
-	border-bottom-width: 1px;
-	border-bottom-left-radius: var(--uf-radius);
-	border-bottom-right-radius: var(--uf-radius);
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr.cbi-section-table-row:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_badge"] {
-	grid-area: 1 / 1 / 2 / 3;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr.cbi-section-table-row:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_badge"] > .center {
-	display: block;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device span.ifacebadge {
-	position: relative;
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	min-height: 20px;
-	padding: 0 0 0 52px;
-	background: none;
-	border: 0;
-	color: var(--uf-text-1);
-	font-size: 15px;
-	font-weight: 600;
-	line-height: 20px;
-	white-space: nowrap;
-}
-
-/* The radio's tile, blue while it transmits. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device span.ifacebadge::before {
-	content: "";
-	position: absolute;
-	top: 0;
-	left: 0;
-	width: 40px;
-	height: 40px;
-	border-radius: 10px;
-	background: var(--uf-field);
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device span.ifacebadge:has(> img[src$="/wifi.svg"])::before {
-	background: var(--uf-blue-soft);
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device span.ifacebadge > img {
-	position: absolute;
-	top: 8px;
-	left: 8px;
-	width: 24px;
-	height: 24px;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device span.ifacebadge > img[src$="/wifi.svg"] {
-	--uf-device-color: var(--uf-blue);
-}
-
-/* The chipset under the name; LuCI's wrapping cell and its big type go. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"],
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div {
-	display: contents;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div > :is(big, em) {
-	grid-area: 2 / 2;
-	min-width: 0;
-	color: var(--uf-text-3);
-	font-size: 12px;
-	font-style: normal;
-	line-height: 20px;
-}
-
-/* A long chipset fades out and slides into view on hover (cascade.css,
- * "Fading names": the script marks it); without the script, an ellipsis. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div > big:not([data-uf-fade]) {
-	overflow: hidden;
-	white-space: nowrap;
-	text-overflow: ellipsis;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div > big > strong {
-	font-weight: 400;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .cbi-section-actions {
-	grid-area: 1 / 3 / 3 / 4;
-	align-self: center;
-}
-
-/* The channel line: the radio's facts in a tinted band, as UniFi lists a
- * radio's channel, width and standard. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div > div {
-	grid-area: 3 / 1 / 4 / -1;
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 4px 10px;
-	margin-top: 14px;
-	padding: 7px 12px;
-	border-radius: var(--uf-radius-sm);
-	background: var(--uf-field);
-	color: var(--uf-text-1);
-	font-size: 0; /* the " | " between LuCI's facts */
-	line-height: 18px;
-	font-variant-numeric: tabular-nums;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div > div > * {
-	font-size: 13px;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div > div .nowrap > strong {
-	color: var(--uf-text-3);
-	font-weight: 400;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div > div > em {
-	color: var(--uf-text-3);
-	font-style: normal;
-}
-
-/* The bitrate, or "Device is not active", at the line's end. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div > div > :is([data-uf-key="bitrate"], em) {
-	margin-left: auto;
-}
-
-/* With the script: "Channel 36" and "(5 GHz, 80 MHz)" from the channel,
- * band and width, then the standard as a chip where LuCI had the channel
- * and its frequency. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div > div[data-uf-chan]::before {
-	content: attr(data-uf-chan);
-	order: -3;
-	font-size: 13px;
-	font-weight: 600;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div > div[data-uf-freq]::after {
-	content: attr(data-uf-freq);
-	order: -2;
-	margin-left: -6px;
-	color: var(--uf-text-2);
-	font-size: 13px;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div > div[data-uf-chan] > [data-uf-key="channel"] {
-	order: -1;
-	font-size: 0;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div > div[data-uf-chan] > [data-uf-key="channel"]:not([data-uf-std]) {
-	display: none;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div > div[data-uf-chan] > [data-uf-key="channel"] > strong::before {
-	content: none;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div > div[data-uf-chan] > [data-uf-key="channel"]::after {
-	content: attr(data-uf-std);
-	display: inline-block;
-	margin-left: 4px;
-	padding: 0 6px;
-	border: 1px solid var(--uf-border-strong);
-	border-radius: var(--uf-radius-sm);
-	color: var(--uf-text-2);
-	font-size: 11px;
-	font-weight: 500;
-	line-height: 16px;
-}
-
-/* An SSID's row: dot, name over its facts, signal, actions. The dot sits
- * under the radio's tile, the name under the radio's name. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr.cbi-section-table-row:not(:has(> .cbi-section-actions .cbi-button-add)) {
-	grid-template-columns: 40px minmax(0, 1fr) auto auto;
-	align-items: center;
-	gap: 0 12px;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr.cbi-section-table-row:not(:has(> .cbi-section-actions .cbi-button-add))::before {
-	content: "";
-	grid-area: 1 / 1;
-	align-self: start;
-	justify-self: center;
-	width: 8px;
-	height: 8px;
-	margin-top: 6px;
-	padding: 0;
-	border-radius: 50%;
-	background: var(--uf-network-state);
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not(:has(> .cbi-section-actions .cbi-button-add)) > .td[data-name="_stat"] {
-	grid-area: 1 / 2;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not(:has(> .cbi-section-actions .cbi-button-add)) > .td[data-name="_badge"] {
-	grid-area: 1 / 3;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not(:has(> .cbi-section-actions .cbi-button-add)) > .cbi-section-actions {
-	grid-area: 1 / 4;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not(:has(> .cbi-section-actions .cbi-button-add)) > .td[data-name="_stat"] > div {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: baseline;
-	min-width: 0;
-	color: var(--uf-text-3);
-	font-size: 0; /* the " | " between LuCI's facts */
-	line-height: 18px;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not(:has(> .cbi-section-actions .cbi-button-add)) > .td[data-name="_stat"] > div > br {
-	display: none;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not(:has(> .cbi-section-actions .cbi-button-add)) > .td[data-name="_stat"] > div > .nowrap {
-	min-width: 0;
-	font-size: 12px;
-	white-space: nowrap;
-}
-
-/* Facts need no labels here: a BSSID and a cipher read as what they are. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not(:has(> .cbi-section-actions .cbi-button-add)) > .td[data-name="_stat"] > div > .nowrap > strong {
-	display: none;
-}
-
-/* The SSID, fading out where it is too long and sliding into view on
- * hover (the script marks it; without it, an ellipsis). */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not(:has(> .cbi-section-actions .cbi-button-add)) > .td[data-name="_stat"] > div > .nowrap:first-child {
-	flex-basis: 100%;
-	color: var(--uf-text-1);
-	font-size: 13px;
-	font-weight: 600;
-	line-height: 20px;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not(:has(> .cbi-section-actions .cbi-button-add)) > .td[data-name="_stat"] > div > .nowrap:first-child:not([data-uf-fade]) {
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not(:has(> .cbi-section-actions .cbi-button-add)) > .td[data-name="_stat"] > div > .nowrap ~ .nowrap ~ .nowrap::before {
-	content: "\b7";
-	margin: 0 6px;
-	color: var(--uf-text-4);
-}
-
-/* Security before the BSSID, the state note last. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device [data-name="_stat"] [data-uf-key="encryption"] { order: 1; }
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device [data-name="_stat"] [data-uf-key="bssid"] { order: 2; }
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device [data-name="_stat"] [data-uf-key="note"] { order: 3; }
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device [data-name="_stat"] .nowrap em {
-	font-style: normal;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not(:has(> .cbi-section-actions .cbi-button-add)) > .td[data-name="_badge"] .ifacebadge {
-	gap: 6px;
-	color: var(--uf-text-2);
-	font-size: 12px;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_badge"] .ifacebadge em,
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_badge"] .ifacebadge small {
-	font-style: normal;
-	font-size: 12px;
-	color: var(--uf-text-3);
-}
-
-/* SSID states, from the text LuCI shows when the script does not say:
- * a note ("Wireless is disabled") is grey, a pending-changes link orange. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:is([data-uf-state="up"], :not([data-uf-state]):not(:has(> .cbi-section-actions .cbi-button-add)):not(:has([data-name="_stat"] :is(em, a)))) {
-	--uf-network-state: var(--uf-green);
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not([data-uf-state]):not(:has(> .cbi-section-actions .cbi-button-add)):has([data-name="_stat"] a) {
-	--uf-network-state: var(--uf-orange);
-}
-
-/* A radio that transmits is "Active" (up), one that does not grey. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not([data-uf-state]):has(> .cbi-section-actions .cbi-button-add):has([data-name="_stat"] .nowrap) {
-	--uf-network-state: var(--uf-green);
-	--uf-network-chip: rgba(var(--uf-green-rgb), .13);
-	--uf-network-chip-text: var(--uf-green-text);
-}
-
-/* Enable/Disable is a switch, as UniFi toggles a WiFi network, on while
- * the network is configured enabled (as LuCI's word on the button says);
- * it needs the script to know which. Its title says what a press does:
- * LuCI saves and applies at once. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr[data-uf-kind="ssid"] .cbi-section-actions .enable-disable {
-	--uf-btn-bg: var(--uf-blue-fill);
-	--uf-btn-line: transparent;
-
-	position: relative;
-	width: 32px;
-	height: 18px;
-	margin-right: 6px;
-	padding: 0;
-	border-radius: 9px;
-	font-size: 0;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr[data-uf-kind="ssid"] .cbi-section-actions .enable-disable::after {
-	content: "";
-	position: absolute;
-	top: 2px;
-	left: 16px;
-	width: 14px;
-	height: 14px;
-	border-radius: 50%;
-	background: var(--uf-knob);
-	box-shadow: var(--uf-shadow-sm);
-	transition: left .15s;
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr[data-uf-kind="ssid"] .cbi-section-actions .enable-disable[data-uf-switch="off"] {
-	--uf-btn-bg: var(--uf-border-strong);
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr[data-uf-kind="ssid"] .cbi-section-actions .enable-disable[data-uf-switch="off"]::after {
-	left: 2px;
-}
-
-/* Keep the switch's own fill under the pointer. */
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr[data-uf-kind="ssid"] .cbi-section-actions .enable-disable:hover {
-	--uf-btn-bg: var(--uf-blue-fill-hover);
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr[data-uf-kind="ssid"] .cbi-section-actions .enable-disable[data-uf-switch="off"]:hover {
-	--uf-btn-bg: var(--uf-text-4);
-}
-
-[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr[data-uf-kind="ssid"] .cbi-section-actions .enable-disable.spinning::after {
-	display: none;
-}
-
-/* Associated stations
- * -------------------
- * UniFi's client list, in a card of its own: the host first, with a dot
- * and its addresses, then the network, MAC, signal, and the rates as
- * UniFi's download (cyan) and upload (purple) columns. The table is laid
- * out by width of the card: one line per station where it fits, two
- * lines where not, a small card per station on a phone. */
-
-[data-page="admin-network-wireless"] #view > h3 {
-	margin: 0;
-	padding: 18px 20px 6px;
-	background: var(--uf-surface);
-	border: 1px solid var(--uf-border);
-	border-bottom: 0;
-	border-radius: var(--uf-radius) var(--uf-radius) 0 0;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table {
-	--uf-network-sta-cols: minmax(0, 1.3fr) minmax(0, 1fr) 144px 150px minmax(0, 1fr) minmax(0, 1fr) 32px;
-
-	display: block;
-	container-type: inline-size;
-	margin-bottom: 16px;
-	padding: 0 20px 10px;
-	background: var(--uf-surface);
-	border: 1px solid var(--uf-border);
-	border-top: 0;
-	border-radius: 0 0 var(--uf-radius) var(--uf-radius);
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr {
-	display: grid;
-	grid-template-columns: var(--uf-network-sta-cols);
-	align-items: center;
-	gap: 0 12px;
-	padding: 0 8px;
-	border-radius: var(--uf-radius-sm);
-	border-top: 1px solid var(--uf-divider);
-}
-
-/* A station's cells start together, so a rate whose details wrap does
- * not push its neighbour's figure down; the button stays centred. */
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr:not(.table-titles, .placeholder) {
-	align-items: start;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :nth-child(6) {
-	align-self: center;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr:is(.table-titles, .table-titles + .tr) {
-	border-top: 0;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr.table-titles {
-	border-bottom: 1px solid var(--uf-border);
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr.placeholder {
-	display: block;
-	border-top: 0;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :is(.th, .td) {
-	display: block;
-	grid-row: 1;
-	width: auto; /* not the base's 25% for host and rates */
-	min-width: 0;
-	padding: 10px 0;
-	border: 0;
-	background: none;
-}
-
-/* (The names the script marks fade instead: cascade.css, "Fading names".) */
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :is(.th, .td):not([data-uf-fade]) {
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .th {
-	padding: 10px 0 8px;
-	white-space: nowrap;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr.placeholder > .td {
-	position: absolute;
-	padding: 22px 0;
-	overflow: visible;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr:not(.table-titles, .placeholder):hover {
-	background: var(--uf-hover);
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :nth-child(1) { grid-column: 2; }
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :nth-child(2) { grid-column: 3; }
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :nth-child(3) { grid-column: 1; }
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :nth-child(4) { grid-column: 4; }
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .th:nth-child(5) { grid-column: 5 / 7; }
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :nth-child(6) { grid-column: 7; text-align: right; }
-
-/* The host: a green dot (associated, so online), the name in bold, then
- * its addresses in grey under it, as UniFi pairs a client with its IP.
- * The name fades out where it is too long and slides into view on hover
- * (the script marks the cell; the addresses stay put); the dot is the
- * row's, in the same place in every layout, so the slide does not fade
- * it. */
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr:not(.table-titles, .placeholder) {
-	position: relative;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr:not(.table-titles, .placeholder)::before {
-	content: "";
-	position: absolute;
-	top: 16px;
-	left: 8px;
-	width: 6px;
-	height: 6px;
-	padding: 0; /* not the base's for a phone's row labels */
-	border-radius: 50%;
-	background: var(--uf-green);
-}
-
-/* (Set off by a margin, not padding, so a sliding name stays clear of it.) */
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr:not(.table-titles, .placeholder) > .td:nth-child(3) {
-	margin-left: 16px;
-	color: var(--uf-text-1);
-	font-weight: 600;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr:not(.table-titles, .placeholder) > .td:nth-child(3):not([data-uf-fade]) {
-	white-space: nowrap;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(3) .hide-xs {
-	display: block;
-	overflow: hidden;
-	color: var(--uf-text-3);
-	font-size: 12px;
-	font-weight: 400;
-	line-height: 16px;
-	text-indent: 0;
-	text-overflow: ellipsis;
-}
-
-/* The network: its SSID (LuCI says 'Access Point "HomeNet"'), the
- * interface in grey under it. With the script the SSID is the badge's own
- * text element, handed the SSID (data-uf-ssid) to show in place of
- * LuCI's words, so it can fade and slide as a name; without it, the
- * badge shows the SSID itself, cut short. */
-[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(1) > .ifacebadge {
-	display: grid;
-	grid-template-columns: 16px minmax(0, 1fr);
-	align-items: center;
-	gap: 0 8px;
-	padding: 0;
-	background: none;
-	border: 0;
-	color: var(--uf-text-1);
-	text-align: left;
-	white-space: nowrap;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(1) > .ifacebadge > img {
-	grid-area: 1 / 1;
-	width: 16px;
-	height: 16px;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(1) > .ifacebadge > span {
-	display: none;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(1) > .ifacebadge::after {
-	content: attr(data-ssid);
-	grid-area: 1 / 2;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(1) > .ifacebadge:has(> span[data-uf-ssid])::after {
-	content: none;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(1) > .ifacebadge > span[data-uf-ssid] {
-	display: block;
-	grid-area: 1 / 2;
-	font-size: 0;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(1) > .ifacebadge > span[data-uf-ssid] > small {
-	display: none;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(1) > .ifacebadge > span[data-uf-ssid]::after {
-	content: attr(data-uf-ssid);
-	font-size: 13px;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(1) > .ifacebadge::before {
-	content: attr(data-ifname);
-	grid-area: 2 / 2;
-	overflow: hidden;
-	color: var(--uf-text-3);
-	font-size: 12px;
-	line-height: 16px;
-	text-overflow: ellipsis;
-}
-
-/* A VLAN's zone, beside the interface. */
-[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(1) > .ifacebadge > .zonebadge {
-	grid-area: 3 / 2;
-	justify-self: start;
-	font-size: 11px;
-	line-height: 16px;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(2) {
-	color: var(--uf-text-2);
-	white-space: nowrap;
-	font-variant-numeric: tabular-nums;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(4) .ifacebadge {
-	color: var(--uf-text-2);
-	font-size: 12px;
-}
-
-/* Rates: each in a column of its own, the figure in UniFi's download or
- * upload colour, the PHY details grey under it, wrapped rather than cut
- * (the script parts them and titles the whole rate; without it the line
- * is cut short). */
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5),
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5) > span {
-	display: contents;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5) > span > br {
-	display: none;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5) > span > span {
-	grid-row: 1;
-	grid-column: 5;
-	min-width: 0;
-	padding: 10px 0;
-	overflow: hidden;
-	color: var(--uf-cyan-text);
-	white-space: nowrap;
-	text-overflow: ellipsis;
-	font-variant-numeric: tabular-nums;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5) > span > span:last-child {
-	grid-column: 6;
-	color: var(--uf-purple-text);
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5) > span > span::before {
-	content: "\2193\a0";
-	font-weight: 600;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5) > span > span:last-child::before {
-	content: "\2191\a0";
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5) > span > span[data-uf-rate] {
-	font-size: 0;
-	line-height: 0;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5) > span > span[data-uf-rate]::before {
-	content: "\2193\a0" attr(data-uf-rate);
-	display: block;
-	overflow: hidden;
-	font-size: 13px;
-	font-weight: 400;
-	line-height: 18px;
-	text-overflow: ellipsis;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5) > span > span[data-uf-rate]:last-child::before {
-	content: "\2191\a0" attr(data-uf-rate);
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5) > span > span[data-uf-phy] {
-	white-space: normal;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5) > span > span[data-uf-phy]::after {
-	content: attr(data-uf-phy);
-	display: block;
-	color: var(--uf-text-3);
-	font-size: 11px;
-	line-height: 15px;
-	overflow-wrap: anywhere;
-}
-
-/* Disconnect: a quiet circled cross, red under the pointer, not a column
- * of red buttons (the script names it; LuCI's word stays its text). */
-[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(6) .cbi-button {
-	--uf-btn-fg: var(--uf-text-3);
-	--uf-btn-bg: transparent;
-	--uf-btn-line: transparent;
-
-	width: 28px;
-	height: 28px;
-	padding: 0;
-	font-size: 0;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(6) .cbi-button:not(.spinning)::before {
-	content: "";
-	flex: none;
-	width: 18px;
-	height: 18px;
-	background: currentColor;
-	-webkit-mask: var(--uf-network-i-disconnect) center / contain no-repeat;
-	mask: var(--uf-network-i-disconnect) center / contain no-repeat;
-}
-
-[data-page="admin-network-wireless"] #wifi_assoclist_table .td:nth-child(6) .cbi-button:not([disabled]):hover {
-	--uf-btn-fg: var(--uf-red-text);
-	--uf-btn-bg: rgba(var(--uf-red-rgb), .08);
-}
-
-/* Two lines per station where seven columns do not fit: host, network
- * and signal over MAC and the two rates, the button beside both. */
-@container (max-width: 879px) {
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr {
-		grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) auto;
-		grid-template-rows: auto auto;
-		padding-top: 8px;
-		padding-bottom: 8px;
+	@include cards.icons(restart, trash, plus, disconnect);
+}
+
+[data-page="admin-network-wireless"] {
+	// The signal meter at the size of the text beside it.
+	img[src*="/icons/signal-"] { width: 20px; height: 20px; vertical-align: middle; }
+
+	// Values LuCI marks as unset ("none", "any") are grey, as UniFi's "-" is.
+	.cbi-section-table .td.cbi-value-field > em { font-style: normal; color: var(--uf-text-3); }
+
+	#cbi-wireless-wifi-device {
+		@include cards.section($shown: '.cbi-section', $min: 420px, $gap: 16px);
+		@include cards.card(16px 20px 10px, 4px);
+
+		// Quick actions are icons: restart a radio, remove an SSID. Those that
+		// open a dialog (Scan, Add, Edit) stay text, outlined blue as
+		// secondary actions are everywhere else (LuCI marks Edit and Scan as
+		// primary, a solid blue on every row).
+		.cbi-section-actions {
+			.cbi-button-action.important {
+				--uf-btn-fg: var(--uf-blue);
+				--uf-btn-bg: var(--uf-surface);
+				--uf-btn-line: var(--uf-blue-line);
+
+				&:hover {
+					--uf-btn-fg: var(--uf-blue);
+					--uf-btn-bg: var(--uf-blue-soft);
+					--uf-btn-line: var(--uf-blue);
+				}
+			}
+
+			#{$icon-buttons} { @include cards.icon-button; }
+			.remove { --uf-network-icon: var(--uf-network-i-trash); }
+			#{$icon-buttons}:not(.spinning)::before { @include cards.icon(var(--uf-network-icon, var(--uf-network-i-restart))); }
+			.cbi-button-neutral:not(.enable-disable):not([disabled]):hover { --uf-btn-fg: var(--uf-text-1); --uf-btn-bg: var(--uf-hover); }
+			.remove:not([disabled]):hover { --uf-btn-fg: var(--uf-red-text); --uf-btn-bg: rgba(var(--uf-red-rgb), .08); }
+
+			// A radio's "Add" stays outlined beside Scan, with the plus the
+			// theme's other "Add" buttons carry.
+			.cbi-button-add {
+				gap: 4px;
+				padding: 0 12px 0 8px;
+
+				&::before { @include cards.icon(var(--uf-network-i-plus), 14px); }
+			}
+		}
+
+		span.ifacebadge { @include cards.chip; }
+
+		// The script names the states (a radio restarting, an SSID with
+		// changes not yet applied are orange); without it LuCI's text tells
+		// (below).
+		.tr[data-uf-state="up"] { @include cards.state(green); }
+		.tr:is([data-uf-state="busy"], [data-uf-state="pending"]) { @include cards.state(orange); }
 	}
 
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr.table-titles {
-		display: none;
+	:is(#cbi-wireless-wifi-device [data-name="_stat"], .modal .ifacebadge.large) { @include cards.labels($gap: 4px); }
+
+	.modal .ifacebadge.large {
+		@include cards.dialog;
+		@include cards.dialog-facts;
+
+		// LuCI parts the wireless status's facts with " | " as well as line
+		// breaks; as bare text those would take cells of a grid, so these rows
+		// flow two to a line instead.
+		> span {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 0;
+			justify-content: space-between;
+			align-content: flex-start;
+
+			> :is(.nowrap, em) { flex: 0 0 calc(50% - 12px); }
+			> em { flex-basis: 100%; }
+		}
+
+		// The meter, larger, over its reading.
+		> small {
+			flex: 0 0 auto;
+			min-width: 64px;
+			padding-top: 4px;
+			text-align: center;
+
+			img[src*="/icons/signal-"] { width: 32px; height: 32px; }
+		}
 	}
 
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr.table-titles + .tr {
+	// A radio's card, as UniFi's device panel shows an access point, with its
+	// SSIDs as compact rows. LuCI lists radios and SSIDs as sibling rows, so
+	// a card is its radio's row and the rows up to the next radio, drawn as
+	// one: the first rounds the top, the last the bottom.
+	#cbi-wireless-wifi-device {
+		> .table > .tbody { display: flex; flex-direction: column; gap: 0; }
+
+		.tr.cbi-section-table-row {
+			padding: 10px 20px;
+			border-width: 0 1px;
+			border-radius: 0;
+			// The rule between rows, inside the card's padding.
+			background: linear-gradient(var(--uf-divider), var(--uf-divider)) 20px 0 / calc(100% - 40px) 1px no-repeat, var(--uf-surface);
+
+			&#{$radio} {
+				grid-template-columns: 52px minmax(0, 1fr) auto;
+				grid-template-rows: 20px auto auto;
+				align-items: center;
+				gap: 0;
+				padding-top: 16px;
+				padding-bottom: 14px;
+				border-top-width: 1px;
+				border-radius: var(--uf-radius) var(--uf-radius) 0 0;
+				background: var(--uf-surface);
+
+				&:not(:first-child) { margin-top: 12px; }
+			}
+
+			// The last row before the next radio, or the last of all.
+			&:is(:last-child, :has(+ .tr > .cbi-section-actions .cbi-button-add)) {
+				padding-bottom: 14px;
+				border-bottom-width: 1px;
+				border-bottom-left-radius: var(--uf-radius);
+				border-bottom-right-radius: var(--uf-radius);
+			}
+
+			&#{$radio} > .td[data-name="_badge"] {
+				grid-area: 1 / 1 / 2 / 3;
+
+				> .center { display: block; }
+			}
+		}
+
+		span.ifacebadge {
+			position: relative;
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			min-height: 20px;
+			padding: 0 0 0 52px;
+			background: none;
+			border: 0;
+			color: var(--uf-text-1);
+			font-size: 15px;
+			font-weight: 600;
+			line-height: 20px;
+			white-space: nowrap;
+
+			// The radio's tile, blue while it transmits.
+			&::before { @include cards.tile(var(--uf-field)); }
+			&:has(> img[src$="/wifi.svg"])::before { background: var(--uf-blue-soft); }
+
+			> img {
+				position: absolute;
+				top: 8px;
+				left: 8px;
+				width: 24px;
+				height: 24px;
+
+				&[src$="/wifi.svg"] { --uf-device-color: var(--uf-blue); }
+			}
+		}
+
+		.tr#{$radio} {
+			// The chipset under the name; LuCI's wrapping cell and its big type go.
+			> .td[data-name="_stat"], > .td[data-name="_stat"] > div { display: contents; }
+
+			> .td[data-name="_stat"] > div {
+				> :is(big, em) {
+					grid-area: 2 / 2;
+					min-width: 0;
+					color: var(--uf-text-3);
+					font-size: 12px;
+					font-style: normal;
+					line-height: 20px;
+				}
+
+				// A long chipset fades and slides (cascade.css, "Fading names":
+				// the script marks it); without the script, an ellipsis.
+				> big:not([data-uf-fade]) {
+					overflow: hidden;
+					white-space: nowrap;
+					text-overflow: ellipsis;
+				}
+
+				> big > strong { font-weight: 400; }
+			}
+
+			> .cbi-section-actions { grid-area: 1 / 3 / 3 / 4; align-self: center; }
+
+			// The channel line: the radio's facts in a tinted band, as UniFi
+			// lists a radio's channel, width and standard.
+			> .td[data-name="_stat"] > div > div {
+				grid-area: 3 / 1 / 4 / -1;
+				display: flex;
+				flex-wrap: wrap;
+				align-items: center;
+				gap: 4px 10px;
+				margin-top: 14px;
+				padding: 7px 12px;
+				border-radius: var(--uf-radius-sm);
+				background: var(--uf-field);
+				color: var(--uf-text-1);
+				font-size: 0; // the " | " between LuCI's facts
+				line-height: 18px;
+				font-variant-numeric: tabular-nums;
+
+				> * { font-size: 13px; }
+				.nowrap > strong { color: var(--uf-text-3); font-weight: 400; }
+				> em { color: var(--uf-text-3); font-style: normal; }
+				// The bitrate, or "Device is not active", at the line's end.
+				> :is([data-uf-key="bitrate"], em) { margin-left: auto; }
+
+				// With the script: "Channel 36" and "(5 GHz, 80 MHz)" from the
+				// channel, band and width, then the standard as a chip where
+				// LuCI had the channel and its frequency.
+				&[data-uf-chan]::before {
+					content: attr(data-uf-chan);
+					order: -3;
+					font-size: 13px;
+					font-weight: 600;
+				}
+
+				&[data-uf-freq]::after {
+					content: attr(data-uf-freq);
+					order: -2;
+					margin-left: -6px;
+					color: var(--uf-text-2);
+					font-size: 13px;
+				}
+
+				&[data-uf-chan] > [data-uf-key="channel"] {
+					order: -1;
+					font-size: 0;
+
+					&:not([data-uf-std]) { display: none; }
+					> strong::before { content: none; }
+
+					&::after {
+						content: attr(data-uf-std);
+						display: inline-block;
+						margin-left: 4px;
+						padding: 0 6px;
+						border: 1px solid var(--uf-border-strong);
+						border-radius: var(--uf-radius-sm);
+						color: var(--uf-text-2);
+						font-size: 11px;
+						font-weight: 500;
+						line-height: 16px;
+					}
+				}
+			}
+		}
+
+		// An SSID's row: dot, name over its facts, signal, actions. The dot
+		// sits under the radio's tile, the name under the radio's name.
+		.tr.cbi-section-table-row:not(#{$radio}) {
+			grid-template-columns: 40px minmax(0, 1fr) auto auto;
+			align-items: center;
+			gap: 0 12px;
+
+			&::before {
+				content: "";
+				grid-area: 1 / 1;
+				align-self: start;
+				justify-self: center;
+				width: 8px;
+				height: 8px;
+				margin-top: 6px;
+				padding: 0;
+				border-radius: 50%;
+				background: var(--uf-network-state);
+			}
+		}
+
+		.tr:not(#{$radio}) {
+			> .td[data-name="_stat"] { grid-area: 1 / 2; }
+			> .td[data-name="_badge"] { grid-area: 1 / 3; }
+			> .cbi-section-actions { grid-area: 1 / 4; }
+
+			> .td[data-name="_stat"] > div {
+				display: flex;
+				flex-wrap: wrap;
+				align-items: baseline;
+				min-width: 0;
+				color: var(--uf-text-3);
+				font-size: 0; // the " | " between LuCI's facts
+				line-height: 18px;
+
+				> br { display: none; }
+
+				> .nowrap {
+					min-width: 0;
+					font-size: 12px;
+					white-space: nowrap;
+
+					// No labels: a BSSID and a cipher read as what they are.
+					> strong { display: none; }
+
+					// The SSID, fading and sliding where too long (the script
+					// marks it; without it, an ellipsis).
+					&:first-child {
+						flex-basis: 100%;
+						color: var(--uf-text-1);
+						font-size: 13px;
+						font-weight: 600;
+						line-height: 20px;
+
+						&:not([data-uf-fade]) { overflow: hidden; text-overflow: ellipsis; }
+					}
+
+					& ~ .nowrap ~ .nowrap::before {
+						content: "\b7";
+						margin: 0 6px;
+						color: var(--uf-text-4);
+					}
+				}
+			}
+		}
+
+		[data-name="_stat"] {
+			@each $key, $order in (encryption: 1, bssid: 2, note: 3) {
+				[data-uf-key="#{$key}"] { order: $order; }
+			}
+
+			.nowrap em { font-style: normal; }
+		}
+
+		.tr:not(#{$radio}) > .td[data-name="_badge"] .ifacebadge {
+			gap: 6px;
+			color: var(--uf-text-2);
+			font-size: 12px;
+		}
+
+		.td[data-name="_badge"] .ifacebadge {
+			em, small { font-style: normal; font-size: 12px; color: var(--uf-text-3); }
+		}
+
+		// SSID states from the text LuCI shows when the script does not say:
+		// a note ("Wireless is disabled") is grey, a pending-changes link
+		// orange. A radio that transmits is "Active" (up), one that does not
+		// grey.
+		.tr:is([data-uf-state="up"], :not([data-uf-state]):not(#{$radio}):not(:has([data-name="_stat"] :is(em, a)))) { --uf-network-state: var(--uf-green); }
+
+		.tr:not([data-uf-state]) {
+			&:not(#{$radio}):has([data-name="_stat"] a) { --uf-network-state: var(--uf-orange); }
+			&#{$radio}:has([data-name="_stat"] .nowrap) { @include cards.state(green); }
+		}
+
+		// Enable/Disable is a switch, as UniFi toggles a WiFi network, on while
+		// the network is configured enabled (as LuCI's word on the button
+		// says); it needs the script to know which. Its title says what a
+		// press does: LuCI saves and applies at once.
+		.tr[data-uf-kind="ssid"] .cbi-section-actions .enable-disable {
+			--uf-btn-bg: var(--uf-blue-fill);
+			--uf-btn-line: transparent;
+
+			position: relative;
+			width: 32px;
+			height: 18px;
+			margin-right: 6px;
+			padding: 0;
+			border-radius: 9px;
+			font-size: 0;
+
+			&::after {
+				content: "";
+				position: absolute;
+				top: 2px;
+				left: 16px;
+				width: 14px;
+				height: 14px;
+				border-radius: 50%;
+				background: var(--uf-knob);
+				box-shadow: var(--uf-shadow-sm);
+				transition: left .15s;
+			}
+
+			&[data-uf-switch="off"] {
+				--uf-btn-bg: var(--uf-border-strong);
+
+				&::after { left: 2px; }
+			}
+
+			// The switch keeps its own fill under the pointer.
+			&:hover { --uf-btn-bg: var(--uf-blue-fill-hover); }
+			&[data-uf-switch="off"]:hover { --uf-btn-bg: var(--uf-text-4); }
+			&.spinning::after { display: none; }
+		}
+	}
+
+	// Associated stations: UniFi's client list, in a card of its own. The
+	// host first, with a dot and its addresses, then the network, MAC,
+	// signal, and the rates as UniFi's download (cyan) and upload (purple)
+	// columns. Laid out by the card's width: one line per station where it
+	// fits, two lines where not, a small card per station on a phone.
+	#view > h3 {
+		margin: 0;
+		padding: 18px 20px 6px;
+		background: var(--uf-surface);
+		border: 1px solid var(--uf-border);
+		border-bottom: 0;
+		border-radius: var(--uf-radius) var(--uf-radius) 0 0;
+	}
+
+	#wifi_assoclist_table {
+		--uf-network-sta-cols: minmax(0, 1.3fr) minmax(0, 1fr) 144px 150px minmax(0, 1fr) minmax(0, 1fr) 32px;
+
+		display: block;
+		container-type: inline-size;
+		margin-bottom: 16px;
+		padding: 0 20px 10px;
+		background: var(--uf-surface);
+		border: 1px solid var(--uf-border);
 		border-top: 0;
+		border-radius: 0 0 var(--uf-radius) var(--uf-radius);
+
+		> .tr {
+			display: grid;
+			grid-template-columns: var(--uf-network-sta-cols);
+			align-items: center;
+			gap: 0 12px;
+			padding: 0 8px;
+			border-radius: var(--uf-radius-sm);
+			border-top: 1px solid var(--uf-divider);
+
+			// A station's cells start together, so a rate whose details wrap
+			// does not push its neighbour's figure down; the button stays
+			// centred.
+			&:not(.table-titles, .placeholder) { align-items: start; }
+			> :nth-child(6) { align-self: center; }
+			&:is(.table-titles, .table-titles + .tr) { border-top: 0; }
+			&.table-titles { border-bottom: 1px solid var(--uf-border); }
+			&.placeholder { display: block; border-top: 0; }
+
+			> :is(.th, .td) {
+				display: block;
+				grid-row: 1;
+				width: auto; // not the base's 25% for host and rates
+				min-width: 0;
+				padding: 10px 0;
+				border: 0;
+				background: none;
+
+				// (The names the script marks fade instead: cascade.css, "Fading names".)
+				&:not([data-uf-fade]) { overflow: hidden; text-overflow: ellipsis; }
+			}
+
+			> .th { padding: 10px 0 8px; white-space: nowrap; }
+			&.placeholder > .td { position: absolute; padding: 22px 0; overflow: visible; }
+			&:not(.table-titles, .placeholder):hover { background: var(--uf-hover); }
+
+			@each $n, $column in (1: 2, 2: 3, 3: 1, 4: 4) {
+				> :nth-child(#{$n}) { grid-column: $column; }
+			}
+
+			> .th:nth-child(5) { grid-column: 5 / 7; }
+			> :nth-child(6) { grid-column: 7; text-align: right; }
+
+			// The host: a green dot (associated, so online), the name in bold,
+			// its addresses in grey under it, as UniFi pairs a client with its
+			// IP. The name fades and slides where too long (the script marks
+			// the cell; the addresses stay put); the dot is the row's, in the
+			// same place in every layout, so the slide does not fade it.
+			&:not(.table-titles, .placeholder) {
+				position: relative;
+
+				&::before {
+					content: "";
+					position: absolute;
+					top: 16px;
+					left: 8px;
+					width: 6px;
+					height: 6px;
+					padding: 0; // not the base's for a phone's row labels
+					border-radius: 50%;
+					background: var(--uf-green);
+				}
+
+				// (Set off by a margin, not padding, so a sliding name stays clear of the dot.)
+				> .td:nth-child(3) {
+					margin-left: 16px;
+					color: var(--uf-text-1);
+					font-weight: 600;
+
+					&:not([data-uf-fade]) { white-space: nowrap; }
+				}
+			}
+
+			> .td:nth-child(3) .hide-xs {
+				display: block;
+				overflow: hidden;
+				color: var(--uf-text-3);
+				font-size: 12px;
+				font-weight: 400;
+				line-height: 16px;
+				text-indent: 0;
+				text-overflow: ellipsis;
+			}
+		}
+
+		// The network: its SSID (LuCI says 'Access Point "HomeNet"'), the
+		// interface in grey under it. With the script the SSID is the badge's
+		// own text element, handed the SSID (data-uf-ssid) to show in place of
+		// LuCI's words, so it can fade and slide as a name; without it, the
+		// badge shows the SSID itself, cut short.
+		.td:nth-child(1) > .ifacebadge {
+			display: grid;
+			grid-template-columns: 16px minmax(0, 1fr);
+			align-items: center;
+			gap: 0 8px;
+			padding: 0;
+			background: none;
+			border: 0;
+			color: var(--uf-text-1);
+			text-align: left;
+			white-space: nowrap;
+
+			> img { grid-area: 1 / 1; width: 16px; height: 16px; }
+			> span { display: none; }
+
+			&::after {
+				content: attr(data-ssid);
+				grid-area: 1 / 2;
+				overflow: hidden;
+				text-overflow: ellipsis;
+			}
+
+			&:has(> span[data-uf-ssid])::after { content: none; }
+
+			> span[data-uf-ssid] {
+				display: block;
+				grid-area: 1 / 2;
+				font-size: 0;
+
+				> small { display: none; }
+				&::after { content: attr(data-uf-ssid); font-size: 13px; }
+			}
+
+			&::before {
+				content: attr(data-ifname);
+				grid-area: 2 / 2;
+				overflow: hidden;
+				color: var(--uf-text-3);
+				font-size: 12px;
+				line-height: 16px;
+				text-overflow: ellipsis;
+			}
+
+			// A VLAN's zone, beside the interface.
+			> .zonebadge {
+				grid-area: 3 / 2;
+				justify-self: start;
+				font-size: 11px;
+				line-height: 16px;
+			}
+		}
+
+		.td:nth-child(2) {
+			color: var(--uf-text-2);
+			white-space: nowrap;
+			font-variant-numeric: tabular-nums;
+		}
+
+		.td:nth-child(4) .ifacebadge { color: var(--uf-text-2); font-size: 12px; }
+
+		// Rates: each in a column of its own, the figure in UniFi's download
+		// or upload colour, the PHY details grey under it, wrapped rather than
+		// cut (the script parts them and titles the whole rate; without it the
+		// line is cut short).
+		> .tr > .td:nth-child(5) {
+			&, > span { display: contents; }
+			> span > br { display: none; }
+
+			> span > span {
+				grid-row: 1;
+				grid-column: 5;
+				min-width: 0;
+				padding: 10px 0;
+				overflow: hidden;
+				color: var(--uf-cyan-text);
+				white-space: nowrap;
+				text-overflow: ellipsis;
+				font-variant-numeric: tabular-nums;
+
+				&:last-child { grid-column: 6; color: var(--uf-purple-text); }
+				&::before { content: "\2193\a0"; font-weight: 600; }
+				&:last-child::before { content: "\2191\a0"; }
+
+				&[data-uf-rate] {
+					font-size: 0;
+					line-height: 0;
+
+					&::before {
+						content: "\2193\a0" attr(data-uf-rate);
+						display: block;
+						overflow: hidden;
+						font-size: 13px;
+						font-weight: 400;
+						line-height: 18px;
+						text-overflow: ellipsis;
+					}
+
+					&:last-child::before { content: "\2191\a0" attr(data-uf-rate); }
+				}
+
+				&[data-uf-phy] {
+					white-space: normal;
+
+					&::after {
+						content: attr(data-uf-phy);
+						display: block;
+						color: var(--uf-text-3);
+						font-size: 11px;
+						line-height: 15px;
+						overflow-wrap: anywhere;
+					}
+				}
+			}
+		}
+
+		// Disconnect: a quiet circled cross, red under the pointer, not a
+		// column of red buttons (the script names it; LuCI's word stays its
+		// text).
+		.td:nth-child(6) .cbi-button {
+			@include cards.icon-button($height: 28px);
+
+			&:not(.spinning)::before { @include cards.icon(var(--uf-network-i-disconnect)); }
+			&:not([disabled]):hover { --uf-btn-fg: var(--uf-red-text); --uf-btn-bg: rgba(var(--uf-red-rgb), .08); }
+		}
+
+		// Two lines per station where seven columns do not fit: host, network
+		// and signal over MAC and the two rates, the button beside both.
+		@container (max-width: 879px) {
+			> .tr {
+				grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+				grid-template-rows: auto auto;
+				padding-top: 8px;
+				padding-bottom: 8px;
+
+				&.table-titles { display: none; }
+				&.table-titles + .tr { border-top: 0; }
+				> :is(.td, .td > span > span) { padding: 2px 0; }
+				// The rates start level with the MAC address beside them, and
+				// the MAC address under the host's name.
+				> .td:nth-child(5) > span > span { padding-top: 2px; padding-bottom: 2px; }
+				> .td:nth-child(2) { padding-left: 16px; }
+				> :nth-child(1) { grid-area: 1 / 2; }
+				> :nth-child(2) { grid-area: 2 / 1; }
+				> :nth-child(3) { grid-area: 1 / 1; }
+				> :nth-child(4) { grid-area: 1 / 3; }
+				> .td:nth-child(5) > span > span:first-child { grid-area: 2 / 2; }
+				> .td:nth-child(5) > span > span:last-child { grid-area: 2 / 3; }
+				> :nth-child(6) { grid-area: 1 / 4 / 3 / 5; }
+			}
+		}
 	}
 
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :is(.td, .td > span > span) {
-		padding: 2px 0;
+	// Signal badges: the meter beside the reading ("-48/-95 dBm"), or above
+	// it where LuCI wraps it (scan results, the dialog's status).
+	.ifacebadge[data-signal], .center[data-signal] {
+		color: var(--uf-text-2);
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
 	}
 
-	/* The rates start level with the MAC address beside them, and the MAC
-	 * address under the host's name. */
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5) > span > span {
-		padding-top: 2px;
-		padding-bottom: 2px;
+	.ifacebadge[data-signal] {
+		display: inline-flex;
+		flex-direction: row;
+		align-items: center;
+		gap: 8px;
+		padding: 0;
+		background: none;
+		border: 0;
+		vertical-align: middle; // centred on the line, not sat on its baseline by the meter
 	}
 
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(2) {
-		padding-left: 16px;
+	.center[data-signal] {
+		display: inline-flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 2px;
+		font-size: 12px;
+		line-height: 16px;
+
+		br { display: none; }
+		em { font-style: normal; color: var(--uf-text-3); }
 	}
 
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :nth-child(1) { grid-area: 1 / 2; }
+	// Scan results: figures in even columns, the SSID named, a hidden one
+	// grey; "Join Network" outlined like other row actions, not a column of
+	// solid blue; the spinner beside "Starting wireless scan…".
+	.modal .table {
+		.td {
+			font-variant-numeric: tabular-nums;
 
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :nth-child(2) { grid-area: 2 / 1; }
+			&:nth-child(2) { color: var(--uf-text-1); font-weight: 500; }
+			em { font-style: normal; font-weight: 400; color: var(--uf-text-3); }
 
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :nth-child(3) { grid-area: 1 / 1; }
+			.cbi-button-action.important {
+				--uf-btn-fg: var(--uf-blue);
+				--uf-btn-bg: var(--uf-raised);
+				--uf-btn-line: var(--uf-blue-line);
 
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :nth-child(4) { grid-area: 1 / 3; }
+				height: 28px;
+				padding: 0 12px;
 
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5) > span > span:first-child { grid-area: 2 / 2; }
+				&:hover {
+					--uf-btn-fg: var(--uf-blue);
+					--uf-btn-bg: var(--uf-blue-soft);
+					--uf-btn-line: var(--uf-blue);
+				}
+			}
+		}
 
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5) > span > span:last-child { grid-area: 2 / 3; }
-
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :nth-child(6) { grid-area: 1 / 4 / 3 / 5; }
-
-}
-
-/* Signal badges: the meter beside the reading ("-48/-95 dBm"), or above
- * it where LuCI wraps it (scan results, the dialog's status). */
-[data-page="admin-network-wireless"] .ifacebadge[data-signal],
-[data-page="admin-network-wireless"] .center[data-signal] {
-	color: var(--uf-text-2);
-	font-variant-numeric: tabular-nums;
-	white-space: nowrap;
-}
-
-[data-page="admin-network-wireless"] .ifacebadge[data-signal] {
-	display: inline-flex;
-	flex-direction: row;
-	align-items: center;
-	gap: 8px;
-	padding: 0;
-	background: none;
-	border: 0;
-	/* Centred on the line, not sat on its baseline by the meter. */
-	vertical-align: middle;
-}
-
-[data-page="admin-network-wireless"] .center[data-signal] {
-	display: inline-flex;
-	flex-direction: column;
-	align-items: center;
-	gap: 2px;
-	font-size: 12px;
-	line-height: 16px;
-}
-
-[data-page="admin-network-wireless"] .center[data-signal] br {
-	display: none;
-}
-
-[data-page="admin-network-wireless"] .center[data-signal] em {
-	font-style: normal;
-	color: var(--uf-text-3);
-}
-
-/* Scan results: figures in even columns, the SSID named, a hidden one
- * grey; "Join Network" outlined like other row actions, not a column
- * of solid blue; the spinner beside "Starting wireless scan…". */
-[data-page="admin-network-wireless"] .modal .table .td {
-	font-variant-numeric: tabular-nums;
-}
-
-[data-page="admin-network-wireless"] .modal .table .td:nth-child(2) {
-	color: var(--uf-text-1);
-	font-weight: 500;
-}
-
-[data-page="admin-network-wireless"] .modal .table .td em {
-	font-style: normal;
-	font-weight: 400;
-	color: var(--uf-text-3);
-}
-
-[data-page="admin-network-wireless"] .modal .table .td .cbi-button-action.important {
-	--uf-btn-fg: var(--uf-blue);
-	--uf-btn-bg: var(--uf-raised);
-	--uf-btn-line: var(--uf-blue-line);
-
-	height: 28px;
-	padding: 0 12px;
-}
-
-[data-page="admin-network-wireless"] .modal .table .td .cbi-button-action.important:hover {
-	--uf-btn-fg: var(--uf-blue);
-	--uf-btn-bg: var(--uf-blue-soft);
-	--uf-btn-line: var(--uf-blue);
-}
-
-[data-page="admin-network-wireless"] .modal .table .tr.placeholder > .td {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	gap: 8px;
-}
-
-/* Narrow screens
- * -------------- */
-
-@media screen and (max-width: 640px) {
-	/* Cards a little tighter. */
-	[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr.cbi-section-table-row {
-		padding-right: 14px;
-		padding-left: 14px;
-		background-position: 14px 0;
-		background-size: calc(100% - 28px) 1px;
+		.tr.placeholder > .td {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			gap: 8px;
+		}
 	}
 
-	[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr.cbi-section-table-row:has(> .cbi-section-actions .cbi-button-add) {
-		grid-template-rows: 20px auto auto auto;
+	@include phone {
+		#cbi-wireless-wifi-device {
+			// Cards a little tighter.
+			.tr.cbi-section-table-row {
+				padding-right: 14px;
+				padding-left: 14px;
+				background-position: 14px 0;
+				background-size: calc(100% - 28px) 1px;
+
+				&#{$radio} {
+					grid-template-rows: 20px auto auto auto;
+
+					&:not(:first-child) { margin-top: 10px; }
+				}
+			}
+
+			// A radio: its actions on a line of their own under the chipset,
+			// so neither the chipset nor the actions are cut.
+			.tr#{$radio} {
+				> .td[data-name="_stat"] > div > :is(big, em) { grid-column: 2 / -1; }
+
+				> .cbi-section-actions {
+					grid-area: 3 / 2 / 4 / -1;
+					margin: 8px 0 0 -5px;
+
+					> div { justify-content: flex-start; }
+				}
+
+				> .td[data-name="_stat"] > div > div { grid-row: 4; margin-top: 10px; }
+			}
+
+			// An SSID: the dot and name, the actions beside them; the facts and
+			// the signal under the name.
+			.tr.cbi-section-table-row:not(#{$radio}) { grid-template-columns: 16px minmax(0, 1fr) auto; gap: 0 10px; }
+
+			.tr:not(#{$radio}) {
+				> .td[data-name="_stat"] { grid-area: 1 / 2 / 2 / 4; }
+				> .td[data-name="_badge"] { grid-area: 2 / 2; margin-top: 4px; }
+				> .cbi-section-actions { grid-area: 2 / 3; margin-top: 4px; }
+			}
+
+			// The BSSID is left to the dialog; the rest keeps to a line.
+			[data-name="_stat"] [data-uf-key="bssid"] { display: none; }
+			// The facts wrap; the name fades (above).
+			.tr:not(#{$radio}) > .td[data-name="_stat"] > div > .nowrap:not([data-uf-fade]) { white-space: normal; }
+			.td[data-name="_badge"] > .center { display: flex; }
+		}
+
+		// The dialogs' status: one fact a line.
+		.modal .ifacebadge.large > span > .nowrap { flex-basis: 100%; }
+		// The station list's card is inset less; its cells bring no labels.
+		#view > h3 { padding: 14px 16px 4px; }
+
+		#wifi_assoclist_table {
+			padding: 0 8px 8px;
+
+			.td[data-title]::before { display: none; }
+		}
 	}
 
-	[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr.cbi-section-table-row:has(> .cbi-section-actions .cbi-button-add):not(:first-child) {
-		margin-top: 10px;
+	// A station per small card, where even two lines are too narrow: the
+	// host and the button, the network and signal, then the two rates.
+	@container (max-width: 520px) {
+		#wifi_assoclist_table > .tr {
+			grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+			grid-template-rows: auto auto auto;
+			padding: 8px 8px 6px;
+
+			> :nth-child(3) { grid-area: 1 / 1 / 2 / 3; }
+			> :nth-child(6) { grid-area: 1 / 3; align-self: start; }
+			> :nth-child(1) { grid-area: 2 / 1; padding-left: 16px; }
+			> :nth-child(4) { grid-area: 2 / 2 / 3 / 4; }
+			> :nth-child(2) { grid-area: 4 / 1 / 5 / 4; }
+			> .td:nth-child(5) > span > span:first-child { grid-area: 3 / 1; padding-left: 16px; }
+			> .td:nth-child(5) > span > span:last-child { grid-area: 3 / 2 / 4 / 4; }
+		}
 	}
-
-	/* A radio: its actions on a line of their own under the chipset, so
-	 * neither the chipset nor the actions are cut. */
-	[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div > :is(big, em) {
-		grid-column: 2 / -1;
-	}
-
-	[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .cbi-section-actions {
-		grid-area: 3 / 2 / 4 / -1;
-		margin: 8px 0 0 -5px;
-	}
-
-	[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .cbi-section-actions > div {
-		justify-content: flex-start;
-	}
-
-	[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:has(> .cbi-section-actions .cbi-button-add) > .td[data-name="_stat"] > div > div {
-		grid-row: 4;
-		margin-top: 10px;
-	}
-
-	/* An SSID: the dot and name, the actions beside them; the facts and
-	 * the signal under the name. */
-	[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr.cbi-section-table-row:not(:has(> .cbi-section-actions .cbi-button-add)) {
-		grid-template-columns: 16px minmax(0, 1fr) auto;
-		gap: 0 10px;
-	}
-
-	[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not(:has(> .cbi-section-actions .cbi-button-add)) > .td[data-name="_stat"] {
-		grid-area: 1 / 2 / 2 / 4;
-	}
-
-	[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not(:has(> .cbi-section-actions .cbi-button-add)) > .td[data-name="_badge"] {
-		grid-area: 2 / 2;
-		margin-top: 4px;
-	}
-
-	[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not(:has(> .cbi-section-actions .cbi-button-add)) > .cbi-section-actions {
-		grid-area: 2 / 3;
-		margin-top: 4px;
-	}
-
-	/* The BSSID is left to the dialog; the rest keeps to a line. */
-	[data-page="admin-network-wireless"] #cbi-wireless-wifi-device [data-name="_stat"] [data-uf-key="bssid"] {
-		display: none;
-	}
-
-	/* The facts wrap; the name fades (above). */
-	[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .tr:not(:has(> .cbi-section-actions .cbi-button-add)) > .td[data-name="_stat"] > div > .nowrap:not([data-uf-fade]) {
-		white-space: normal;
-	}
-
-	[data-page="admin-network-wireless"] #cbi-wireless-wifi-device .td[data-name="_badge"] > .center {
-		display: flex;
-	}
-
-	/* The dialogs' status: one fact a line. */
-	[data-page="admin-network-wireless"] .modal .ifacebadge.large > span > .nowrap {
-		flex-basis: 100%;
-	}
-
-	/* The station list's card is inset less; its cells bring no labels. */
-	[data-page="admin-network-wireless"] #view > h3 {
-		padding: 14px 16px 4px;
-	}
-
-	[data-page="admin-network-wireless"] #wifi_assoclist_table {
-		padding: 0 8px 8px;
-	}
-
-	[data-page="admin-network-wireless"] #wifi_assoclist_table .td[data-title]::before {
-		display: none;
-	}
-}
-
-/* A station per small card, where even two lines are too narrow: the
- * host and the button, the network and signal, then the two rates. */
-@container (max-width: 520px) {
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr {
-		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-		grid-template-rows: auto auto auto;
-		padding: 8px 8px 6px;
-	}
-
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :nth-child(3) { grid-area: 1 / 1 / 2 / 3; }
-
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :nth-child(6) { grid-area: 1 / 3; align-self: start; }
-
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :nth-child(1) { grid-area: 2 / 1; padding-left: 16px; }
-
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :nth-child(4) { grid-area: 2 / 2 / 3 / 4; }
-
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > :nth-child(2) { grid-area: 4 / 1 / 5 / 4; }
-
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5) > span > span:first-child { grid-area: 3 / 1; padding-left: 16px; }
-
-	[data-page="admin-network-wireless"] #wifi_assoclist_table > .tr > .td:nth-child(5) > span > span:last-child { grid-area: 3 / 2 / 4 / 4; }
 }
