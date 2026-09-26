@@ -392,7 +392,7 @@ body[data-page="admin-status-overview"] {
 	}
 
 	// Associated stations: the network as a Wi-Fi glyph and a name, the
-	// interface after it in grey, as UniFi writes "Speaker 57:7e".
+	// interface under it in grey, as the host's addresses are.
 	.assoclist {
 		.ifacebadge {
 			display: inline-flex;
@@ -413,6 +413,7 @@ body[data-page="admin-status-overview"] {
 			}
 
 			small { @include small-caption; }
+			&[data-ifname] small { display: block; }
 		}
 
 		// The titles, the MAC address and the signal reading stay on one line
