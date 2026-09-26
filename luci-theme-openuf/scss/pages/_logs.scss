@@ -1,0 +1,305 @@
+@use '../abstracts' as *;
+@use '../abstracts/pages-a' as *;
+
+// Status > System Log and Kernel Log: filters on top, the log under them, all
+// one card. The log is a list, a row per line (logs.js): the time, the
+// severity as a chip (facility.severity in the System Log), the process and
+// the message, errors and warnings tinted. LuCI's textarea stays behind it,
+// for "Raw" and for a log the script cannot read (data-uf-logs on the card:
+// list, raw or off; without it, the textarea as LuCI draws it).
+
+body[data-page^="admin-status-logs"] {
+	#content_syslog {
+		@include surface-card(16px 20px 4px);
+
+		> .cbi-section-descr:empty { display: none; }
+
+		// Every filter row is a field high, so "Reverse sort" with only a box
+		// keeps the rhythm of the rows with fields.
+		> div[style*="margin-bottom"] {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 8px;
+			min-height: var(--uf-control-h);
+			margin-bottom: 12px !important; // over the inline 10px
+		}
+
+		> div {
+			> label {
+				margin: 0 !important; // over the inline margins; the row has a gap
+				color: var(--uf-text-2);
+
+				+ input[type="checkbox"] { margin-right: 8px; }
+			}
+
+			// The Kernel Log puts a no-break space between the severity box and
+			// its select, which becomes a flex item of its own: shrink it to
+			// nothing and take back its gap, so the select starts where the
+			// labels above do. Every control in the row sets its own font size.
+			&:has(> #invertSeverity + select) { font-size: 0; }
+			> #invertSeverity + select { margin-left: -8px; }
+
+			// A second filter on the same line starts a new group.
+			> select + label[for^="invert"],
+			> #logTextFilter + label[for="logMaxRows"] { margin-left: 16px !important; } // over the inline margins
+
+			> select,
+			> input:not([type="checkbox"]) {
+				width: 180px;
+				min-width: 0;
+				margin: 0;
+			}
+
+			// The facility select and the Kernel Log's time fields carry an
+			// inline margin-bottom; the row spacing is the row's own.
+			> [style*="margin-bottom"] { margin-bottom: 0 !important; }
+			> #logTextFilter { width: 260px; }
+			> #logMaxRows { width: 96px; }
+		}
+
+		> div[style*="padding-bottom"] { padding-bottom: 12px !important; } // over the inline 20px
+
+		// One of the two: the list, or LuCI's textarea.
+		&[data-uf-logs="list"] > #syslog,
+		&:not([data-uf-logs="list"]) > .uf-log,
+		&[data-uf-logs="off"] .uf-log-tools { display: none; }
+
+		// "Scroll to tail", then the count and the List/Raw switch at the
+		// row's end.
+		> .uf-log-bar {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			justify-content: space-between;
+			gap: 8px 16px;
+		}
+	}
+
+	// The raw log, in a recessed well.
+	#syslog {
+		display: block;
+		margin-bottom: 12px;
+		padding: 12px 14px;
+		background: var(--uf-canvas);
+		border-color: var(--uf-border);
+		color: var(--uf-text-2);
+		line-height: 20px;
+		resize: vertical;
+	}
+}
+
+// The count, and the errors and warnings among the lines, each after a dot
+// in its colour.
+.uf-log-tools {
+	@include row(8px 16px);
+	flex-wrap: wrap;
+	margin-left: auto;
+}
+
+.uf-log-summary {
+	@include row(4px 12px);
+	flex-wrap: wrap;
+	@include small-caption(18px);
+	font-variant-numeric: tabular-nums;
+
+	> [data-sev]::before {
+		content: "";
+		display: inline-block;
+		@include dot(8px, var(--uf-red));
+		margin-right: 6px;
+	}
+
+	> [data-sev="warn"]::before { background: var(--uf-orange); }
+}
+
+// List | Raw, one segmented control.
+.uf-log-mode {
+	display: inline-flex;
+
+	> .cbi-button {
+		position: relative;
+		height: 28px;
+		margin-left: -1px;
+		padding: 0 12px;
+		border-radius: 0;
+
+		&:first-child {
+			margin-left: 0;
+			border-radius: var(--uf-radius-sm) 0 0 var(--uf-radius-sm);
+		}
+
+		&:last-child { border-radius: 0 var(--uf-radius-sm) var(--uf-radius-sm) 0; }
+
+		&[aria-pressed="true"] {
+			@include btn(var(--uf-blue), var(--uf-blue-soft), var(--uf-blue-line));
+			z-index: 1;
+		}
+	}
+}
+
+// The list. A severity sets the chip's colours and, for errors and
+// warnings, the row's tint and a bar at its leading edge.
+.uf-log {
+	margin-bottom: 12px;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+	overflow: hidden;
+	color: var(--uf-text-1);
+	font: 12px/18px var(--uf-mono);
+
+	&:empty::before {
+		content: attr(data-empty);
+		display: block;
+		padding: 24px 16px;
+		color: var(--uf-text-3);
+		font: 13px/18px var(--uf-font);
+		text-align: center;
+	}
+}
+
+// The rows come in chunks of about a hundred (logs.js). A chunk off screen
+// skips layout and paint until it scrolls near, standing in at the height
+// of its rows (--uf-log-rows) until it has been drawn once.
+.uf-log-chunk {
+	content-visibility: auto;
+	contain-intrinsic-size: auto calc(var(--uf-log-rows, 1) * 25px);
+}
+
+// Time, chip and message in columns as wide as their longest entry
+// (--uf-log-time and --uf-log-sev, from logs.js), so the messages line up.
+.uf-log-row {
+	display: grid;
+	grid-template-columns: var(--uf-log-time, max-content) max-content minmax(0, 1fr);
+	align-items: baseline;
+	column-gap: 14px;
+	padding: 3px 12px;
+	border-top: 1px solid var(--uf-divider);
+
+	.uf-log-chunk:first-child > &:first-child { border-top: 0; }
+}
+
+.uf-log-time {
+	color: var(--uf-text-3);
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+
+	// Kernel seconds, right-aligned so the points line up.
+	[data-kind="dmesg"] & { text-align: right; }
+}
+
+.uf-log-sev {
+	min-width: calc(var(--uf-log-sev, 0ch) + 14px);
+	padding: 0 7px;
+	border-radius: var(--uf-radius-sm);
+	background: var(--uf-log-chip, var(--uf-field));
+	box-shadow: var(--uf-log-chip-line, none);
+	color: var(--uf-log-chip-text, var(--uf-text-2));
+	font: 500 11px/18px var(--uf-font);
+	text-align: center;
+	white-space: nowrap;
+
+	&:empty { visibility: hidden; }
+}
+
+.uf-log-msg {
+	min-width: 0;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.uf-log-tag {
+	color: var(--uf-text-2);
+	font-weight: 600;
+}
+
+// A line the script could not take apart, whole; a kernel line continuing
+// the one above it, under it without a rule.
+.uf-log-raw {
+	> :not(.uf-log-msg) { display: none; }
+	> .uf-log-msg { grid-column: 1 / -1; }
+}
+
+.uf-log-cont {
+	padding-top: 0;
+	border-top: 0;
+}
+
+.uf-log-row {
+	&:is([data-sev="emerg"], [data-sev="alert"], [data-sev="crit"]) {
+		--uf-log-chip: var(--uf-red-fill);
+		--uf-log-chip-text: var(--uf-on-accent);
+	}
+
+	&[data-sev="err"] {
+		--uf-log-chip: rgba(var(--uf-red-rgb), .14);
+		--uf-log-chip-text: var(--uf-red-text);
+	}
+
+	&:is([data-sev="emerg"], [data-sev="alert"], [data-sev="crit"], [data-sev="err"]) {
+		background: rgba(var(--uf-red-rgb), .06);
+		box-shadow: inset 3px 0 0 var(--uf-red);
+		@include dark { background: rgba(var(--uf-red-rgb), .1); }
+	}
+
+	&[data-sev="warn"] {
+		--uf-log-chip: rgba(var(--uf-orange-rgb), .18);
+		--uf-log-chip-text: var(--uf-orange-text);
+		background: rgba(var(--uf-orange-rgb), .08);
+		box-shadow: inset 3px 0 0 var(--uf-orange);
+		@include dark { background: rgba(var(--uf-orange-rgb), .09); }
+	}
+
+	&[data-sev="notice"] {
+		--uf-log-chip: var(--uf-blue-soft);
+		--uf-log-chip-text: var(--uf-blue);
+	}
+
+	// Debug steps back: an outlined chip, the message in grey.
+	&[data-sev="debug"] {
+		--uf-log-chip: none;
+		--uf-log-chip-line: inset 0 0 0 1px var(--uf-border-strong);
+		--uf-log-chip-text: var(--uf-text-3);
+
+		.uf-log-msg, .uf-log-tag { color: var(--uf-text-3); }
+	}
+}
+
+@include phone {
+	body[data-page^="admin-status-logs"] #content_syslog {
+		padding: 14px 14px 2px;
+
+		// Each filter's field on a line of its own under its label; the
+		// severity select too.
+		> div {
+			> select,
+			> input:not([type="checkbox"]),
+			> #logTextFilter,
+			> #logMaxRows { flex: 1 1 100%; width: auto; }
+
+			> select + label[for^="invert"],
+			> #logTextFilter + label[for="logMaxRows"] { margin-left: 0 !important; } // over the inline margins
+			> #invertSeverity + select { margin-left: 0; }
+		}
+	}
+
+	// The time and the chip on a line, the message under them across the
+	// row; the chip drops under the time when both do not fit.
+	.uf-log-row {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 2px 8px;
+		padding: 6px 10px;
+
+		> .uf-log-msg { flex: 1 1 100%; }
+		> :empty { display: none; }
+	}
+
+	.uf-log-sev { min-width: 0; }
+	.uf-log-cont { padding-top: 0; }
+
+	// A phone's rows run two or three lines.
+	.uf-log-chunk { contain-intrinsic-size: auto calc(var(--uf-log-rows, 1) * 60px); }
+}

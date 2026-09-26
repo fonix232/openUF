@@ -1,0 +1,26 @@
+// The cards' action icons: 24px line drawings used as masks, so drawn in
+// black. `icons(…)` sets the named ones as --uf-network-i-<name>, for the
+// page's rules and scripts to read at runtime.
+@use 'sass:map';
+
+@function -drawing($stroke, $body, $join: true) {
+	$attrs: "stroke-width='#{$stroke}' stroke-linecap='round'";
+	@if $join { $attrs: "#{$attrs} stroke-linejoin='round'"; }
+	@return url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' #{$attrs}>#{$body}</svg>");
+}
+
+$-icons: (
+	restart: -drawing(1.6, "<path d='M19.25 12a7.25 7.25 0 1 1-2.12-5.13'/><path d='M19.25 4.5v3.75H15.5'/>"),
+	trash: -drawing(1.5, "<path d='M4.75 6.75h14.5M9.75 6.5V4.75h4.5V6.5M6.75 6.75l.75 12.1c.05.9.8 1.4 1.7 1.4h5.6c.9 0 1.65-.5 1.7-1.4l.75-12.1M10.25 10.5v6M13.75 10.5v6'/>"),
+	edit: -drawing(1.5, "<path d='M4.75 19.25 5.6 15.4 15.85 5.15a1.9 1.9 0 0 1 2.7 0l.3.3a1.9 1.9 0 0 1 0 2.7L8.6 18.4ZM14 7l3 3'/>"),
+	plus: -drawing(2, "<path d='M12 5.5v13M5.5 12h13'/>", $join: false),
+	down: -drawing(2, "<path d='M12 4.5v15M6.5 14l5.5 5.5 5.5-5.5'/>"),
+	up: -drawing(2, "<path d='M12 19.5v-15M6.5 10 12 4.5l5.5 5.5'/>"),
+	disconnect: -drawing(1.5, "<circle cx='12' cy='12' r='8.25'/><path d='m9.25 9.25 5.5 5.5M14.75 9.25l-5.5 5.5'/>", $join: false),
+);
+
+@mixin icons($names...) {
+	@each $name in $names {
+		--uf-network-i-#{$name}: #{map.get($-icons, $name)};
+	}
+}

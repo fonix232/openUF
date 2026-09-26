@@ -761,6 +761,13 @@ gateway is reached through (found in the bridge FDB); if that cannot be determin
 
 Inspect the result with `uci show network` and `bridge link`.
 
+LuCI's *Network → Switch/VLAN config* page shows "No managed switch found" on these APs:
+it only takes a bridge whose members are all Ethernet or DSA ports, and the controller-owned
+bridge also holds every SSID. `luci-theme-openuf` replaces it with a copy that leaves the
+SSIDs out and shows the ports and VLANs. Port VLANs on an adopted AP are still the
+controller's (*Ports* in UniFi): the next push that changes the network model rewrites what
+the page changes.
+
 **Band Steering** has two switches in the controller: the per-WLAN toggle, and the AP's
 own setting in its device panel (Off / Prefer 5G / Balance). Either one turns steering on
 for the whole AP, because usteer is a single daemon. Balance is not supported (see
