@@ -138,16 +138,18 @@ M._spectrum_cache = {}
 -- used to delta-sample a throughput estimate the same way M._sysinfo's
 -- cpu_percent() delta-samples /proc/stat between calls (first sample for a
 -- given MAC has no prior delta, so throughput is reported as 0 that time).
--- It also carries the windowed retry ratio behind satisfaction: see
--- windowed_retry_pct().
+-- It also carries the smoothed rate ratio behind satisfaction: see
+-- sta_rate_pct().
 M._sta_stats_cache = {}
 -- ...and how long an unseen station stays in it. See the sweep in build_json.
 M.STA_STATS_FORGET_AFTER = 600
--- Windowed retry ratio: a window closes once it holds this many tx attempts
--- (packets + retries), however many informs that takes, and is folded into
--- an EWMA with this weight.
-M.RETRY_WINDOW_MIN_ATTEMPTS = 20
-M.RETRY_EWMA_ALPHA = 0.2
+-- Weight of each inform's rate ratio in the satisfaction EWMA.
+M.RATE_EWMA_ALPHA = 0.2
+-- The satisfaction estimate's signal floor: 0 at SAT_EDGE_FLOOR dBm, 100 from
+-- SAT_EDGE_CEIL up. It only bites near the coverage edge; the rate ratio is
+-- the quality measure. Judgement, not calibrated against a real UniFi AP.
+M.SAT_EDGE_FLOOR = -85
+M.SAT_EDGE_CEIL = -70
 
 -- Injectable: override in tests to control elapsed time deterministically
 -- (used by the sta_table throughput delta-sample below).
@@ -479,53 +481,68 @@ end
 -- controller 10.4.57 that the controller itself does no computation: it
 -- just reads "satisfaction" straight off the client doc, which is
 -- populated verbatim from whatever the AP sent in that sta_table entry).
--- Community reports (community.ui.com) describe it as driven by signal
--- quality and tx-retry ratio -- e.g. a client with great signal but very
--- low PHY rate/high retries still scores low -- so this combines a
--- signal-quality score and a retry-quality score and takes the worse of
--- the two, matching that "worst factor wins" description. Not a measured
--- value; flagged the same way as capacity/throughput above.
--- signal: dBm (nil if iw reported none). retry_pct: 0-100.
--- Returns an integer 0-100, or nil if signal is unavailable.
-local function estimate_satisfaction(signal, retry_pct)
+-- The UI buckets it >=90 Excellent, >=70 Good, else Poor.
+--
+-- It is the worse of two terms:
+--  * rate: the tx rate the AP's rate control settles on, as a share of the
+--    best rate this client and this AP could agree on (sta_rate_pct()). Rate
+--    control steps MCS and streams down when frames fail, so a lossy or noisy
+--    link shows here on every driver, and a client at its own ceiling scores
+--    100 however modest that ceiling is.
+--  * edge: signal, only near the coverage edge (M.SAT_EDGE_FLOOR/CEIL).
+-- Signal alone was the whole score before, on a -85..-50 ramp: a 1SS HT20
+-- client at MCS 7 of 7 with no retries read Poor at -61 dBm. Retries aren't
+-- used: their meaning differs per driver (ath9k counts every attempt, mt76
+-- reports power-save-filtered frames as failed), and neither counter tracked
+-- real loss in a ping test on hardware (see PROTOCOL-VALIDATION.md).
+-- signal: dBm (nil if iw reported none). rate_pct: 0-100 or nil (unknown:
+-- the term is skipped). Returns an integer 0-100, or nil without signal.
+local function estimate_satisfaction(signal, rate_pct)
 	if not signal then return nil end
-	local SIGNAL_FLOOR, SIGNAL_CEIL = -85, -50
-	local signal_score = (signal - SIGNAL_FLOOR) / (SIGNAL_CEIL - SIGNAL_FLOOR) * 100
-	if signal_score < 0 then signal_score = 0 end
-	if signal_score > 100 then signal_score = 100 end
-	local retry_score = 100 - (retry_pct or 0)
-	if retry_score < 0 then retry_score = 0 end
-	local score = math.min(signal_score, retry_score)
+	local score = (signal - M.SAT_EDGE_FLOOR) / (M.SAT_EDGE_CEIL - M.SAT_EDGE_FLOOR) * 100
+	if score > 100 then score = 100 end
+	if rate_pct and rate_pct < score then score = rate_pct end
+	if score < 0 then score = 0 end
 	return math.floor(score)
 end
 
--- The retry ratio estimate_satisfaction() scores on, over recent traffic.
--- iw's counters are lifetime-of-association, so scoring them directly let
--- one bad stretch pin a client's score for as long as it stayed associated,
--- and hours of good traffic hide a problem that starts now the same way. A
--- window opens at base_packets/
--- base_retries and closes once it holds RETRY_WINDOW_MIN_ATTEMPTS attempts,
--- so a client sending one frame a second still closes one every ~20 s and a
--- 7-of-10 burst can't swing the score alone. Each closed window is folded
--- into an EWMA. The first sample, and a counter that went backwards (a
--- reassociation), start from the lifetime ratio, which is all that's known.
--- prev: the station's cache entry or nil. Returns pct, base_packets,
--- base_retries for the next cache entry.
-local function windowed_retry_pct(prev, tx_packets, tx_retries, lifetime_pct)
-	if not (prev and prev.retry_ewma) then
-		return lifetime_pct, tx_packets, tx_retries
+-- Relative data rate per spatial stream at 20 MHz, indexed by MCS + 1:
+-- HT/VHT MCS 0-9 and HE MCS 0-11 (Mbit/s at long GI). Only ratios are used,
+-- so GI cancels out.
+local VHT_MCS_RATE = {6.5, 13, 19.5, 26, 39, 52, 58.5, 65, 78, 86.7}
+local HE_MCS_RATE = {8.6, 17.2, 25.8, 34.4, 51.6, 68.8, 77.4, 86, 103.2, 114.7, 129, 143.4}
+-- Data subcarriers per channel width, which is what a wider channel scales.
+local WIDTH_SUBCARRIERS = {[20] = 52, [40] = 108, [80] = 234, [160] = 468}
+
+-- The station's current tx rate as a percentage of its ceiling: its
+-- association caps (sysinfo.hostapd_sta_caps) capped by the AP's own stream
+-- count and live channel width, at one MCS below the top. Rate control only
+-- probes the top MCS and keeps stepping between it and the next, so a
+-- ceiling at the top made a -48 dBm client alternating VHT MCS 8/9 swing
+-- across the Good/Excellent line on every sample. nil when either side is
+-- unknown: a legacy rate, no caps, or an EHT rate (no table here).
+local function sta_rate_pct(sta, caps, ap_nss, ap_width)
+	if not (caps and sta.tx_mcs) then return nil end
+	local gen = sta.tx_generation
+	local rate
+	if gen == "ax" then
+		rate = HE_MCS_RATE[sta.tx_mcs + 1]
+	elseif gen == "ac" then
+		rate = VHT_MCS_RATE[sta.tx_mcs + 1]
+	elseif gen == "n" then
+		-- HT MCS indexes run on across streams: MCS 15 is MCS 7 on two.
+		rate = VHT_MCS_RATE[sta.tx_mcs % 8 + 1]
 	end
-	local dp = tx_packets - prev.base_packets
-	local dr = tx_retries - prev.base_retries
-	if dp < 0 or dr < 0 then
-		return lifetime_pct, tx_packets, tx_retries
-	end
-	if dp + dr < M.RETRY_WINDOW_MIN_ATTEMPTS then
-		return prev.retry_ewma, prev.base_packets, prev.base_retries
-	end
-	local window_pct = dr * 100 / (dp + dr)
-	return prev.retry_ewma + M.RETRY_EWMA_ALPHA * (window_pct - prev.retry_ewma),
-		tx_packets, tx_retries
+	local ceil = (caps.mode == "he" and HE_MCS_RATE or VHT_MCS_RATE)[caps.max_mcs]
+	local nss, ceil_nss = sta.tx_nss or 1, caps.nss
+	if ap_nss and ap_nss < ceil_nss then ceil_nss = ap_nss end
+	local ceil_width = caps.width
+	if ap_width and ap_width < ceil_width then ceil_width = ap_width end
+	local sc, ceil_sc = WIDTH_SUBCARRIERS[sta.tx_width or 20], WIDTH_SUBCARRIERS[ceil_width]
+	if not (rate and ceil and sc and ceil_sc) then return nil end
+	local pct = rate * nss * sc * 100 / (ceil * ceil_nss * ceil_sc)
+	if pct > 100 then pct = 100 end
+	return pct
 end
 
 -- ─── JSON payload builder ────────────────────────────────────────────────────
@@ -770,6 +787,8 @@ function M.build_json(st, cfg, ufhw)
 		-- loop) so the enforcement check further down is a plain
 		-- sta.signal comparison.
 		local minrssi_threshold_by_radio = {}
+		-- Live channel width per radio, for the satisfaction rate ceiling.
+		local width_by_radio = {}
 		for _, radio in ipairs(radio_table) do
 			local ok_if, ifname = pcall(ufuci.get_ifname_for_radio, radio.name)
 			if ok_if and ifname then
@@ -781,6 +800,8 @@ function M.build_json(st, cfg, ufhw)
 				-- Radios tab excluded the device entirely.
 				local ok_caps, caps = pcall(M._sysinfo.radio_caps, ifname)
 				if ok_caps and caps then
+					width_by_radio[radio.name] = caps.width
+					caps.width = nil
 					for k, v in pairs(caps) do radio[k] = v end
 					-- The live negotiated channel is band-authoritative once
 					-- ACS has picked one: UCI's config value may be the
@@ -1163,11 +1184,21 @@ function M.build_json(st, cfg, ufhw)
 			-- and Roaming Assistant below. A private pre-shared key's VLAN
 			-- netdev lists its own stations but has no hostapd of its own,
 			-- so those go to the VAP's.
-			local stas, sta_ifname = {}, {}
+			--
+			-- sta_caps: each station's association ceiling, read once per
+			-- hostapd BSS (a PPSK VLAN netdev's stations are its BSS's).
+			local stas, sta_ifname, sta_caps, caps_read = {}, {}, {}, {}
 			for _, ifname in ipairs(ok_if and ifnames or {}) do
 				local ok_sta, rv2 = pcall(M._sysinfo.sta_table, ifname)
 				if ok_sta then
 					local bss = ufuci.bss_ifname and ufuci.bss_ifname(ifname) or ifname
+					if not caps_read[bss] and M._sysinfo.hostapd_sta_caps then
+						caps_read[bss] = true
+						local ok_c, c = pcall(M._sysinfo.hostapd_sta_caps, bss)
+						if ok_c then
+							for mac, v in pairs(c) do sta_caps[mac] = v end
+						end
+					end
 					for _, sta in ipairs(rv2) do
 						stas[#stas + 1] = sta
 						sta_ifname[#stas] = bss
@@ -1243,24 +1274,29 @@ function M.build_json(st, cfg, ufhw)
 				-- fraction of attempts. Confirmed real field names/semantics
 				-- via the decompiled wireless-client model
 				-- (com.ubnt.service.l.e.AQODNNoMmBlFpWXX) and unpoller/unifi's
-				-- REST client struct. Both stay lifetime values; only the
-				-- satisfaction estimate uses the windowed ratio.
+				-- REST client struct. Lifetime values; the satisfaction
+				-- estimate doesn't use them (see estimate_satisfaction()).
 				local wifi_tx_attempts = (sta.tx_packets or 0) + (sta.tx_retries or 0)
 				local wifi_tx_retries_pct = 0
 				if wifi_tx_attempts > 0 then
 					wifi_tx_retries_pct = (sta.tx_retries or 0) * 100 / wifi_tx_attempts
 				end
-				local retry_ewma, base_packets, base_retries = windowed_retry_pct(prev,
-					sta.tx_packets or 0, sta.tx_retries or 0, wifi_tx_retries_pct)
+				-- One inform's rate ratio swings with each rate-control
+				-- step, so it is smoothed; a sample with none keeps the last.
+				local rate_ewma = prev and prev.rate_ewma
+				local rate_pct = sta_rate_pct(sta, sta_caps[sta.mac:lower()],
+					live and live.nss, width_by_radio[vap.radio_name])
+				if rate_pct then
+					rate_ewma = rate_ewma and rate_ewma + M.RATE_EWMA_ALPHA * (rate_pct - rate_ewma)
+						or rate_pct
+				end
 				M._sta_stats_cache[sta.mac] = {
-					rx_bytes     = sta.rx_bytes or 0,
-					tx_bytes     = sta.tx_bytes or 0,
-					time         = now,
-					retry_ewma   = retry_ewma,
-					base_packets = base_packets,
-					base_retries = base_retries,
+					rx_bytes  = sta.rx_bytes or 0,
+					tx_bytes  = sta.tx_bytes or 0,
+					time      = now,
+					rate_ewma = rate_ewma,
 				}
-				local satisfaction_now = estimate_satisfaction(sta.signal, retry_ewma)
+				local satisfaction_now = estimate_satisfaction(sta.signal, rate_ewma)
 				if satisfaction_now then
 					sat_sum, sat_count = sat_sum + satisfaction_now, sat_count + 1
 					sat_sum_all, sat_count_all = sat_sum_all + satisfaction_now, sat_count_all + 1

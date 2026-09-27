@@ -295,7 +295,7 @@ end
 -- Each entry: {mac, signal, tx_bitrate, rx_bitrate, tx_mcs, rx_mcs,
 --              tx_generation, tx_nss, rx_generation, rx_nss, tx_bytes,
 --              rx_bytes, tx_packets, rx_packets, tx_retries, tx_failed,
---              inactive_ms, connected_sec}
+--              inactive_ms, connected_sec, tx_width}
 -- tx_retries/tx_failed: iw(8) only exposes TX-side retry/failure counters
 -- (802.11 ARQ is TX-side by nature) -- there is no rx-side equivalent in
 -- `station dump` output, confirmed via `strings /usr/sbin/iw`.
@@ -332,6 +332,8 @@ function M.sta_table(ifname)
 			local rx_mcs     = line:match("rx bitrate:.*MCS%s+(%d+)")
 			if line:find("tx bitrate:") then
 				cur.tx_generation, cur.tx_nss = _bitrate_generation_nss(line)
+				-- "80MHz"; iw prints no width token for 20 MHz rates.
+				cur.tx_width = tonumber(line:match("(%d+)MHz")) or 20
 			elseif line:find("rx bitrate:") then
 				cur.rx_generation, cur.rx_nss = _bitrate_generation_nss(line)
 			end
@@ -360,6 +362,76 @@ function M.sta_table(ifname)
 	end
 	if cur then clients[#clients + 1] = cur end
 	return clients
+end
+
+-- Integer value of a hostapd hex field ("0x006e" or "fffe"), or nil.
+local function _hex(v)
+	if not v then return nil end
+	return tonumber((v:gsub("^0x", "")), 16)
+end
+
+-- The ceiling one station negotiated at association, from hostapd's record
+-- of its capability elements: {mode = "ht"/"vht"/"he", nss, max_mcs, width}.
+-- nil for a station without HT (legacy rates only), whose rate has no MCS
+-- to compare. `rx_vht_mcs_map` is what the STATION can receive, so what the
+-- AP can send it: two bits per spatial stream, 3 = stream unsupported,
+-- 0/1/2 = MCS 0-7/0-8/0-9. The HT bitmask has one byte per stream. HE
+-- stations are taken as MCS 0-11 with the HT/VHT stream count and width:
+-- hostapd's `all_sta` on these builds has shown no HE-specific fields yet.
+local function _sta_ceiling(f)
+	local flags = f.flags or ""
+	if not flags:find("[HT]", 1, true) then return nil end
+	local c = {mode = "ht", max_mcs = 7, nss = 0}
+	local bm = f.ht_mcs_bitmask or ""
+	for i = 1, 4 do
+		local byte = bm:sub(i * 2 - 1, i * 2)
+		if byte ~= "" and byte ~= "00" then c.nss = i end
+	end
+	-- ht_caps_info bit 1: Supported Channel Width Set (40 MHz).
+	local ht = _hex(f.ht_caps_info) or 0
+	c.width = math.floor(ht / 2) % 2 == 1 and 40 or 20
+	local vmap = _hex(f.rx_vht_mcs_map)
+	if flags:find("[VHT]", 1, true) and vmap then
+		local nss, mcs = 0, nil
+		for stream = 0, 7 do
+			local v = math.floor(vmap / 4 ^ stream) % 4
+			if v ~= 3 then
+				nss = stream + 1
+				mcs = mcs or 7 + v
+			end
+		end
+		c.mode = "vht"
+		if nss > 0 then c.nss, c.max_mcs = nss, mcs end
+		-- vht_caps_info bits 2-3: Supported Channel Width Set; 0 = 80 MHz.
+		local vw = math.floor((_hex(f.vht_caps_info) or 0) / 4) % 4
+		c.width = vw == 0 and 80 or 160
+	end
+	if flags:find("[HE]", 1, true) then
+		c.mode, c.max_mcs = "he", 11
+	end
+	if c.nss == 0 then c.nss = 1 end
+	return c
+end
+
+-- Per-station association ceilings on one hostapd BSS, keyed by MAC, from
+-- `hostapd_cli all_sta`: one fork per BSS. See _sta_ceiling().
+function M.hostapd_sta_caps(ifname)
+	if not ifname then return {} end
+	local out = M._run_cmd("hostapd_cli -i " .. ifname .. " all_sta")
+	local fields, cur = {}, nil
+	for line in out:gmatch("[^\n]+") do
+		local mac = line:match("^(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)%s*$")
+		if mac then
+			cur = {}
+			fields[mac:lower()] = cur
+		elseif cur then
+			local k, v = line:match("^([%w_]+)=(.*)$")
+			if k then cur[k] = v end
+		end
+	end
+	local caps = {}
+	for mac, f in pairs(fields) do caps[mac] = _sta_ceiling(f) end
+	return caps
 end
 
 -- Sibling-AP recognition. The controller decides whether a scanned BSS is
@@ -781,6 +853,9 @@ function M.radio_caps(ifname)
 	local txpower = tonumber(dev_info:match("txpower%s+([%d%.]+)"))
 	caps.channel  = channel and tonumber(channel) or nil
 	caps.tx_power = txpower and math.floor(txpower) or nil
+	-- Live channel width in MHz ("width: 80 MHz"), for the satisfaction
+	-- estimate's rate ceiling. Not a wire field: build_json takes it off.
+	caps.width    = tonumber(dev_info:match("width:%s+(%d+)"))
 
 	return caps
 end

@@ -157,6 +157,64 @@ return {
 		end
 	},
 	{
+		name = "sysinfo: sta_table() reads the tx rate's channel width, 20 MHz when iw prints none",
+		fn = function()
+			local dump = "Station cc:cc:cc:cc:cc:cc (on wlan1)\n"
+				.. "\ttx bitrate:\t390.0 MBit/s VHT-MCS 8 80MHz short GI VHT-NSS 1\n"
+				.. "\trx bitrate:\t433.3 MBit/s VHT-MCS 9 160MHz short GI VHT-NSS 1\n"
+				.. "Station dd:dd:dd:dd:dd:dd (on wlan1)\n"
+				.. "\ttx bitrate:\t65.0 MBit/s MCS 7\n"
+			with_fixtures({}, {["station dump"] = dump}, function()
+				local stas = sysinfo.sta_table("wlan1")
+				assert_eq(stas[1].tx_width, 80, "80MHz token on the tx line")
+				assert_eq(stas[2].tx_width, 20, "no token: 20 MHz")
+			end)
+		end
+	},
+	{
+		name = "sysinfo: hostapd_sta_caps() reads each station's association ceiling",
+		fn = function()
+			-- `hostapd_cli all_sta`, trimmed, as captured on an ath10k VHT
+			-- BSS, an mt76 2.4 GHz BSS, and a legacy-only station.
+			local out = "00:00:5e:00:53:01\n"
+				.. "flags=[AUTH][ASSOC][AUTHORIZED][SHORT_PREAMBLE][WMM][HT][VHT]\n"
+				.. "aid=1\ncapability=0x31\n"
+				.. "rx_vht_mcs_map=fffe\ntx_vht_mcs_map=fffe\n"
+				.. "ht_mcs_bitmask=ff000000010000000000\n"
+				.. "vht_caps_info=0x33c07030\nvht_capab=3070c033feff8601feff8601\n"
+				.. "ht_caps_info=0x006e\next_capab=0000000020000040\n"
+				.. "00:00:5E:00:53:02\n"
+				.. "flags=[AUTH][ASSOC][AUTHORIZED][SHORT_PREAMBLE][WMM][MFP][HT]\n"
+				.. "ht_mcs_bitmask=ff000000000000000000\nht_caps_info=0x0020\n"
+				.. "00:00:5e:00:53:03\n"
+				.. "flags=[AUTH][ASSOC][AUTHORIZED][WMM]\n"
+				.. "00:00:5e:00:53:04\n"
+				.. "flags=[AUTH][ASSOC][AUTHORIZED][WMM][HT][VHT][HE]\n"
+				.. "rx_vht_mcs_map=fffa\nht_mcs_bitmask=ffff0000000000000000\n"
+				.. "vht_caps_info=0x0000000c\nht_caps_info=0x0002\n"
+			with_fixtures({}, {["all_sta"] = out}, function()
+				local c = sysinfo.hostapd_sta_caps("phy0-ap0")
+				local vht = c["00:00:5e:00:53:01"]
+				assert_eq(vht.mode, "vht", "[VHT] flag")
+				assert_eq(vht.nss, 1, "fffe: stream 1 at MCS 0-9, the rest unsupported")
+				assert_eq(vht.max_mcs, 9, "fffe: stream 1 value 2 -> MCS 9")
+				assert_eq(vht.width, 80, "vht_caps_info width set 0 -> 80 MHz")
+				local ht = c["00:00:5e:00:53:02"]
+				assert_not_nil(ht, "MAC keyed lower-case")
+				assert_eq(ht.mode, "ht", "[HT] only")
+				assert_eq(ht.nss, 1, "one ff byte in the HT bitmask")
+				assert_eq(ht.max_mcs, 7, "HT tops out at MCS 7 per stream")
+				assert_eq(ht.width, 20, "ht_caps_info 0x0020: 40 MHz bit clear")
+				assert_true(c["00:00:5e:00:53:03"] == nil, "no HT: no ceiling to compare against")
+				local he = c["00:00:5e:00:53:04"]
+				assert_eq(he.mode, "he", "[HE] flag")
+				assert_eq(he.max_mcs, 11, "HE is taken as MCS 0-11")
+				assert_eq(he.nss, 2, "fffa: two streams")
+				assert_eq(he.width, 160, "vht_caps_info width set 3 -> 160 MHz")
+			end)
+		end
+	},
+	{
 		name = "sysinfo: sta_table() returns empty table for empty command output",
 		fn = function()
 			with_fixtures({}, {["station dump"] = ""}, function()

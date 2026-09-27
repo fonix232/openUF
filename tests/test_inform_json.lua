@@ -782,11 +782,11 @@ return {
 			-- so compare with a tolerance rather than bit-for-bit equality
 			assert_true(math.abs(sta_table[1].wifi_tx_retries_percentage - 4 * 100 / 291) < 1e-10,
 				"wifi_tx_retries_percentage = retries as % of attempts")
-			-- satisfaction/satisfaction_now: best-effort estimate, worse of
-			-- signal-quality score (-62 dBm -> ~65.7 on a -85..-50 scale) and
-			-- retry-quality score (~98.6), floored.
-			assert_eq(sta_table[1].satisfaction, 65, "satisfaction estimated from signal+retries")
-			assert_eq(sta_table[1].satisfaction_now, 65, "satisfaction_now matches satisfaction")
+			-- satisfaction/satisfaction_now: no hostapd caps in this fixture,
+			-- so the rate term is skipped and -62 dBm is inside the coverage
+			-- edge: the signal floor alone gives 100.
+			assert_eq(sta_table[1].satisfaction, 100, "satisfaction from the signal floor alone")
+			assert_eq(sta_table[1].satisfaction_now, 100, "satisfaction_now matches satisfaction")
 		end
 	},
 	{
@@ -882,11 +882,10 @@ return {
 		end
 	},
 	{
-		name = "inform json: satisfaction scores recent retries, not the association's lifetime",
+		name = "inform json: satisfaction scores the tx rate against the client's ceiling",
 		fn = function()
-			-- A Google Home Mini at -36 dBm with 30 % lifetime retries
-			-- scored 69 for as long as it stayed associated.
-			-- The signal side scores 100 here, so the score is the retry side.
+			-- Seen on hardware: a 1SS HT20 client at MCS 7 of 7 with no
+			-- retries read Poor at -61 dBm, because signal was the score.
 			inform._sta_stats_cache = {}
 			local orig_time = inform._time
 			local t = 1000
@@ -896,40 +895,97 @@ return {
 				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
 				ip = "192.168.1.100", hostname = "testap",
 			}
-			local function score(pkts, retries)
+			-- signal, the iw tx bitrate line, hostapd's all_sta record (nil:
+			-- hostapd knows nothing), the AP's live channel width and its
+			-- spatial streams.
+			local function score(signal, bitrate, sta_rec, ap_width, ap_nss)
 				inject_ucihelper()
+				inform._sysinfo._phy_info_cache = {}
 				inform._sysinfo._run_cmd = function(cmd)
 					if cmd:find("station dump") then
-						return "Station aa:bb:cc:dd:ee:ff (on wlan0)\n" ..
-							"\ttx packets:\t" .. pkts .. "\n\ttx retries:\t" .. retries .. "\n" ..
-							"\tsignal:  \t-36 dBm\n"
+						return "Station 00:00:5e:00:53:01 (on wlan0)\n" ..
+							"\tsignal:  \t" .. signal .. " dBm\n" ..
+							"\ttx bitrate:\t" .. bitrate .. "\n"
+					end
+					if cmd:find("all_sta", 1, true) then
+						return sta_rec and ("00:00:5e:00:53:01\n" .. sta_rec) or ""
+					end
+					if cmd:find("dev wlan0 info") then
+						return fixture("iw_dev_info.txt"):gsub("width: 20", "width: " .. (ap_width or 20))
+					end
+					if cmd:find("phy phy0 info") then
+						return (fixture("iw_phy_info_5g.txt"):gsub("Max spatial streams: 2",
+							"Max spatial streams: " .. (ap_nss or 2)))
 					end
 					return ""
 				end
 				t = t + 10
 				local d = cjson.decode(inform.build_json(st, nil, ufhw))
-				return d.vap_table[1].sta_table[1]
+				assert_true(d.radio_table[1].width == nil, "the live width is not a wire field")
+				return d.vap_table[1].sta_table[1].satisfaction
 			end
+			-- hostapd all_sta records, as captured on both APs.
+			local HT20_1SS = "flags=[AUTH][ASSOC][AUTHORIZED][WMM][HT]\n" ..
+				"ht_mcs_bitmask=ff000000000000000000\nht_caps_info=0x0020\n"
+			local HT40_2SS = "flags=[AUTH][ASSOC][AUTHORIZED][WMM][HT]\n" ..
+				"ht_mcs_bitmask=ffff0000000000000000\nht_caps_info=0x006e\n"
+			local VHT80_1SS = "flags=[AUTH][ASSOC][AUTHORIZED][WMM][HT][VHT]\n" ..
+				"rx_vht_mcs_map=fffe\nht_mcs_bitmask=ff000000010000000000\n" ..
+				"vht_caps_info=0x33c07030\nht_caps_info=0x006e\n"
+			local function fresh() inform._sta_stats_cache = {} end
 
-			local s = score(14000, 6000)
-			assert_eq(s.satisfaction, 70, "first sample: only the lifetime ratio is known (30 %)")
+			fresh()
+			assert_eq(score(-61, "65.0 MBit/s MCS 7", HT20_1SS), 100,
+				"a client at its own ceiling is Excellent at -61 dBm")
+			fresh()
+			assert_eq(score(-61, "58.5 MBit/s MCS 6", HT20_1SS), 100,
+				"one MCS below the top counts as the ceiling: rate control probes the top")
+			fresh()
+			assert_eq(score(-36, "52.0 MBit/s MCS 5", HT20_1SS), 88,
+				"MCS 5 against the MCS 6 ceiling: 52/58.5")
+			fresh()
+			assert_true(score(-65, "19.5 MBit/s MCS 2", HT20_1SS) < 70,
+				"a slow client at -65 dBm reads Poor")
+			fresh()
+			assert_eq(score(-80, "65.0 MBit/s MCS 7", HT20_1SS), 33,
+				"near the coverage edge the signal floor wins: -80 dBm is 5/15 of the way")
+			fresh()
+			assert_eq(score(-80, "54.0 MBit/s", HT20_1SS), 33,
+				"a legacy rate has no MCS to compare: signal floor only")
+			fresh()
+			assert_eq(score(-50, "65.0 MBit/s MCS 7", nil), 100,
+				"no hostapd record: rate term skipped")
+			fresh()
+			assert_eq(score(-50, "390.0 MBit/s VHT-MCS 8 80MHz short GI VHT-NSS 1", VHT80_1SS, 80), 100,
+				"VHT MCS 8 of 9 on 80 MHz is at the ceiling")
+			fresh()
+			assert_eq(score(-61, "292.5 MBit/s VHT-MCS 6 80MHz short GI VHT-NSS 1", VHT80_1SS, 80), 75,
+				"VHT MCS 6 on 80 MHz: 58.5/78")
+			fresh()
+			assert_eq(score(-50, "200.0 MBit/s VHT-MCS 9 40MHz short GI VHT-NSS 1", VHT80_1SS, 40), 100,
+				"an 80 MHz client on a 40 MHz channel is at its ceiling at 40 MHz")
+			fresh()
+			assert_eq(score(-50, "86.7 MBit/s VHT-MCS 9 short GI VHT-NSS 1", VHT80_1SS, 80), 24,
+				"the same client at 20 MHz on an 80 MHz channel is not")
+			fresh()
+			assert_eq(score(-50, "65.0 MBit/s MCS 7", HT40_2SS, 20), 55,
+				"one stream of two, the 40 MHz client capped by the 20 MHz channel")
+			fresh()
+			assert_eq(score(-50, "130.0 MBit/s MCS 15", HT40_2SS, 20), 100,
+				"HT MCS 15 is MCS 7 on two streams")
+			fresh()
+			assert_eq(score(-50, "78.0 MBit/s MCS 12", HT40_2SS, 20), 66,
+				"HT MCS 12 is MCS 4 on two streams: 39/58.5")
+			fresh()
+			assert_eq(score(-50, "65.0 MBit/s MCS 7", HT40_2SS, 20, 1), 100,
+				"a two-stream client on a one-stream AP is at its ceiling on one")
 
-			s = score(14010, 6005)
-			assert_eq(s.satisfaction, 70, "a 15-attempt window is too small to move the score")
-			s = score(14020, 6005)
-			assert_eq(s.satisfaction, 72, "it closes at 25 attempts, 5 retried: 30 + 0.2*(20-30) = 28 -> 72")
-
-			for _ = 1, 20 do s = score(14020 + _ * 30, 6005) end
-			assert_true(s.satisfaction >= 97, "clean windows pull it back toward 100, got " .. s.satisfaction)
-			assert_true(math.abs(s.wifi_tx_retries_percentage - 6005 * 100 / (14620 + 6005)) < 1e-10,
-				"wifi_tx_retries_percentage stays the lifetime ratio")
-
-			local before = s.satisfaction
-			s = score(14650, 6035)
-			assert_true(s.satisfaction < before, "a bad window drops it again")
-
-			s = score(100, 50)
-			assert_eq(s.satisfaction, 66, "counters went backwards (reassociation): lifetime again")
+			-- Smoothing: one rate-control step moves the score a fifth of the
+			-- way, and a sample without a rate keeps the last value.
+			fresh()
+			assert_eq(score(-50, "65.0 MBit/s MCS 7", HT20_1SS), 100, "first sample is taken as is")
+			assert_eq(score(-50, "19.5 MBit/s MCS 2", HT20_1SS), 86, "100 + 0.2*(33.3-100) = 86.7")
+			assert_eq(score(-50, "54.0 MBit/s", HT20_1SS), 86, "a legacy-rate sample keeps it")
 
 			inform._time = orig_time
 			inform._sta_stats_cache = {}

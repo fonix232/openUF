@@ -1925,6 +1925,25 @@ straight passthrough — `com.ubnt.service.l.e.AcrQJeJCScLn`:
 a running `satisfaction_avg` accumulator. Real AP firmware computes it on-device with a
 proprietary formula. Sending nothing renders as "No Experience", correctly.
 
+**Per-driver tx counters (hardware, 2026-09-27).** `iw station dump`'s `tx retries` and
+`tx failed` don't mean the same thing on every driver, and neither tracks end-to-end loss, so the
+satisfaction estimate uses neither. Each check pinged a client from the AP 150 times (1/s) and
+diffed the station's counters across the run:
+
+| driver (`/sys/class/ieee80211/phyN/device/driver`) | Δ tx packets | Δ tx retries | Δ tx failed | ICMP lost |
+|---|---|---|---|---|
+| `mt798x-wmac` (mt76, AX3000T 2.4 GHz), Google Home Mini at −36 dBm | 227 | 74 | 74 (33 %) | 0 / 150 |
+| same AP, a clean client at −61 dBm | 1884 | 1 | 1 | 0 / 150 |
+| `ath9k` (Archer C5 2.4 GHz), the same Mini at −54 dBm | 325 | 129 | 3 (0.9 %) | 0 / 150 |
+| `ath10k_pci` (Archer C5 5 GHz), lifetime only | 480383 | 115379 | **0** | not tested |
+
+- mt76: `tx retries` equals `tx failed` exactly on every station. Both count frames a
+  power-saving client didn't take while asleep, which are then re-queued and delivered. That
+  explains 33 % "failed" with no loss.
+- ath9k: `tx retries` counts every retry attempt, and can exceed tx packets. `tx failed` stayed
+  small, but with no loss on the link it can't be shown to measure loss.
+- ath10k: `tx failed` is never reported (0).
+
 ### `port_table[]` entry
 
 Processed only when `Device.isSwitch()` is true for the reported model —
@@ -2163,7 +2182,7 @@ them for measured values.
 | `sta_table[].capacity` | Negotiated `tx_bitrate` (Mbps, floored) as a proxy for "available bandwidth to this client" |
 | `sta_table[].throughput` | Delta-sampled byte rate (bytes/sec); `0` on first sample for a given MAC |
 | `sta_table[].linkscore`, `.multicast` | `0` placeholders — **no local source and no public reference found for either.** Neither `paultyng/go-unifi`'s `User` model nor `unpoller/unifi`'s `clients.go` has them at all. Still needs live-capture verification. |
-| `sta_table[].satisfaction` | `estimate_satisfaction()`: worse of a signal score (−85 dBm → 0, −50 dBm → 100) and a retry score (`100 − retries%`), matching community descriptions of the real behavior. A proxy for Ubiquiti's undocumented on-device formula. The retry ratio is **windowed**, not lifetime: `iw`'s counters run for the whole association, so a score reflected the whole association: one bad stretch pinned it for days, and hours of good traffic hid a problem starting now. On hardware a Google Home Mini at −36 dBm scored 69 from 31 % lifetime retries; windowed, it fell to 59 within 5 minutes, because its recent traffic was worse (37 %). A window closes after 20 tx attempts and folds into an EWMA (α 0.2); the first sample and a reassociation start from the lifetime ratio. `wifi_tx_attempts`/`wifi_tx_retries_percentage` stay lifetime. |
+| `sta_table[].satisfaction` | `estimate_satisfaction()`: the worse of a **rate** term and an **edge** term. Rate = the AP's current tx rate as a share of this client's ceiling: the stream count, width and top MCS it associated with (`hostapd_cli all_sta`: `ht_mcs_bitmask`, `rx_vht_mcs_map`, `ht_caps_info`/`vht_caps_info` width bits, `[HE]` flag), capped by the AP's own streams and live channel width, taken one MCS below the top, smoothed by an EWMA (α 0.2). Edge = signal, −85 dBm → 0, −70 dBm → 100. Both constants and the one-below-top ceiling are judgements, not UniFi calibration. Rate control steps down when frames fail, so a bad link still shows. Signal alone was the score before (−85 → 0, −50 → 100): a 1SS HT20 client at MCS 7 of 7 with 0.8 % retries read Poor at −61 dBm. A retry ratio was scored next (ed8b12b) and removed here: see *Per-driver tx counters* below. Read-only replay of the new code on both APs (2026-09-27, 9 clients) scored every client at or above the deployed build; the ceiling one below the top stops a −48 dBm client alternating VHT MCS 8/9 from crossing the Good/Excellent line each sample. HE ceilings (MCS 0–11 assumed, streams/width from HT/VHT caps) are ⚠️ unconfirmed: no HE client was associated. `wifi_tx_attempts`/`wifi_tx_retries_percentage` stay the lifetime iw values. |
 | `spectrum_table[].width` | The radio's configured `htmode` (e.g. `HT40` → 40) as a uniform approximation — no live-scan source gives per-channel width |
 | `spectrum_table[].interference` | Noise-floor dBm passed through; `iw survey dump` has no interference metric of its own. Falls back to the pre-sweep reading for any frequency whose post-scan noise comes back `0` (see [the first real-hardware run](#the-first-real-hardware-run)) |
 | `radio_table[].builtin_antenna` = `true`, `.builtin_ant_gain` = `3` (dBi) | **Constants — no software source exists for either.** Not inert: the controller adds the gain to TX power to display EIRP, so a board with different antennas reports a wrong EIRP. Change them in `ucihelper.RADIO_DEFAULTS` if your hardware differs. |
