@@ -1449,7 +1449,7 @@ by the controller's own startup log: `firmware[U6IW] new version (6.8.2.15592) i
 | `wifi_caps2` | `0x20` (32) | `Device.supportsAssistedRoaming()` = `hasWifiCapability2(32)` | The controller never emits a WLAN's Roaming Assistant (`wireless.<n>.btm_disassoc.*`). Confirmed live in the lab: set, the keys appear on the 5 GHz entry. |
 
 `wifi_caps2` is a **second, entirely separate** bitmask from `wifi_caps` (which gates
-`supportBandsteering()`/`supportZeroHandoff()`; openUF claims `0x4`/`0x8`, see below). Only bits `0x40` and
+`supportBandsteering()`/`supportZeroHandoff()`; openUF claims `0x4`/`0x8` and `0x20`, see below). Only bits `0x40` and
 `0x20` are claimed; the mask also gates Mesh MLO, quick/neighbour scan, roam topology stats,
 Green AP, ACS-DFS and the multicast suppressor, which openUF does not implement and must not
 claim.
@@ -1463,14 +1463,13 @@ the per-radio WLAN security filter `com.ubnt.service.config.ubntconf.plVcFpIybmr
 Calls on `com.ubnt.i.g.OZQcnZuvnRweLFaaG` in oHgVgY check the **model registry**, not
 anything the device sends, and are excluded. **This table comes from decompiled code only:
 none of the unclaimed rows has been checked on the wire.** openUF sends `wifi_caps = 0xC`
-(since 2026-09-27) and no `fw2_caps`, `fw3_caps` or `hw_caps` field at all, so each of those reads as 0.
+(since 2026-09-27), or `0x2C` where it can switch airtime fairness, and no `fw2_caps`, `fw3_caps` or `hw_caps` field at all, so each of those reads as 0.
 
 Gates that drop or weaken a feature openUF could implement (claimed ones are listed after the table):
 
 | Field | Bit | Predicate | Effect while unclaimed |
 |---|---|---|---|
 | `wifi_caps` | `0x100000` | `supportWpaPpsk()` | A WLAN with Private Pre-Shared Keys, or UID IoT, is **skipped** ("PPSK is not supported … will be skipped") |
-| `wifi_caps` | `0x20` | `supportATFConfig()` | `atf.status`/`atf.mode` (Airtime Fairness) is never emitted |
 | `fw_caps` | `0x1000` | `supportMultiBlockWlanSchedule()` | A WLAN Schedule with several blocks per day goes out as one `wireless.<n>.schedule_<day>` key per block, all under the same name, so the last one wins. With the bit set they become `schedule_<day>.<i>` |
 | `fw_caps` | `0x400000` | `supportWlanScheduleInvert()` | The controller inverts a schedule itself instead of sending `schedule_invert` |
 
@@ -1531,6 +1530,49 @@ the real code had 0 `handle_response failed` and logged the `equal` warning once
 **Still unobserved:** an actual 2.4 → 5 GHz steer caused by the device setting alone. No
 client that supports BSS Transition was on the C5 at the time. Its two 5 GHz clients have
 the BTM bit clear, and usteer only steers clients that have it.
+
+**`wifi_caps` `0x20` (Airtime Fairness): CLAIMED, confirmed in the lab 2026-09-27.**
+Predicate: `supportATFConfig()` = `hasWifiCapability(32)`, the only test in oHgVgY's ATF
+generator. The setting is the AP's own (device panel, REST `device.atf_enabled`). Captured
+on 10.4.57 with the bit set:
+
+```
+# airtime fairness
+atf.status=enabled                 (always, whenever the bit is set)
+atf.mode=enabled                   (atf_enabled=true; "disabled" for false)
+```
+
+`atf.mode` is `enabled` only when the site's `mgmt.advanced_feature_enabled` is also on.
+10.4.57 writes that back to `true` even on a full-object REST PUT, so in practice the mode
+follows `atf_enabled` alone. Its default is true for every model but U7-NHD, UHD-IW,
+UFLHD and UDMB (`getDefaultAirtimeFairnessEnabled`). For the 14 models in
+`shouldBlockChangingAirtimeFairnessSettings()`, the device-update hook
+(`devmgr.c.offwZmbh` in 10.6.101) copies the old `atf_enabled` back over any change, so their
+switch is frozen at the default. The list has `UAIW6`, a MediaTek model, but not `U6IW` (QCA),
+the model openUF presents, so the toggle goes through. The same check exists in 10.4.57, where
+the REST toggle on the lab's U6IW took effect.
+
+The OpenWrt counterpart is mac80211's airtime scheduler, not hostapd. Every station gets
+weight 256, and its deficit is charged from the TX/RX airtime the driver reports. It is on
+by default: read-only on 2026-09-27, all four radios of both APs (ath10k + ath9k on the C5,
+mt76 on the AX3000T) showed `airtime_flags` = `AIRTIME_TX | AIRTIME_RX` and per-station
+`airtime` files with moving TX/RX totals and deficits. So `enabled` is left as the kernel
+default (openUF writes `3`), and `disabled` writes `0` to
+`/sys/kernel/debug/ieee80211/phy*/airtime_flags`, after which no airtime is charged and
+the scheduler is plain round-robin. hostapd's `airtime_mode` (UCI `wifi-device`
+`airtime_mode`, in the 25.12 schema and generator) only picks static, dynamic or limited
+per-BSS **weights** on top of that scheduler. None of its modes turns it off, so it is not the
+counterpart. The value is kept as `st.atf_enabled`, because debugfs resets to `3` at boot
+and the controller does not push again, and it is reapplied at startup (`M._reapply_airtime`). Forgetting the
+device writes `3`.
+
+Lab (full `down -v` reset, claim from code via a tmpfs over `/sys/kernel/debug` with stub
+per-phy files seeded by the AP entrypoint): the device reported `wifi_caps` `0x2c`. Toggling
+`atf_enabled` over REST pushed `atf.mode=disabled`, both stub files became `0`, and
+`state.json` got `"atf_enabled":false`. After both files were reset to `3` and inform was
+restarted, the startup reapply wrote `0` again. Toggling back pushed `enabled`, and both
+went to `3`. `handle_response failed` = 0 throughout. **Hardware tier not yet run**: no
+write to a real `airtime_flags`, and no airtime measurement with it off.
 
 **`radio_caps2` `0x8` (Enhanced Open / OWE): CLAIMED, confirmed in the lab 2026-09-27.**
 Predicate: radio DTO `NoFWvUa()`, tested in `plVcFpIybmrpXclX` for an open WLAN with

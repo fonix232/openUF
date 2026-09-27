@@ -423,6 +423,65 @@ return {
 		end
 	},
 	{
+		name = "inform packet: handle_response system_cfg atf.mode drives airtime and st.atf_enabled",
+		fn = function()
+			-- Captured on 10.4.57 2026-09-27 with wifi_caps 0x2C claimed and
+			-- the device's atf_enabled switched off over REST.
+			local calls = {}
+			local orig = inform._airtime.set_enabled
+			inform._airtime.set_enabled = function(on) calls[#calls + 1] = on; return 2, 2 end
+			local function push(st, sys_cfg)
+				local resp = ('{"_type":"setparam","system_cfg":"%s"}'):format(sys_cfg:gsub("\n", "\\n"))
+				inform.handle_response(resp, st, {net = {lan_cpueth = "eth0"}})
+			end
+			local ok, err = pcall(function()
+				local st = sample_state()
+				push(st, "mgmt.x=1\n# airtime fairness\natf.status=enabled\natf.mode=disabled\n")
+				assert_eq(#calls, 1, "one airtime write")
+				assert_false(calls[1], "switched off")
+				assert_false(st.atf_enabled, "persisted as false, not nil")
+				push(st, "atf.status=enabled\natf.mode=enabled\n")
+				assert_true(calls[2], "switched back on")
+				assert_true(st.atf_enabled, "persisted as true")
+				-- A push without the block leaves the setting alone.
+				push(st, "mgmt.x=1\n")
+				assert_eq(#calls, 2, "no write without an atf block")
+				assert_true(st.atf_enabled, "setting kept")
+			end)
+			inform._airtime.set_enabled = orig
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform packet: startup reapplies a pushed ATF setting, never an unpushed one",
+		fn = function()
+			-- debugfs resets to on at reboot, and a matching cfgversion
+			-- means the controller does not push again.
+			local calls = {}
+			local orig = inform._airtime.set_enabled
+			inform._airtime.set_enabled = function(on) calls[#calls + 1] = on end
+			local r_off = inform._reapply_airtime(sample_state({atf_enabled = false}))
+			local r_nil = inform._reapply_airtime(sample_state())
+			inform._airtime.set_enabled = orig
+			assert_true(r_off, "reapplied")
+			assert_eq(#calls, 1, "exactly one write")
+			assert_false(calls[1], "the stored off")
+			assert_false(r_nil, "never pushed: the board's default stays")
+		end
+	},
+	{
+		name = "inform packet: forgetting the controller turns airtime fairness back on",
+		fn = function()
+			local calls = {}
+			local orig = inform._airtime.set_enabled
+			inform._airtime.set_enabled = function(on) calls[#calls + 1] = on end
+			inform._forget_controller()
+			inform._airtime.set_enabled = orig
+			assert_eq(#calls, 1, "one write")
+			assert_true(calls[1], "back to mac80211's default")
+		end
+	},
+	{
 		name = "inform packet: handle_response derives band_steering_active from vap_table.no2ghz_oui and drives usteer",
 		fn = function()
 			local st = sample_state()

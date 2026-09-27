@@ -1600,8 +1600,15 @@ return {
 			-- supportVapBasedBandsteering() (8) keeps it on when some WLAN has
 			-- no 2.4/5 GHz pair. The other wifi_caps bits gate features openUF
 			-- does not implement (PROTOCOL-VALIDATION.md, Capability bitmasks).
+			local o = inform._airtime.supported
+			inform._airtime.supported = function() return false end
 			local d = build()
+			inform._airtime.supported = function() return true end
+			local d2 = build()
+			inform._airtime.supported = o
 			assert_eq(d.wifi_caps, 0xC, "wifi_caps is exactly 0x4|0x8")
+			-- supportATFConfig() is hasWifiCapability(32): the atf.* block.
+			assert_eq(d2.wifi_caps, 0x2C, "plus 0x20 where airtime_flags can be switched")
 		end
 	},
 	{

@@ -107,6 +107,8 @@ M.FIELDS = {
 	-- nft rules l2guard builds from it come back after a reboot like the
 	-- blocklist does.
 	l2guard                   = "table",
+	-- Airtime Fairness (atf.mode): a debugfs flag, back on after a reboot.
+	atf_enabled               = "boolean",
 }
 
 -- Load state from disk. Missing file returns defaults. Applies security

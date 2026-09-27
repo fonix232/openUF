@@ -63,6 +63,7 @@ local rrmscan   = _require_sibling("rrmscan")
 local roamassist = _require_sibling("roamassist")
 local sysconf   = _require_sibling("sysconf")
 local l2guard   = _require_sibling("l2guard")
+local airtime   = _require_sibling("airtime")
 
 local M = {}
 
@@ -83,6 +84,7 @@ M._usteer    = usteer
 M._switchvlan = switchvlan
 M._rrmscan    = rrmscan
 M._roamassist = roamassist
+M._airtime    = airtime
 M._sysconf    = sysconf
 M._l2guard    = l2guard
 
@@ -1740,9 +1742,12 @@ function M.build_json(st, cfg, ufhw)
 		-- enabled when some WLAN has no 2.4/5 GHz pair; without it one
 		-- single-band WLAN switches the device's steering off. See
 		-- _parse_bandsteering_system_cfg. Decompiled from controller
-		-- 10.6.101, captured on 10.4.57. The other bits gate features openUF
-		-- does not implement (PROTOCOL-VALIDATION.md, Capability bitmasks).
-		wifi_caps        = 0xC,
+		-- 10.6.101, captured on 10.4.57. Bit 0x20 is supportATFConfig():
+		-- without it no atf.* block (Airtime Fairness) is sent; claimed only
+		-- where mac80211's airtime_flags can be switched (airtime.lua). The
+		-- other bits gate features openUF does not implement
+		-- (PROTOCOL-VALIDATION.md, Capability bitmasks).
+		wifi_caps        = 0xC + ((M._airtime and M._airtime.supported()) and 0x20 or 0),
 		-- Bit 0x40 (64): Device.supportAdvertisingDeviceNameInBeacon() in the
 		-- decompiled controller is exactly hasWifiCapability2(64) -- i.e. bit
 		-- 6 of a SECOND capability bitmask, wifi_caps2, entirely separate
@@ -3193,6 +3198,20 @@ function M.handle_response(json_str, st, cfg)
 				end
 			end
 
+			-- Airtime Fairness (airtime.lua). Kept in state.json because the
+			-- debugfs switch resets on reboot and the controller does not
+			-- push again; M.run reapplies it. No block, no change.
+			if M._airtime then
+				local atf = M._airtime.parse(sys_raw)
+				if atf ~= nil then
+					st.atf_enabled = atf
+					local ok_atf, err_atf = pcall(M._airtime.set_enabled, atf)
+					if not ok_atf then
+						io.stderr:write("inform: airtime: " .. tostring(err_atf) .. "\n")
+					end
+				end
+			end
+
 			-- The ebtables.* hardening block (l2guard.lua): BPDU and
 			-- VLAN-tag drop on every AP VAP. After the WiFi pass on purpose,
 			-- so a VAP this push added has its netdev by now if netifd was
@@ -3580,10 +3599,22 @@ end
 -- would slow re-adoption to one attempt per interval. The pushed timezone and
 -- NTP servers stay: they are sane settings for the board either way, and
 -- their originals remain stamped in UCI (USAGE § 6).
+-- Airtime Fairness is debugfs state, back at the kernel's default (on) after
+-- every reboot, and the controller does not push it again (cfgversion
+-- matches). Reapplied at startup from state.json; nil means never pushed, and
+-- the board's default stays. Returns whether it wrote.
+function M._reapply_airtime(st)
+	if not (st and st.atf_enabled ~= nil and M._airtime) then return false end
+	pcall(M._airtime.set_enabled, st.atf_enabled)
+	return true
+end
+
 function M._forget_controller()
 	M._controller_interval = nil
 	if M._l2guard then pcall(M._l2guard.reconcile, nil, {}) end
 	if M._sysconf then pcall(M._sysconf.apply_cron, {enabled = false, jobs = {}}) end
+	-- A controller that switched Airtime Fairness off no longer does.
+	if M._airtime then pcall(M._airtime.set_enabled, true) end
 end
 
 function M._reload_if_changed(st, cfg, last_mtime)
@@ -4131,6 +4162,7 @@ function M.run(cfg, ufhw)
 	if st.led_enabled ~= nil then
 		M._led.set_enabled(cfg and cfg.led, st.led_enabled)
 	end
+	M._reapply_airtime(st)
 	-- Per-port byte counters are a switch-driver setting that some boards ship
 	-- switched off; without it every socket reports 0 B in the Ports view.
 	if M._switchvlan then pcall(M._switchvlan.enable_mib_polling, cfg) end

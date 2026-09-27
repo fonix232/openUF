@@ -268,6 +268,7 @@ return {
 					mac = "00:00:5e:00:53:16", led_enabled = false,
 					locating = true, locate_prev_trigger = "phy0tpt",
 					ip_mode = "static", swvlan_backup = {["10"] = "0t 2 3"},
+					atf_enabled = false,
 				})
 				local st = state.load()
 				assert_eq(st.mac, "00:00:5e:00:53:16", "identity mac survives")
@@ -276,6 +277,7 @@ return {
 				assert_eq(st.locate_prev_trigger, "phy0tpt", "the LED's trigger survives")
 				assert_eq(st.ip_mode, "static", "the static-vs-DHCP guard survives")
 				assert_eq(st.swvlan_backup["10"], "0t 2 3", "the VLAN ledger survives")
+				assert_false(st.atf_enabled, "a pushed ATF off survives as false, not nil")
 
 				-- Absent stays absent: readers test `~= nil` for "never set",
 				-- so a field must not materialise out of nowhere.
