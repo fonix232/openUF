@@ -2110,6 +2110,25 @@ Per `scan_table[]` entry — the consumer DTO `com.ubnt.service.aO.bLwwMKkr` (li
 | **`bw`** | Channel width MHz. The "Ch. Width" cell reads it directly and renders nothing when falsy: `renderCell:({bw:A})=>A?…:null`. Parsed from `iw`'s `BSS operating channel width: N MHz` (only present for HE/VHT-capable neighbours), defaulting to `20` — legacy-safe and valid on both bands. |
 | **`age`** | **Elapsed seconds, not an absolute timestamp.** The ingestion code reads `getInt("age")` and computes `last_seen = report_time − age` itself; it also **silently drops any entry with `age >= 30`** as a staleness guard. Sending an absolute timestamp under either key yields an empty result with no error. Parsed from `iw`'s `last seen: N ms ago`. |
 
+**`essid` is decoded from iw's escaping.** `iw` prints every SSID byte that isn't printable
+ASCII as `\xNN`. That covers all UTF-8 bytes, a backslash, and a leading or trailing space.
+Passed through as-is, a hotspot with an accented name showed up in the tab as literal
+escapes (seen live 2026-09-27), e.g. `Caf\xc3\xa9 Guest`. The controller's evil-twin check (`essid ∈ site SSIDs`) would also
+miss a site SSID written that way. Decoding is unambiguous because iw escapes the backslash
+too. An empty or NUL-filled (hidden) SSID is sent with no `essid`, and the tab shows the BSSID.
+
+**Two Environment columns are the controller's, not the AP's** (10.6 bundle
+`react-app-wrapper`, column list `Wt`):
+
+- **AP** (`AP_COUNT`) is not a per-row field. Rows are grouped by `essid`, and the cell shows
+  `children.length + 1` only on a group's parent row. A BSS alone under its name is blank, on
+  a real UniFi AP as well.
+- **Vendor** renders `oui`, which the controller fills from the BSSID. No AP sends it, and
+  `PeerScan` has no such field. It stays blank for locally-administered BSSIDs (random or
+  virtual, so no vendor exists) and for OUIs missing from the controller's database. Live:
+  23 of 42 rows resolved. Of the 19 blanks, 14 were locally-administered BSSIDs and 5 came
+  from two universal OUIs (`84:78:48`, `b8:fb:b3`) that the controller doesn't know.
+
 #### Enriching it without scanning — 802.11k beacon reports
 
 `scan dump` reads the kernel's **passive** BSS cache, which fills only from beacons the

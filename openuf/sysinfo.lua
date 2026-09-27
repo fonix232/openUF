@@ -538,6 +538,19 @@ end
 -- last_seen itself as (report_time - age); it also silently drops any entry
 -- with age >= 30 as stale before it ever reaches the rogue-AP list, so this
 -- must be a small, genuinely-fresh number, not whatever we last computed.
+-- iw prints an SSID with every byte that is not printable ASCII -- all UTF-8,
+-- a backslash, a leading or trailing space -- as \xNN, so "Café Guest" reached
+-- the Environment tab as the literal "Caf\xc3\xa9 Guest", and the controller's
+-- evil-twin check (essid in the site's SSIDs) could not match such a name.
+-- Decoding is unambiguous because the backslash is itself escaped. A hidden
+-- network (empty, or NUL-filled) gets no essid at all: the tab then shows the
+-- BSSID, and no NUL bytes go into the JSON.
+local function unescape_iw_ssid(s)
+	s = s:gsub("\\x(%x%x)", function(h) return string.char(tonumber(h, 16)) end)
+	if s == string.rep(string.char(0), #s) then return nil end
+	return s
+end
+
 function M.scan_table(ifname)
 	if not ifname then return {} end
 	local output = M._run_cmd("iw dev " .. ifname .. " scan dump")
@@ -637,7 +650,7 @@ function M.scan_table(ifname)
 				cur.channel = M.channel_from_freq(freq)
 			end
 			if signal then cur.signal = tonumber(signal) end
-			if ssid and not cur.essid then cur.essid = ssid end
+			if ssid and not cur.essid then cur.essid = unescape_iw_ssid(ssid) end
 			if last_ms then
 				cur.age = math.floor(tonumber(last_ms) / 1000)
 			elseif last_bt and cur.age == nil and now_up > 0 then

@@ -958,6 +958,35 @@ return {
 		end
 	},
 	{
+		name = "sysinfo: scan_table() decodes iw's \\xNN SSID escapes",
+		fn = function()
+			-- iw escapes every byte that is not printable ASCII. A hotspot
+			-- with an accented name reached the Environment tab as literal
+			-- escapes (seen live 2026-09-27), e.g. "Caf\xc3\xa9 Guest".
+			local function bss(n, ssid)
+				return "BSS 00:00:5e:00:53:0" .. n .. "(on wlan0)\n" ..
+					"\tfreq: 2437\n\tsignal: -60.00 dBm\n" ..
+					"\tlast seen: 100 ms ago\n\tSSID: " .. ssid .. "\n"
+			end
+			local dump = bss(1, "Caf\\xc3\\xa9 Guest") ..
+				bss(2, "a\\x5cb") ..
+				bss(3, "\\x20Net") ..
+				bss(4, "\\x00\\x00\\x00") ..
+				bss(5, "")
+			with_fixtures({}, {["scan dump"] = dump}, function()
+				local nets = sysinfo.scan_table("wlan0")
+				assert_eq(#nets, 5, "all five BSSes parsed")
+				assert_eq(nets[1].essid,
+					"Caf" .. string.char(0xc3, 0xa9) .. " Guest",
+					"UTF-8 bytes decoded")
+				assert_eq(nets[2].essid, "a\\b", "escaped backslash decodes to one backslash")
+				assert_eq(nets[3].essid, " Net", "escaped leading space kept")
+				assert_eq(nets[4].essid, nil, "NUL-filled hidden SSID has no essid")
+				assert_eq(nets[5].essid, nil, "empty hidden SSID has no essid")
+			end)
+		end
+	},
+	{
 		name = "sysinfo: scan_table() classifies Privacy-only (no RSN/WPA IE) as wep",
 		fn = function()
 			local dump = "BSS cc:cc:cc:cc:cc:cc(on wlan0)\n"
