@@ -947,11 +947,11 @@ return {
 			assert_true(score(-65, "19.5 MBit/s MCS 2", HT20_1SS) < 70,
 				"a slow client at -65 dBm reads Poor")
 			fresh()
-			assert_eq(score(-80, "65.0 MBit/s MCS 7", HT20_1SS), 33,
-				"near the coverage edge the signal floor wins: -80 dBm is 5/15 of the way")
+			assert_eq(score(-80, "65.0 MBit/s MCS 7", HT20_1SS), 60,
+				"near the coverage edge SNR wins: 15 dB over the assumed -95 floor")
 			fresh()
-			assert_eq(score(-80, "54.0 MBit/s", HT20_1SS), 33,
-				"a legacy rate has no MCS to compare: signal floor only")
+			assert_eq(score(-80, "54.0 MBit/s", HT20_1SS), 60,
+				"a legacy rate has no MCS to compare: SNR only")
 			fresh()
 			assert_eq(score(-50, "65.0 MBit/s MCS 7", nil), 100,
 				"no hostapd record: rate term skipped")
@@ -986,6 +986,162 @@ return {
 			assert_eq(score(-50, "65.0 MBit/s MCS 7", HT20_1SS), 100, "first sample is taken as is")
 			assert_eq(score(-50, "19.5 MBit/s MCS 2", HT20_1SS), 86, "100 + 0.2*(33.3-100) = 86.7")
 			assert_eq(score(-50, "54.0 MBit/s", HT20_1SS), 86, "a legacy-rate sample keeps it")
+
+			inform._time = orig_time
+			inform._sta_stats_cache = {}
+		end
+	},
+	{
+		name = "inform json: satisfaction takes the worst of downlink airtime, uplink rate and SNR",
+		fn = function()
+			-- Per-frame figures measured on hardware 2026-09-27 (office 2.4 GHz,
+			-- noise -83 dBm), replayed inform by inform through the counters.
+			inform._sta_stats_cache = {}
+			local orig_time = inform._time
+			local t = 1000
+			inform._time = function() return t end
+			local st = {
+				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+				ip = "192.168.1.100", hostname = "testap",
+			}
+			local HT20_1SS = "00:00:5e:00:53:01\nflags=[AUTH][ASSOC][AUTHORIZED][WMM][HT]\n" ..
+				"ht_mcs_bitmask=ff000000000000000000\nht_caps_info=0x0020\n"
+			-- One inform: s = {signal, noise, tx/rx bitrate lines and the
+			-- lifetime counters (duration nil: the driver reports none)}.
+			local function inform_once(s)
+				inject_ucihelper()
+				inform._sysinfo._phy_info_cache = {}
+				inform._sysinfo._run_cmd = function(cmd)
+					if cmd:find("station dump") then
+						local out = "Station 00:00:5e:00:53:01 (on wlan0)\n" ..
+							"\tsignal:  \t" .. s.signal .. " dBm\n" ..
+							"\ttx packets:\t" .. s.tx_packets .. "\n" ..
+							"\ttx bytes:\t" .. s.tx_bytes .. "\n" ..
+							"\trx packets:\t" .. s.rx_packets .. "\n" ..
+							"\ttx bitrate:\t" .. (s.tx_rate or "65.0 MBit/s MCS 7") .. "\n"
+						if s.tx_duration then
+							out = out .. "\ttx duration:\t" .. s.tx_duration .. " us\n"
+						end
+						return out .. "\trx bitrate:\t" .. s.rx_rate .. "\n"
+					end
+					if cmd:find("all_sta", 1, true) then return HT20_1SS end
+					if cmd:find("survey dump") and s.noise then
+						return "Survey data from wlan0\n\tfrequency:\t2462 MHz [in use]\n" ..
+							"\tnoise:\t" .. s.noise .. " dBm\n"
+					end
+					if cmd:find("dev wlan0 info") then return fixture("iw_dev_info.txt") end
+					if cmd:find("phy phy0 info") then return fixture("iw_phy_info_5g.txt") end
+					return ""
+				end
+				t = t + 10
+				local d = cjson.decode(inform.build_json(st, nil, ufhw))
+				return d.vap_table[1].sta_table[1].satisfaction
+			end
+			-- A client sending pkts frames of bytes_per each costing us_per of
+			-- airtime per inform, answering at rx_rate; signal/noise fixed.
+			local function client(o)
+				local c = {signal = o.signal, noise = o.noise, rx_rate = o.rx_rate,
+					tx_packets = o.start or 5000, tx_bytes = (o.start or 5000) * o.bytes_per,
+					tx_duration = (o.start or 5000) * o.us_per, rx_packets = 100}
+				return function(pkts)
+					local r = inform_once(c)
+					pkts = pkts or 34
+					c.tx_packets = c.tx_packets + pkts
+					c.tx_bytes = c.tx_bytes + pkts * o.bytes_per
+					c.tx_duration = c.tx_duration + pkts * o.us_per
+					c.rx_packets = c.rx_packets + 10
+					return r, c
+				end
+			end
+			local function fresh() inform._sta_stats_cache = {} end
+			local MCS3, MCS7 = "26.0 MBit/s MCS 3", "65.0 MBit/s MCS 7"
+
+			-- The dishwasher: MCS 7 on tx, but 503 us per 97-byte frame (4x
+			-- its neighbours) and 8-18 % ping loss. a73aa3b scored it 93.
+			fresh()
+			local dishwasher = client{signal = -71, noise = -83, rx_rate = MCS3,
+				bytes_per = 97, us_per = 503}
+			assert_eq(dishwasher(), 42, "first inform: no window yet, SNR 12 dB -> 42")
+			assert_eq(dishwasher(), 24, "airtime (110 + 97*8/58.5) / 503 = 24 %: Poor")
+
+			fresh()
+			local roomba = client{signal = -62, noise = -83, rx_rate = MCS3,
+				bytes_per = 97, us_per = 127}
+			roomba()
+			assert_eq(roomba(), 72, "the Roomba: clean airtime, SNR 21; uplink MCS 3 of 6 binds: 50 + 44/2")
+
+			fresh()
+			local clean = client{signal = -61, noise = -83, rx_rate = MCS7,
+				bytes_per = 953, us_per = 222}
+			clean()
+			assert_eq(clean(), 94, "a clean client at -61 dBm: only SNR 22 dB costs anything")
+
+			fresh()
+			local mini = client{signal = -36, noise = -83, rx_rate = MCS7,
+				bytes_per = 129, us_per = 171}
+			mini()
+			assert_eq(mini(), 74, "power-save re-sends cost airtime: (110 + 17.6) / 171")
+
+			-- Each sample is its own window: a link that degrades shows at once.
+			fresh()
+			local o = {signal = -61, noise = -83, rx_rate = MCS7, bytes_per = 953, us_per = 222}
+			local degrading = client(o)
+			degrading()
+			assert_eq(degrading(), 94, "clean")
+			o.us_per = 503
+			degrading()
+			assert_eq(degrading(), 89, "one bad window: 100 + 0.2*(240.3/503*100 - 100)")
+
+			-- A quiet client's window carries over until it holds 20 frames.
+			fresh()
+			dishwasher = client{signal = -71, noise = -83, rx_rate = MCS7,
+				bytes_per = 97, us_per = 503}
+			dishwasher(10)
+			assert_eq(dishwasher(10), 42, "10 frames: no airtime sample yet")
+			assert_eq(dishwasher(10), 24, "20 frames: sampled")
+
+			-- A new association restarts the window from the new counters.
+			fresh()
+			local c = client{signal = -61, noise = -83, rx_rate = MCS7,
+				bytes_per = 953, us_per = 222, start = 100000}
+			c()
+			assert_eq(c(), 94, "clean before the reassociation")
+			local bad = client{signal = -61, noise = -83, rx_rate = MCS7,
+				bytes_per = 97, us_per = 503, start = 1}
+			bad()
+			assert_eq(bad(), 84, "the reset window samples at once: 100 + 0.2*(24.5-100)")
+
+			-- No airtime from the driver: the tx rate against the ceiling stands in.
+			fresh()
+			local noair = {signal = -50, noise = -83, rx_rate = MCS7, tx_packets = 10,
+				tx_bytes = 1000, rx_packets = 10, tx_rate = "19.5 MBit/s MCS 2"}
+			assert_eq(inform_once(noair), 33, "no tx duration: MCS 2 of 6 = 19.5/58.5")
+
+			-- Noise: implausible floors are raised to -95, a missing one assumed.
+			fresh()
+			local n = {signal = -80, noise = -106, rx_rate = MCS7, tx_packets = 10,
+				tx_bytes = 1000, rx_packets = 10}
+			assert_eq(inform_once(n), 60, "-106 dBm noise is taken as -95: SNR 15")
+			fresh()
+			n.noise = nil
+			assert_eq(inform_once(n), 60, "no survey: -95 assumed")
+
+			-- A legacy uplink rate (a null frame at 1 Mbit/s) is not a verdict.
+			fresh()
+			local legacy = client{signal = -50, noise = -83, rx_rate = "1.0 MBit/s",
+				bytes_per = 953, us_per = 222}
+			legacy()
+			legacy()
+			assert_eq(legacy(), 100, "legacy rx rate: uplink term skipped")
+
+			-- SNR is smoothed: one 2 dB dip doesn't drop an Excellent client.
+			fresh()
+			local jitter = {signal = -62, noise = -83, rx_rate = MCS7, tx_packets = 10,
+				tx_bytes = 1000, rx_packets = 10}
+			assert_eq(inform_once(jitter), 92, "SNR 21")
+			jitter.signal = -64
+			assert_eq(inform_once(jitter), 91, "one reading at 19 dB: smoothed to 20.6")
 
 			inform._time = orig_time
 			inform._sta_stats_cache = {}

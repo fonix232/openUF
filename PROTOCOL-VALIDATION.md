@@ -1937,12 +1937,43 @@ diffed the station's counters across the run:
 | `ath9k` (Archer C5 2.4 GHz), the same Mini at −54 dBm | 325 | 129 | 3 (0.9 %) | 0 / 150 |
 | `ath10k_pci` (Archer C5 5 GHz), lifetime only | 480383 | 115379 | **0** | not tested |
 
-- mt76: `tx retries` equals `tx failed` exactly on every station. Both count frames a
-  power-saving client didn't take while asleep, which are then re-queued and delivered. That
-  explains 33 % "failed" with no loss.
+- mt76: `tx retries` equals `tx failed` exactly on every station. Both count **failed
+  transmission attempts**, not lost frames: in a 30 s window a −71 dBm client logged 43 failed
+  on 34 packets. The power-saving Mini's 33 % were attempts made while it dozed, then re-sent
+  and delivered, hence no loss. (An earlier reading here took them for filtered power-save
+  frames; the count above exceeding packets rules that out.)
 - ath9k: `tx retries` counts every retry attempt, and can exceed tx packets. `tx failed` stayed
   small, but with no loss on the link it can't be shown to measure loss.
 - ath10k: `tx failed` is never reported (0).
+
+**Per-station airtime and the link it measures (hardware, 2026-09-27).** `iw station dump`'s
+`tx duration` (µs) is mac80211's per-station airtime, filled by drivers that call
+`ieee80211_sta_register_airtime`. The ath9k, ath10k_core and mac80211 modules on the Archer C5
+(kernel 6.12.94) all import it. It was present on every station of the AX3000T (mt76) and the
+Archer C5's ath10k radio; the ath9k radio had no station to read. Whether retries are included:
+- ath9k: yes, from source. `ath_tx_count_airtime()` adds `duration × (ts_longretry + 1)` plus
+  every earlier rate's `duration × count`.
+- mt76: yes, on hardware (table below: 4× the airtime per frame on the lossy client).
+- ath10k: ⚠️ unknown. It passes the firmware's per-PPDU `tx_duration` from tx completions,
+  and whether the firmware counts retries in it isn't documented.
+
+AX3000T 2.4 GHz (ch 11, noise −83 dBm, ~12 % busy). Airtime was sampled over 8 minutes.
+Loss and latency are from pings sent from a remote host every second for 10 minutes; the
+path adds ~64 ms.
+
+| client | signal | bytes/frame | Δfailed/Δpackets | µs of airtime per frame | uplink rate | ping loss | p50 |
+|---|---|---|---|---|---|---|---|
+| dishwasher | −71 | 97 | 88.8 % | **503** | MCS 3 | **7.8 %** (17.7 % over 1 min) | **142 ms** |
+| robot vacuum, docked | −62 | 97 | 1.5 % | 127 | MCS 3 | 0.3 % | 66 ms |
+| Google Home Mini (power save) | −36 | 129 | 47.7 % | 171 | MCS 7 | 0 (1-min test) | — |
+| laptop | −61 | 953 | 0.4 % | 222 | MCS 7 | — | — |
+| phone | −45 | 111 | 1.5 % | 123 | — | 0.2 % | 64 ms |
+| the AP itself | | | | | | 0.5 % | 64 ms |
+
+The dishwasher's tx rate stayed at MCS 7 (the rate-vs-ceiling score read 93, then 86) while
+89 % of attempts failed. Rate control on mt76 doesn't step down for it. Airtime per frame
+tracked the loss and the rate didn't. For small frames a clean link costs ~110 µs of fixed
+overhead per frame on 2.4 GHz. Aggregated 5 GHz traffic ran at 38–43 µs per ~945-byte frame.
 
 ### `port_table[]` entry
 
@@ -2182,7 +2213,7 @@ them for measured values.
 | `sta_table[].capacity` | Negotiated `tx_bitrate` (Mbps, floored) as a proxy for "available bandwidth to this client" |
 | `sta_table[].throughput` | Delta-sampled byte rate (bytes/sec); `0` on first sample for a given MAC |
 | `sta_table[].linkscore`, `.multicast` | `0` placeholders — **no local source and no public reference found for either.** Neither `paultyng/go-unifi`'s `User` model nor `unpoller/unifi`'s `clients.go` has them at all. Still needs live-capture verification. |
-| `sta_table[].satisfaction` | `estimate_satisfaction()`: the worse of a **rate** term and an **edge** term. Rate = the AP's current tx rate as a share of this client's ceiling: the stream count, width and top MCS it associated with (`hostapd_cli all_sta`: `ht_mcs_bitmask`, `rx_vht_mcs_map`, `ht_caps_info`/`vht_caps_info` width bits, `[HE]` flag), capped by the AP's own streams and live channel width, taken one MCS below the top, smoothed by an EWMA (α 0.2). Edge = signal, −85 dBm → 0, −70 dBm → 100. Both constants and the one-below-top ceiling are judgements, not UniFi calibration. Rate control steps down when frames fail, so a bad link still shows. Signal alone was the score before (−85 → 0, −50 → 100): a 1SS HT20 client at MCS 7 of 7 with 0.8 % retries read Poor at −61 dBm. A retry ratio was scored next (ed8b12b) and removed here: see *Per-driver tx counters* below. Read-only replay of the new code on both APs (2026-09-27, 9 clients) scored every client at or above the deployed build; the ceiling one below the top stops a −48 dBm client alternating VHT MCS 8/9 from crossing the Good/Excellent line each sample. HE ceilings (MCS 0–11 assumed, streams/width from HT/VHT caps) are ⚠️ unconfirmed: no HE client was associated. `wifi_tx_attempts`/`wifi_tx_retries_percentage` stay the lifetime iw values. |
+| `sta_table[].satisfaction` | `estimate_satisfaction()`: the worst of three terms, following the uplink/downlink/coverage split of commercial controllers (Aruba/Aerohive client health = ideal ÷ actual airtime; Mist coverage and throughput SLEs; Meraki/Cisco SNR thresholds). **Downlink** = the airtime this client's frames would take (110 µs each plus the payload at its ceiling rate) ÷ the `tx duration` they actually took, one window per ≥ 20 frames, capped at 100. The ceiling is the stream count, width and top MCS the client associated with (`hostapd_cli all_sta`: `ht_mcs_bitmask`, `rx_vht_mcs_map`, `ht_caps_info`/`vht_caps_info` width bits, `[HE]` flag), capped by the AP's own streams and live channel width, one MCS below the top. Until a first airtime window, or on a driver without `tx duration`, the tx rate ÷ that ceiling stands in. **Uplink** = 50 + half the rx rate ÷ the same ceiling, only while the client sends. **Coverage** = SNR against the radio's in-use survey noise (floored at −95 dBm: ath9k/ath10k report −107/−106), 5 dB → 0, 20 dB → 90, 25 dB → 100. Each term is smoothed (EWMA α 0.2). The constants are judgements, not UniFi calibration. Replaying the *Per-station airtime* table: dishwasher 24 (Poor; was 93), docked vacuum 72 (the uplink binds), laptop 94, Mini 74 (Good; was 97–99, since its power-save re-sends cost airtime — accepted). ath10k airtime semantics are ⚠️ unknown (see above). Before this, the score was the worse of the tx rate ÷ ceiling and signal (−85 → 0, −70 → 100), which missed the dishwasher. Signal alone was the score before (−85 → 0, −50 → 100): a 1SS HT20 client at MCS 7 of 7 with 0.8 % retries read Poor at −61 dBm. A retry ratio was scored next (ed8b12b) and removed here: see *Per-driver tx counters* below. Read-only replay of the new code on both APs (2026-09-27, 9 clients) scored every client at or above the deployed build; the ceiling one below the top stops a −48 dBm client alternating VHT MCS 8/9 from crossing the Good/Excellent line each sample. HE ceilings (MCS 0–11 assumed, streams/width from HT/VHT caps) are ⚠️ unconfirmed: no HE client was associated. `wifi_tx_attempts`/`wifi_tx_retries_percentage` stay the lifetime iw values. |
 | `spectrum_table[].width` | The radio's configured `htmode` (e.g. `HT40` → 40) as a uniform approximation — no live-scan source gives per-channel width |
 | `spectrum_table[].interference` | Noise-floor dBm passed through; `iw survey dump` has no interference metric of its own. Falls back to the pre-sweep reading for any frequency whose post-scan noise comes back `0` (see [the first real-hardware run](#the-first-real-hardware-run)) |
 | `radio_table[].builtin_antenna` = `true`, `.builtin_ant_gain` = `3` (dBi) | **Constants — no software source exists for either.** Not inert: the controller adds the gain to TX power to display EIRP, so a board with different antennas reports a wrong EIRP. Change them in `ucihelper.RADIO_DEFAULTS` if your hardware differs. |

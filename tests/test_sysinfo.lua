@@ -126,6 +126,9 @@ return {
 				assert_eq(stas[2].rx_mcs, 5,                      "second client rx_mcs from 'MCS 5'")
 				assert_eq(stas[2].tx_generation, "n",            "second client is plain HT (bare MCS)")
 				assert_eq(stas[2].tx_nss, 1,                     "second client nss from MCS 6 -> floor(6/8)+1")
+				assert_eq(stas[1].tx_duration, 9835724,          "tx airtime in us")
+				assert_eq(stas[1].rx_duration, 14756520,         "rx airtime in us")
+				assert_eq(stas[2].tx_duration, nil,              "no airtime line: nil, not 0")
 			end)
 		end
 	},
@@ -168,6 +171,8 @@ return {
 				local stas = sysinfo.sta_table("wlan1")
 				assert_eq(stas[1].tx_width, 80, "80MHz token on the tx line")
 				assert_eq(stas[2].tx_width, 20, "no token: 20 MHz")
+				assert_eq(stas[1].rx_width, 160, "the rx line's own width")
+				assert_eq(stas[2].rx_width, nil, "no rx line: no rx width")
 			end)
 		end
 	},

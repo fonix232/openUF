@@ -295,7 +295,12 @@ end
 -- Each entry: {mac, signal, tx_bitrate, rx_bitrate, tx_mcs, rx_mcs,
 --              tx_generation, tx_nss, rx_generation, rx_nss, tx_bytes,
 --              rx_bytes, tx_packets, rx_packets, tx_retries, tx_failed,
---              inactive_ms, connected_sec, tx_width}
+--              inactive_ms, connected_sec, tx_width, rx_width,
+--              tx_duration, rx_duration}
+-- tx_duration/rx_duration: airtime in µs, from mac80211's per-station
+-- airtime accounting (drivers that call ieee80211_sta_register_airtime:
+-- ath9k, ath10k, mt76). ath9k counts every retry attempt into it; nil where
+-- the driver reports none.
 -- tx_retries/tx_failed: iw(8) only exposes TX-side retry/failure counters
 -- (802.11 ARQ is TX-side by nature) -- there is no rx-side equivalent in
 -- `station dump` output, confirmed via `strings /usr/sbin/iw`.
@@ -336,7 +341,12 @@ function M.sta_table(ifname)
 				cur.tx_width = tonumber(line:match("(%d+)MHz")) or 20
 			elseif line:find("rx bitrate:") then
 				cur.rx_generation, cur.rx_nss = _bitrate_generation_nss(line)
+				cur.rx_width = tonumber(line:match("(%d+)MHz")) or 20
 			end
+			local tx_dur = line:match("^%s*tx duration:%s+(%d+)")
+			local rx_dur = line:match("^%s*rx duration:%s+(%d+)")
+			if tx_dur then cur.tx_duration = tonumber(tx_dur) end
+			if rx_dur then cur.rx_duration = tonumber(rx_dur) end
 			local tx_bytes   = line:match("tx bytes:%s+(%d+)")
 			local rx_bytes   = line:match("rx bytes:%s+(%d+)")
 			local tx_pkts    = line:match("tx packets:%s+(%d+)")
