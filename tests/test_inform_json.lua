@@ -1016,6 +1016,56 @@ return {
 		end
 	},
 	{
+		name = "inform json: a client on a private pre-shared key's VLAN is reported, and kicked via its BSS",
+		fn = function()
+			-- The VLAN netdev lists its own stations (the VAP's station dump
+			-- does not), but hostapd's control socket is the VAP's.
+			inject_sysinfo(true)
+			inject_ucihelper()
+			local orig_sta = inform._sysinfo.sta_table
+			inform._sysinfo.sta_table = function(ifname)
+				if ifname == "wlan0" then
+					return {{mac = "aa:bb:cc:dd:ee:01", signal = -50, tx_packets = 1}}
+				end
+				if ifname == "wlan0-20" then
+					return {{mac = "aa:bb:cc:dd:ee:02", signal = -80, tx_packets = 1}}
+				end
+				return {}
+			end
+			ifnames_override = function(radio, ssid)
+				if radio == "radio0" and ssid == "test" then return {"wlan0", "wlan0-20"} end
+				return {}
+			end
+			inform._ucihelper.bss_ifname = function(ifname)
+				return ifname == "wlan0-20" and "wlan0" or ifname
+			end
+			inform._ucihelper.get_radio_table = function()
+				return {{name = "radio0", radio = "ng", channel = "6",
+					min_rssi_enabled = true, min_rssi_raw = 25}}  -- -70 dBm
+			end
+			local kicked = {}
+			inform._ucihelper.kick_station = function(ifname, mac)
+				kicked[#kicked + 1] = {ifname = ifname, mac = mac}
+			end
+			local ok, err = pcall(function()
+				local st = {
+					authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+					inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+					ip = "192.168.1.100", hostname = "testap",
+				}
+				local d = cjson.decode(inform.build_json(st, nil, ufhw))
+				local vap
+				for _, v in ipairs(d.vap_table) do if v.essid == "test" then vap = v end end
+				assert_eq(vap.num_sta, 2, "the VLAN client is counted")
+				assert_eq(#kicked, 1, "the -80 dBm VLAN client is below -70")
+				assert_eq(kicked[1].mac, "aa:bb:cc:dd:ee:02", "that one")
+				assert_eq(kicked[1].ifname, "wlan0", "through the VAP's hostapd, not wlan0-20")
+			end)
+			inform._sysinfo.sta_table, ifnames_override = orig_sta, nil
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "inform json: Roaming Assistant gets one observation per station of its vap, and the threshold never leaks",
 		fn = function()
 			inject_sysinfo(true)  -- aa:bb:cc:dd:ee:ff at -62 dBm (3600 s), 11:22:33:44:55:66 at -75 dBm (42 s)
@@ -1593,7 +1643,7 @@ return {
 		end
 	},
 	{
-		name = "inform json: wifi_caps claims exactly band steering (0x4) and per-VAP pairs (0x8)",
+		name = "inform json: wifi_caps claims band steering (0x4), per-VAP pairs (0x8), ATF (0x20), PPSK (0x100000)",
 		fn = function()
 			-- Device.supportBandsteering() is hasWifiCapability(4): without it
 			-- the device-level bandsteering.* block is never emitted.
@@ -1601,14 +1651,25 @@ return {
 			-- no 2.4/5 GHz pair. The other wifi_caps bits gate features openUF
 			-- does not implement (PROTOCOL-VALIDATION.md, Capability bitmasks).
 			local o = inform._airtime.supported
+			local o_ppsk = inform._sysinfo._ppsk_supported_cache
+			inform._sysinfo._ppsk_supported_cache = false
 			inform._airtime.supported = function() return false end
 			local d = build()
 			inform._airtime.supported = function() return true end
 			local d2 = build()
+			inform._sysinfo._ppsk_supported_cache = true
+			local d3 = build()
+			inform._airtime.supported = function() return false end
+			local d4 = build()
 			inform._airtime.supported = o
+			inform._sysinfo._ppsk_supported_cache = o_ppsk
 			assert_eq(d.wifi_caps, 0xC, "wifi_caps is exactly 0x4|0x8")
 			-- supportATFConfig() is hasWifiCapability(32): the atf.* block.
 			assert_eq(d2.wifi_caps, 0x2C, "plus 0x20 where airtime_flags can be switched")
+			-- supportWpaPpsk() is hasWifiCapability(0x100000): without it a
+			-- WLAN with Private Pre-Shared Keys is skipped entirely.
+			assert_eq(d3.wifi_caps, 0x10002C, "plus 0x100000 where hostapd can do per-key VLANs")
+			assert_eq(d4.wifi_caps, 0x10000C, "PPSK does not depend on airtime")
 		end
 	},
 	{

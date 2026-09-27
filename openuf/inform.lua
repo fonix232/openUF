@@ -1123,15 +1123,18 @@ function M.build_json(st, cfg, ufhw)
 			-- one and the open one, and its clients are the union of both.
 			local ok_if, ifnames = pcall(ufuci.get_ifnames_for_vap,
 				vap.radio_name, vap.essid)
-			-- sta_ifname[i] is the netdev stas[i] is on, for the kick and
-			-- Roaming Assistant below.
+			-- sta_ifname[i] is the hostapd BSS stas[i] is on, for the kick
+			-- and Roaming Assistant below. A private pre-shared key's VLAN
+			-- netdev lists its own stations but has no hostapd of its own,
+			-- so those go to the VAP's.
 			local stas, sta_ifname = {}, {}
 			for _, ifname in ipairs(ok_if and ifnames or {}) do
 				local ok_sta, rv2 = pcall(M._sysinfo.sta_table, ifname)
 				if ok_sta then
+					local bss = ufuci.bss_ifname and ufuci.bss_ifname(ifname) or ifname
 					for _, sta in ipairs(rv2) do
 						stas[#stas + 1] = sta
-						sta_ifname[#stas] = ifname
+						sta_ifname[#stas] = bss
 					end
 				end
 			end
@@ -1744,10 +1747,15 @@ function M.build_json(st, cfg, ufhw)
 		-- _parse_bandsteering_system_cfg. Decompiled from controller
 		-- 10.6.101, captured on 10.4.57. Bit 0x20 is supportATFConfig():
 		-- without it no atf.* block (Airtime Fairness) is sent; claimed only
-		-- where mac80211's airtime_flags can be switched (airtime.lua). The
-		-- other bits gate features openUF does not implement
-		-- (PROTOCOL-VALIDATION.md, Capability bitmasks).
-		wifi_caps        = 0xC + ((M._airtime and M._airtime.supported()) and 0x20 or 0),
+		-- where mac80211's airtime_flags can be switched (airtime.lua). Bit
+		-- 0x100000 is supportWpaPpsk(): without it a WLAN with Private
+		-- Pre-Shared Keys is skipped entirely ("PPSK is not supported ...
+		-- will be skipped"); claimed only where hostapd can put each key on
+		-- its own VLAN (sysinfo.ppsk_supported). The other bits gate features
+		-- openUF does not implement (PROTOCOL-VALIDATION.md, Capability
+		-- bitmasks).
+		wifi_caps        = 0xC + ((M._airtime and M._airtime.supported()) and 0x20 or 0)
+			+ ((M._sysinfo.ppsk_supported and M._sysinfo.ppsk_supported()) and 0x100000 or 0),
 		-- Bit 0x40 (64): Device.supportAdvertisingDeviceNameInBeacon() in the
 		-- decompiled controller is exactly hasWifiCapability2(64) -- i.e. bit
 		-- 6 of a SECOND capability bitmask, wifi_caps2, entirely separate
@@ -2206,7 +2214,21 @@ function M._parse_wifi_system_cfg(sys_raw)
 				:format(w.ssid, (akm:gsub("^%s+", ""))))
 		end
 
-		if w.ssid and w.parent and not is_enterprise
+		-- A UID IoT WLAN whose keys come from RADIUS only. Claiming
+		-- wifi_caps 0x100000 (PPSK) lets it through too, with
+		-- aaa.<n>.wpa.psk_radius = 0/1/2 (disabled/optional/required, the
+		-- same values as hostapd's wpa_psk_radius; enum decompiled from
+		-- 10.6.101, not seen on the wire). As with Enterprise the push names
+		-- no RADIUS server for it, so "required" is a WLAN nobody could
+		-- join. "optional" keeps working on its local keys.
+		local radius_psk_only = a["wpa.psk_radius"] == "2"
+		if radius_psk_only and w.ssid then
+			io.stderr:write(("inform: skipping WLAN %q -- its keys come from RADIUS "
+				.. "(wpa.psk_radius=2), and openUF has no RADIUS configuration on "
+				.. "this wire protocol\n"):format(w.ssid))
+		end
+
+		if w.ssid and w.parent and not is_enterprise and not radius_psk_only
 				and not (a.devname and owe_hidden_half[a.devname]) then
 			local security = "open"
 			-- Enhanced Open: the akm is the only marker. It carries no
@@ -2288,6 +2310,48 @@ function M._parse_wifi_system_cfg(sys_raw)
 			end
 			if bcfilt_macs then table.sort(bcfilt_macs) end
 
+			-- Private Pre-Shared Keys: several passphrases on one SSID, each
+			-- landing its client on its own VLAN. Pushed only to a device
+			-- claiming wifi_caps 0x100000 (see build_json). Captured on 10.4.57:
+			--   aaa.<n>.dynamic_vlan=1
+			--   aaa.<n>.wpa.psk_file.status=enabled
+			--   aaa.<n>.wpa.psk_file.<k>.psk=<passphrase>
+			--   aaa.<n>.wpa.psk_file.<k>.vlanid=<vid>
+			-- vlanid is left out for a key on a VLAN-1 network: that client
+			-- stays on the VAP's own network. aaa.<n>.wpa.psk still comes
+			-- along, a random passphrase the controller generates for the
+			-- WLAN, and is provisioned like any other key.
+			local ppsk
+			if _wire_bool(a["wpa.psk_file.status"]) and security ~= "open"
+					and security ~= "owe" then
+				local idxs = {}
+				for k in pairs(a) do
+					local i = k:match("^wpa%.psk_file%.(%d+)%.psk$")
+					if i then idxs[#idxs + 1] = tonumber(i) end
+				end
+				table.sort(idxs)
+				for _, i in ipairs(idxs) do
+					local key = a["wpa.psk_file." .. i .. ".psk"]
+					local vid_raw = a["wpa.psk_file." .. i .. ".vlanid"]
+					local vid = tonumber(vid_raw)
+					-- hostapd's own limits: a passphrase is 8..63 characters,
+					-- or the PSK itself as 64 hex digits.
+					local key_ok = (#key >= 8 and #key <= 63)
+						or (#key == 64 and key:match("^%x+$") ~= nil)
+					local vid_ok = vid_raw == nil
+						or (vid ~= nil and vid == math.floor(vid) and vid >= 1 and vid <= 4094)
+					if key_ok and vid_ok then
+						ppsk = ppsk or {}
+						ppsk[#ppsk + 1] = {key = key, vid = vid}
+					else
+						io.stderr:write(("inform: WLAN %q: skipping private pre-shared key %d "
+							.. "(%s)\n"):format(w.ssid, i,
+							key_ok and ("bad VLAN id " .. tostring(vid_raw))
+								or "passphrase is not 8-63 characters or 64 hex digits"))
+					end
+				end
+			end
+
 			vap_table[#vap_table + 1] = {
 				ssid                  = w.ssid,
 				radio                 = w.parent,
@@ -2313,6 +2377,9 @@ function M._parse_wifi_system_cfg(sys_raw)
 				wpa3_fast_roaming_enabled = wpa3_ft,
 				vlan_enabled          = vlan_id ~= nil,
 				vlan                  = vlan_id,
+				-- {key=, vid=} per private pre-shared key, in wire order;
+				-- nil when the WLAN has none.
+				ppsk                  = ppsk,
 				-- aaa.<n>.bss_transition: CONFIRMED live 2026-07-15 (toggled
 				-- "BSS Transition (802.11v)" in the Behavior Controls panel,
 				-- diffed system_cfg via debug_dump_file) -- present on every
@@ -3099,11 +3166,16 @@ function M.handle_response(json_str, st, cfg)
 					-- Every VLAN a tagged SSID lands on. The switch drops
 					-- frames for a VID it has no entry for, so these need
 					-- trunking whether or not per-port VLAN is in use.
+					-- A private pre-shared key's VLAN counts the same.
 					local wireless_vlans, seen = {}, {}
 					for _, vap in ipairs(vap_table or {}) do
-						if vap.vlan_enabled and vap.vlan and not seen[vap.vlan] then
-							seen[vap.vlan] = true
-							wireless_vlans[#wireless_vlans + 1] = vap.vlan
+						local vids = (ufuci and ufuci.vap_vlan_ids) and ufuci.vap_vlan_ids(vap)
+							or ((vap.vlan_enabled and vap.vlan) and {vap.vlan} or {})
+						for _, vid in ipairs(vids) do
+							if not seen[vid] then
+								seen[vid] = true
+								wireless_vlans[#wireless_vlans + 1] = vid
+							end
 						end
 					end
 					-- Which socket the uplink cable is in, so a pushed port

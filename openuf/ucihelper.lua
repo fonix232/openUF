@@ -384,8 +384,89 @@ function M.wlan_clear(radio)
 			end
 		end
 	end)
+	-- The private pre-shared keys and their VLANs (M.ppsk_add) go with their
+	-- VAP. netifd applies a wifi-station or wifi-vlan section without an iface
+	-- to EVERY VAP, so one left behind would not stay harmless.
+	local cleared = {}
+	for _, name in ipairs(to_delete) do cleared[name] = true end
+	for _, stype in ipairs({"wifi-station", "wifi-vlan"}) do
+		cursor:foreach("wireless", stype, function(s)
+			local name = s[".name"]
+			if name and name:sub(1, #OPENUF_PREFIX) == OPENUF_PREFIX then
+				local ifaces = s.iface
+				if type(ifaces) ~= "table" then ifaces = {ifaces} end
+				local ours = radio == nil
+				for _, i in ipairs(ifaces) do
+					if cleared[i] then ours = true end
+				end
+				if ours then to_delete[#to_delete + 1] = name end
+			end
+		end)
+	end
 	for _, name in ipairs(to_delete) do
 		cursor:delete("wireless", name)
+	end
+	cursor:commit("wireless")
+end
+
+-- Every VLAN id one vap_table entry needs an L2 for: the WLAN's own, plus the
+-- VLAN of each private pre-shared key. Sorted, no duplicates.
+function M.vap_vlan_ids(vap)
+	local seen, out = {}, {}
+	local function add(v)
+		v = tonumber(v)
+		if v and not seen[v] then seen[v] = true; out[#out + 1] = v end
+	end
+	if vap.vlan_enabled then add(vap.vlan) end
+	for _, k in ipairs(vap.ppsk or {}) do add(k.vid) end
+	table.sort(out)
+	return out
+end
+
+-- Private Pre-Shared Keys for the VAP in wifi-iface section `iface`.
+--
+-- OpenWrt has the whole feature already: each wifi-station section becomes
+-- one line of hostapd's wpa_psk_file (and sae_password_file for SAE),
+--   vlanid=20 00:00:00:00:00:00 <passphrase>
+-- and each wifi-vlan section one line of its vlan_file, for which netifd
+-- creates a netdev named <vap ifname>-<name> and puts it in the bridge of the
+-- network it names. A key without a VLAN puts its client on the VAP's own
+-- network.
+--
+-- keys:     vap.ppsk, {key=, vid=} each
+-- networks: vid -> UCI network section for that VLAN (ensure_vlan_network)
+-- A key whose VLAN has no network is left out rather than provisioned
+-- without one: that client would land on the VAP's own network, past the
+-- segmentation the key exists for.
+function M.ppsk_add(iface, keys, networks)
+	local uci = get_uci()
+	local cursor = uci.cursor()
+	for i, k in ipairs(keys or {}) do
+		local net = k.vid and networks[k.vid]
+		if k.vid and not net then
+			io.stderr:write(("ucihelper: %s: private pre-shared key %d left out, "
+				.. "no network for VLAN %d\n"):format(iface, i, k.vid))
+		else
+			-- Two keys on one VLAN share its section.
+			if k.vid then
+				local vs = iface .. "_vlan" .. k.vid
+				cursor:set("wireless", vs, "wifi-vlan")
+				cursor:set("wireless", vs, "iface", {iface})
+				-- The netdev is <vap ifname>-<name>: "phy0-ap0-20" stays
+				-- inside the 15-character limit, where "v20" might not.
+				cursor:set("wireless", vs, "name", tostring(k.vid))
+				cursor:set("wireless", vs, "vid", tostring(k.vid))
+				cursor:set("wireless", vs, "network", {net})
+			end
+			local ss = iface .. "_psk" .. i
+			cursor:set("wireless", ss, "wifi-station")
+			cursor:set("wireless", ss, "iface", {iface})
+			cursor:set("wireless", ss, "mac", {"00:00:00:00:00:00"})
+			cursor:set("wireless", ss, "key", k.key)
+			if k.vid then
+				cursor:set("wireless", ss, "vid", tostring(k.vid))
+			end
+		end
 	end
 	cursor:commit("wireless")
 end
@@ -590,6 +671,7 @@ function M.wlan_add(radio, ssid, security, password, extra, network, wlanconf_id
 		end
 	end
 	cursor:commit("wireless")
+	return section_name
 end
 
 -- True when this OpenWrt is 21.02+, i.e. netifd expects `config device`
@@ -1431,14 +1513,32 @@ function M.apply_config(resp, cfg, opts)
 			local vlan_enabled = vap.vlan_enabled
 			local vlan_id      = vap.vlan
 
-			local network = "lan"
-			if vlan_enabled and vlan_id and cpueth then
-				network = M.ensure_vlan_network(cpueth, vlan_id)
-				wanted_vlans[tonumber(vlan_id) or vlan_id] = true
+			-- One L2 per VLAN the VAP needs: its own and each private
+			-- pre-shared key's.
+			local vlan_networks = {}
+			if cpueth then
+				for _, vid in ipairs(M.vap_vlan_ids(vap)) do
+					vlan_networks[vid] = M.ensure_vlan_network(cpueth, vid)
+					wanted_vlans[vid] = true
+				end
 			end
 
-			M.wlan_add(vap.radio, vap.ssid, vap.security, vap.x_passphrase, extra,
-				network, vap.wlanconf_id)
+			local network = "lan"
+			if vlan_enabled and vlan_id and cpueth then
+				network = vlan_networks[tonumber(vlan_id)]
+			end
+
+			-- The wire sends dynamic_vlan=1 with every key list, and
+			-- OpenWrt's ap.uc writes hostapd's VLAN options (vlan_no_bridge
+			-- above all: netifd, not hostapd, bridges the VLAN netdev) only
+			-- when it is set.
+			if vap.ppsk then extra.dynamic_vlan = "1" end
+
+			local section = M.wlan_add(vap.radio, vap.ssid, vap.security,
+				vap.x_passphrase, extra, network, vap.wlanconf_id)
+			if vap.ppsk and section then
+				M.ppsk_add(section, vap.ppsk, vlan_networks)
+			end
 		end
 	end
 
@@ -1736,6 +1836,30 @@ local function owe_transition_ifname(iface)
 	return nil
 end
 
+-- The VLAN netdevs of one VAP (private pre-shared keys: a client whose key
+-- carries a VLAN is associated on <vap ifname>-<vid>, not on the VAP's own
+-- netdev, and `iw dev <vap> station dump` does not list it). netifd reports
+-- them under the interface's vlans[].
+-- Each one is remembered against its VAP for M.bss_ifname.
+M._vlan_parent = {}
+local function vlan_ifnames(iface, out)
+	for _, v in ipairs(type(iface.vlans) == "table" and iface.vlans or {}) do
+		if type(v) == "table" and type(v.ifname) == "string" and v.ifname ~= "" then
+			out[#out + 1] = v.ifname
+			M._vlan_parent[v.ifname] = iface.ifname
+		end
+	end
+	return out
+end
+
+-- The netdev whose hostapd serves a station seen on `ifname`: the VAP itself
+-- for a VLAN netdev from get_ifnames_for_vap, else ifname unchanged. hostapd
+-- has a control socket and a ubus object per BSS only, so a kick or a BSS
+-- transition request aimed at the VLAN netdev would reach nothing.
+function M.bss_ifname(ifname)
+	return M._vlan_parent[ifname] or ifname
+end
+
 -- The live netdev of every AP-mode VAP on the device, from netifd's status
 -- (radio order, then interface order). A station or mesh interface -- a
 -- wireless backhaul -- is not a VAP and is left out: l2guard's tag drop on an
@@ -1757,6 +1881,7 @@ function M.ap_ifnames()
 					and (mode == nil or mode == "ap") then
 				out[#out + 1] = i.ifname
 				out[#out + 1] = owe_transition_ifname(i)
+				vlan_ifnames(i, out)
 			end
 		end
 	end
@@ -1814,17 +1939,18 @@ function M.get_ifname_for_vap(radio, ssid)
 	return iface and iface.ifname
 end
 
--- Every live netdev of one VAP: its own, plus the open BSS of an OWE
--- transition section. Per-VAP features (station reporting, the blocker, the
--- speed limit) have to cover both, or the transition WLAN's legacy clients
--- would fall outside them. Empty when the VAP cannot be resolved.
+-- Every live netdev of one VAP: its own, the open BSS of an OWE transition
+-- section, and the VLAN netdev of each private pre-shared key's VLAN.
+-- Per-VAP features (station reporting, the blocker, the speed limit) have to
+-- cover them all, or those clients would fall outside them. Empty when the
+-- VAP cannot be resolved.
 function M.get_ifnames_for_vap(radio, ssid)
 	local iface = find_vap_iface(radio, ssid)
 	if not iface then return {} end
 	local out = {iface.ifname}
 	local peer = owe_transition_ifname(iface)
-	if peer then out[2] = peer end
-	return out
+	if peer then out[#out + 1] = peer end
+	return vlan_ifnames(iface, out)
 end
 
 -- "Minimum RSSI" enforcement: send a single 802.11 deauthentication frame to

@@ -1065,6 +1065,47 @@ return {
 		end
 	},
 	{
+		name = "sysinfo: ppsk_supported() needs both the station generator and hostapd's VLAN support",
+		fn = function()
+			-- Claimed as wifi_caps 0x100000: the controller then pushes WLANs
+			-- whose keys each carry a VLAN. A generator without vlanid= or a
+			-- hostapd without VLAN support would put every client on the
+			-- VAP's own network.
+			local orig_r, orig_c = sysinfo._read_file, sysinfo._run_cmd
+			local cmds
+			local function probe(gen, hostapd_yes)
+				sysinfo._ppsk_supported_cache = nil
+				cmds = {}
+				sysinfo._read_file = function(path)
+					if path == "/usr/share/ucode/wifi/ap.uc" then return gen end
+					return nil
+				end
+				sysinfo._run_cmd = function(cmd)
+					cmds[#cmds + 1] = cmd
+					return hostapd_yes and "yes\n" or ""
+				end
+				return sysinfo.ppsk_supported()
+			end
+			local ok, err = pcall(function()
+				-- OpenWrt 25.12's ap.uc, iface_wpa_stations.
+				local gen = "station = `vlanid=${sta.config.vid} ` + station;"
+				assert_true(probe(gen, true), "generator + VLAN-capable hostapd -> supported")
+				assert_true(cmds[1]:find("from wpa_psk_file", 1, true) ~= nil,
+					"asks the hostapd binary itself")
+				assert_false(probe(gen, false), "hostapd without VLAN support -> not claimed")
+				assert_false(probe(nil, true), "no ucode generator -> not claimed")
+				assert_eq(#cmds, 0, "and hostapd is not even searched")
+				assert_false(probe("let x = 'psk-sae';", true),
+					"a generator without per-station VLANs -> not claimed")
+				sysinfo._read_file = function() error("probed twice") end
+				assert_false(sysinfo.ppsk_supported(), "cached")
+			end)
+			sysinfo._read_file, sysinfo._run_cmd = orig_r, orig_c
+			sysinfo._ppsk_supported_cache = nil
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "sysinfo: owe_supported() needs both hostapd's OWE build and the ucode generator",
 		fn = function()
 			-- Claimed as radio_caps2 0x8: the controller then pushes Enhanced

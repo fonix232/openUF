@@ -3333,4 +3333,134 @@ return {
 			if not ok then error(err, 0) end
 		end
 	},
+	{
+		name = "ucihelper: apply_config writes private pre-shared keys as wifi-station + wifi-vlan sections",
+		fn = function()
+			with_ucihelper(function(db)
+				local c = ucihelper._uci.cursor()
+				c:set("network", "br_lan", "device")
+				c:set("network", "br_lan", "name", "br-lan")
+				ucihelper.apply_config({
+					radio_table = {},
+					vap_table = {{ssid = "keys", radio = "radio0", security = "wpa2",
+						x_passphrase = "basepass123", ppsk = {
+							{key = "keydefault1"},
+							{key = "keyvlan20a", vid = 20},
+							{key = "keyvlan30a", vid = 30},
+							{key = "keyvlan20b", vid = 20},
+						}}},
+				}, {net = {lan_cpueth = "eth1"}})
+				local iface = "openuf_radio0_keys"
+				local w = db.wireless
+				assert_eq(w[iface].key, "basepass123", "the WLAN's own key stays")
+				assert_eq(w[iface].network, "lan", "the VAP itself is untagged")
+				assert_eq(w[iface].dynamic_vlan, "1", "mirrors the wire's dynamic_vlan=1")
+
+				local s1 = w[iface .. "_psk1"]
+				assert_eq(s1[".type"], "wifi-station", "a station section per key")
+				assert_eq(s1.iface[1], iface, "tied to its VAP: without iface netifd applies it to every VAP")
+				assert_eq(s1.mac[1], "00:00:00:00:00:00", "any client may use the key")
+				assert_eq(s1.key, "keydefault1", "the passphrase")
+				assert_nil(s1.vid, "no vid: the VAP's own network")
+				assert_eq(w[iface .. "_psk2"].vid, "20", "key 2 on VLAN 20")
+				assert_eq(w[iface .. "_psk4"].vid, "20", "key 4 shares VLAN 20")
+
+				local v20 = w[iface .. "_vlan20"]
+				assert_eq(v20[".type"], "wifi-vlan", "one wifi-vlan per VLAN")
+				assert_eq(v20.iface[1], iface, "tied to its VAP")
+				assert_eq(v20.vid, "20", "vid")
+				assert_eq(v20.name, "20", "netdev <vap>-20")
+				assert_eq(v20.network[1], "openuf_vlan20", "bridged into VLAN 20's network")
+				assert_eq(w[iface .. "_vlan30"].network[1], "openuf_vlan30", "and 30's")
+				assert_not_nil(db.network.openuf_vlan20, "VLAN 20 got its L2")
+				assert_not_nil(db.network.openuf_vlan30, "VLAN 30 too, and neither was pruned")
+				local nvlan = 0
+				for _, sec in pairs(w) do
+					if sec[".type"] == "wifi-vlan" then nvlan = nvlan + 1 end
+				end
+				assert_eq(nvlan, 2, "VLAN 20 once, though two keys use it")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: a key whose VLAN has no network is left out, not put on the VAP's",
+		fn = function()
+			with_ucihelper(function(db)
+				-- No lan_cpueth: openUF cannot build any VLAN here. The VLAN
+				-- key's client would otherwise land on the untagged LAN.
+				ucihelper.apply_config({
+					radio_table = {},
+					vap_table = {{ssid = "keys", radio = "radio0", security = "wpa2",
+						x_passphrase = "basepass123", ppsk = {
+							{key = "keyvlan20a", vid = 20},
+							{key = "keydefault1"},
+						}}},
+				}, nil)
+				local w = db.wireless
+				assert_nil(w.openuf_radio0_keys_psk1, "the VLAN key is not provisioned")
+				assert_nil(w.openuf_radio0_keys_vlan20, "nor its VLAN")
+				assert_eq(w.openuf_radio0_keys_psk2.key, "keydefault1", "the untagged key is")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: keys and VLANs go away with their VAP, the user's own stay",
+		fn = function()
+			with_ucihelper(function(db)
+				local c = ucihelper._uci.cursor()
+				c:set("wireless", "mine", "wifi-station")
+				c:set("wireless", "mine", "key", "userkey99")
+				local keys = {{ssid = "keys", radio = "radio0", security = "wpa2",
+					x_passphrase = "basepass123", ppsk = {{key = "keyvlan20a", vid = 20}}},
+					{ssid = "other", radio = "radio1", security = "wpa2",
+					x_passphrase = "basepass123", ppsk = {{key = "keyother1"}}}}
+				local cfg = {net = {lan_cpueth = "eth1"}}
+				ucihelper.apply_config({radio_table = {}, vap_table = keys}, cfg)
+				assert_not_nil(db.wireless.openuf_radio0_keys_psk1, "fixture: provisioned")
+
+				ucihelper.wlan_clear("radio1")
+				assert_nil(db.wireless.openuf_radio1_other_psk1, "radio1's key goes with radio1")
+				assert_not_nil(db.wireless.openuf_radio0_keys_psk1, "radio0's stays")
+				assert_not_nil(db.wireless.openuf_radio0_keys_vlan20, "and its VLAN")
+
+				-- The controller turns PPSK off: the next push has no keys.
+				ucihelper.apply_config({radio_table = {}, vap_table = {
+					{ssid = "keys", radio = "radio0", security = "wpa2",
+					 x_passphrase = "basepass123"}}}, cfg)
+				assert_nil(db.wireless.openuf_radio0_keys_psk1, "key gone")
+				assert_nil(db.wireless.openuf_radio0_keys_vlan20, "VLAN gone")
+				assert_nil(db.wireless.openuf_radio0_keys.dynamic_vlan, "dynamic_vlan gone")
+				assert_nil(db.network.openuf_vlan20, "and the VLAN's L2 pruned")
+				assert_eq(db.wireless.mine.key, "userkey99", "the user's own station untouched")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: a key's VLAN netdev counts as the VAP's, and maps back to its BSS",
+		fn = function()
+			local orig = ucihelper._popen
+			ucihelper._popen = function(cmd)
+				if cmd:find("network.wireless status", 1, true) then
+					return '{"radio0":{"interfaces":['
+						.. '{"ifname":"phy0-ap0","config":{"ssid":"keys"},'
+						.. '"vlans":[{"section":"openuf_radio0_keys_vlan20","ifname":"phy0-ap0-20"},'
+						.. '{"section":"openuf_radio0_keys_vlan30"}]}]}}'
+				end
+				return ""
+			end
+			ucihelper.end_pass()
+			local ok, err = pcall(function()
+				assert_eq(table.concat(ucihelper.get_ifnames_for_vap("radio0", "keys"), ","),
+					"phy0-ap0,phy0-ap0-20", "a VLAN not up yet has no ifname and is skipped")
+				assert_eq(table.concat(ucihelper.ap_ifnames(), ","), "phy0-ap0,phy0-ap0-20",
+					"l2guard covers it too")
+				assert_eq(ucihelper.bss_ifname("phy0-ap0-20"), "phy0-ap0",
+					"hostapd lives on the VAP")
+				assert_eq(ucihelper.bss_ifname("phy0-ap0"), "phy0-ap0", "a VAP is its own")
+			end)
+			ucihelper._popen = orig
+			ucihelper._vlan_parent = {}
+			if not ok then error(err, 0) end
+		end
+	},
 }

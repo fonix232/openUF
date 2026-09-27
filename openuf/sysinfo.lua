@@ -643,6 +643,30 @@ function M.owe_supported()
 	return found
 end
 
+M._ppsk_supported_cache = nil
+
+-- Can this device run Private Pre-Shared Keys: several passphrases on one
+-- SSID, each putting its client on its own VLAN?
+--
+-- Claimed to the controller as wifi_caps 0x100000; without it a PPSK WLAN is
+-- skipped entirely. Both halves are needed. The generator must turn
+-- wifi-station sections into a wpa_psk_file with vlanid= (ap.uc,
+-- iface_wpa_stations, OpenWrt 24.10+), and hostapd must be built with VLAN
+-- support: a build without it has no "from wpa_psk_file" log string and would
+-- ignore every key's VLAN. There is no -v<feature> probe for VLAN, so the
+-- binary is searched once.
+function M.ppsk_supported()
+	if M._ppsk_supported_cache ~= nil then return M._ppsk_supported_cache end
+	local found = false
+	local gen = M._read_file("/usr/share/ucode/wifi/ap.uc")
+	if gen and gen:find("vlanid=", 1, true) then
+		found = M._run_cmd("grep -qF 'from wpa_psk_file' /usr/sbin/hostapd && echo yes")
+			:find("yes", 1, true) ~= nil
+	end
+	M._ppsk_supported_cache = found
+	return found
+end
+
 -- `iw phy phyN info` is tens of kilobytes and was fetched and parsed for every
 -- radio on every heartbeat, although it describes the HARDWARE plus the
 -- regulatory domain and changes only with the latter. Cached per phy with a

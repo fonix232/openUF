@@ -1084,6 +1084,34 @@ return {
 		end
 	},
 	{
+		name = "inform packet: private pre-shared key VLANs reach switchvlan as trunk requests",
+		fn = function()
+			-- A key's client is tagged onto its VLAN at the AP, so that VLAN
+			-- needs the same trunk a tagged SSID does.
+			local st = sample_state()
+			local got
+			local orig, orig_uci = inform._switchvlan, inform._ucihelper
+			inform._switchvlan = {
+				apply   = function(_, _, _, vlans) got = vlans end,
+				restore = function() end,
+			}
+			inform._ucihelper = {vap_vlan_ids = dofile("openuf/ucihelper.lua").vap_vlan_ids}
+			local sys_cfg = "aaa.1.ssid=keys\naaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=WPA-PSK\n"
+				.. "aaa.1.br.devname=br0.20\naaa.1.wpa.psk_file.status=enabled\n"
+				.. "aaa.1.wpa.psk_file.1.psk=keydefault1\n"
+				.. "aaa.1.wpa.psk_file.2.psk=keyvlan30a\naaa.1.wpa.psk_file.2.vlanid=30\n"
+				.. "aaa.1.wpa.psk_file.3.psk=keyvlan20a\naaa.1.wpa.psk_file.3.vlanid=20\n"
+				.. "wireless.1.ssid=keys\nwireless.1.parent=radio1\n"
+			local resp = ('{"_type":"setparam","system_cfg":"%s"}')
+				:format(sys_cfg:gsub("\n", "\\n"))
+			local ok, err = pcall(inform.handle_response, resp, st, nil)
+			inform._switchvlan, inform._ucihelper = orig, orig_uci
+			if not ok then error(err, 0) end
+			assert_eq(table.concat(got or {}, ","), "20,30",
+				"the WLAN's own VLAN once, plus the other key's")
+		end
+	},
+	{
 		name = "inform packet: an untagged-only push asks for no trunk",
 		fn = function()
 			local st = sample_state()
@@ -2232,6 +2260,83 @@ return {
 			assert_true(v.owe_transition, "marked for owe_transition")
 			assert_false(v.hide_ssid, "the visible half's hide_ssid, not the hidden one's")
 			assert_eq(v.wlanconf_id, "6ab8d43fc18fc00c5f8f6756", "id kept")
+		end
+	},
+	{
+		name = "inform packet: private pre-shared keys parse into vap.ppsk in wire order",
+		fn = function()
+			-- Captured on 10.4.57 with wifi_caps 0x10002C (2026-09-27),
+			-- trimmed: a key on a VLAN-1 network has no vlanid, and the WLAN's
+			-- own wpa.psk is a random passphrase the controller generated.
+			local sys_cfg = "aaa.1.devname=ath0\naaa.1.ssid=ouf-ppsk\naaa.1.wpa=2\n"
+				.. "aaa.1.id=6ab8f2ae1819ec65363e3257\naaa.1.wpa.key.1.mgmt=WPA-PSK\n"
+				.. "aaa.1.wpa.psk=A[fGy>a~#h^o2_50ZcGbfGnb2.Y\"*W9Z\naaa.1.dynamic_vlan=1\n"
+				.. "aaa.1.wpa.psk_file.status=enabled\n"
+				.. "aaa.1.wpa.psk_file.1.psk=keydefault1\n"
+				.. "aaa.1.wpa.psk_file.2.psk=keyvlan20a\naaa.1.wpa.psk_file.2.vlanid=20\n"
+				.. "aaa.1.wpa.psk_file.3.psk=keyvlan30a\naaa.1.wpa.psk_file.3.vlanid=30\n"
+				.. "aaa.1.wpa.1.pairwise=CCMP\naaa.1.br.devname=br0\n"
+				.. "wireless.1.devname=ath0\nwireless.1.ssid=ouf-ppsk\nwireless.1.parent=radio0\n"
+			local _, vap_table = inform._parse_wifi_system_cfg(sys_cfg)
+			assert_eq(#vap_table, 1, "one vap")
+			local v = vap_table[1]
+			assert_eq(v.security, "wpa2", "still a WPA2 WLAN")
+			assert_eq(v.x_passphrase, 'A[fGy>a~#h^o2_50ZcGbfGnb2.Y"*W9Z', "its own key kept")
+			assert_false(v.vlan_enabled, "the WLAN itself is untagged")
+			assert_eq(#v.ppsk, 3, "three keys")
+			assert_eq(v.ppsk[1].key, "keydefault1", "wire order")
+			assert_nil(v.ppsk[1].vid, "no vlanid: the VAP's own network")
+			assert_eq(v.ppsk[2].vid, 20, "numeric VLAN")
+			assert_eq(v.ppsk[3].key, "keyvlan30a", "third key")
+			assert_eq(v.ppsk[3].vid, 30, "third VLAN")
+		end
+	},
+	{
+		name = "inform packet: a WLAN whose keys come from RADIUS only is skipped, optional kept",
+		fn = function()
+			-- UID IoT: aaa.<n>.wpa.psk_radius (0/1/2, hostapd's own values).
+			-- The push carries no RADIUS server for it, as for Enterprise.
+			local function parse(mode)
+				local sys_cfg = "aaa.1.ssid=iot\naaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=WPA-PSK\n"
+					.. "aaa.1.wpa.psk=basepass123\naaa.1.wpa.psk_radius=" .. mode .. "\n"
+					.. "wireless.1.ssid=iot\nwireless.1.parent=radio0\n"
+				local _, vt = inform._parse_wifi_system_cfg(sys_cfg)
+				return vt
+			end
+			assert_eq(#parse("2"), 0, "required: nobody could join it")
+			assert_eq(#parse("1"), 1, "optional: the local key still works")
+			assert_eq(#parse("0"), 1, "disabled: an ordinary WLAN")
+		end
+	},
+	{
+		name = "inform packet: invalid private pre-shared keys are dropped, the rest kept",
+		fn = function()
+			local function parse(extra, head)
+				local sys_cfg = (head or "aaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=WPA-PSK\n")
+					.. "aaa.1.ssid=k\naaa.1.wpa.psk=basepass123\n" .. extra
+					.. "wireless.1.ssid=k\nwireless.1.parent=radio0\n"
+				local _, vt = inform._parse_wifi_system_cfg(sys_cfg)
+				return vt[1]
+			end
+			local on = "aaa.1.wpa.psk_file.status=enabled\n"
+			local v = parse(on .. "aaa.1.wpa.psk_file.1.psk=short\n"
+				.. "aaa.1.wpa.psk_file.2.psk=goodkey12\naaa.1.wpa.psk_file.2.vlanid=0\n"
+				.. "aaa.1.wpa.psk_file.3.psk=goodkey34\naaa.1.wpa.psk_file.3.vlanid=4095\n"
+				.. "aaa.1.wpa.psk_file.4.psk=goodkey56\naaa.1.wpa.psk_file.4.vlanid=abc\n"
+				.. "aaa.1.wpa.psk_file.5.psk=" .. string.rep("a", 64) .. "\n"
+				.. "aaa.1.wpa.psk_file.6.psk=" .. string.rep("z", 64) .. "\n"
+				.. "aaa.1.wpa.psk_file.10.psk=goodkey78\naaa.1.wpa.psk_file.10.vlanid=4094\n")
+			assert_eq(#v.ppsk, 2, "only the two valid keys survive")
+			assert_eq(v.ppsk[1].key, string.rep("a", 64), "64 hex digits is a raw PSK")
+			assert_eq(v.ppsk[2].vid, 4094, "index 10 sorts after 5, numerically")
+			assert_nil(parse("aaa.1.wpa.psk_file.status=disabled\n"
+				.. "aaa.1.wpa.psk_file.1.psk=goodkey12\n").ppsk, "status off: no keys")
+			assert_nil(parse("aaa.1.wpa.psk_file.1.psk=goodkey12\n").ppsk,
+				"no status: no keys")
+			assert_nil(parse(on .. "aaa.1.wpa.psk_file.1.psk=goodkey12\n", "").ppsk,
+				"an open WLAN has no keys to add")
+			assert_nil(parse(on .. "aaa.1.wpa.psk_file.1.psk=goodkey12\n",
+				"aaa.1.wpa.key.1.mgmt=OWE\n").ppsk, "nor has an Enhanced Open one")
 		end
 	},
 	{
