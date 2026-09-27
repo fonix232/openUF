@@ -1050,7 +1050,7 @@ return {
 					c.tx_packets = c.tx_packets + pkts
 					c.tx_bytes = c.tx_bytes + pkts * o.bytes_per
 					c.tx_duration = c.tx_duration + pkts * o.us_per
-					c.rx_packets = c.rx_packets + 10
+					c.rx_packets = c.rx_packets + (o.rx_per or 25)
 					return r, c
 				end
 			end
@@ -1126,6 +1126,14 @@ return {
 			fresh()
 			n.noise = nil
 			assert_eq(inform_once(n), 60, "no survey: -95 assumed")
+
+			-- A near-idle uplink isn't judged: iw's rx rate is the last frame's.
+			fresh()
+			local idle = client{signal = -61, noise = -83, rx_rate = "19.5 MBit/s MCS 2",
+				bytes_per = 953, us_per = 222, rx_per = 19}
+			idle()
+			idle()
+			assert_eq(idle(), 94, "19 frames per inform: uplink term skipped")
 
 			-- A legacy uplink rate (a null frame at 1 Mbit/s) is not a verdict.
 			fresh()

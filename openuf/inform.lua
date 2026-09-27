@@ -150,6 +150,11 @@ M.RATE_EWMA_ALPHA = 0.2
 -- * the downlink airtime term is sampled once a window holds this many
 --   frames, so a quiet client's few frames aren't a verdict;
 M.SAT_AIRTIME_MIN_PKTS = 20
+-- * the uplink rate is sampled only in an inform in which the client sent
+--   this many frames: iw's rx bitrate is the LAST frame's rate, and a
+--   near-idle client's odd frame (seen on hardware: a speaker sending 1-15
+--   frames per 10 s, some at VHT MCS 2 among MCS 9) isn't its uplink;
+M.SAT_UPLINK_MIN_PKTS = 20
 -- * the ideal fixed cost of one frame on air (preamble, SIFS, ACK, backoff),
 --   measured as ~110 us for small frames of clean 2.4 GHz clients;
 M.SAT_FRAME_OVERHEAD_US = 110
@@ -502,6 +507,7 @@ end
 --    the tx rate against its ceiling stands in (rate_pct()).
 --  * ul: the uplink rate against the ceiling, at half weight (50-100): the
 --    AP can't see the client's own retries, only the rate it settles on.
+--    Judged only while the client really sends (M.SAT_UPLINK_MIN_PKTS).
 --  * cov: SNR against the radio's noise floor, 5 dB -> 0, 20 dB -> 90,
 --    25 dB -> 100 (Cisco's data-grade guideline is 20 dB; Meraki counts
 --    <=15 dB as poor), smoothed per station so 1 dB of jitter doesn't flip
@@ -1338,9 +1344,11 @@ function M.build_json(st, cfg, ufhw)
 					live and live.nss, width_by_radio[vap.radio_name])
 				local rate_ewma = ewma(prev and prev.rate_ewma, rate_pct(sta.tx_generation,
 					sta.tx_mcs, sta.tx_nss, sta.tx_width, ceil_mbps))
-				-- Uplink: only while the client sends, or the rate is stale.
+				-- Uplink: only while the client sends enough frames for the
+				-- last one's rate to stand for its uplink.
 				local ul_ewma = prev and prev.ul_ewma
-				if prev and prev.rx_packets and (sta.rx_packets or 0) > prev.rx_packets then
+				if prev and prev.rx_packets
+					and (sta.rx_packets or 0) - prev.rx_packets >= M.SAT_UPLINK_MIN_PKTS then
 					ul_ewma = ewma(ul_ewma, rate_pct(sta.rx_generation, sta.rx_mcs,
 						sta.rx_nss, sta.rx_width, ceil_mbps))
 				end
