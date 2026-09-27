@@ -1571,8 +1571,15 @@ per-phy files seeded by the AP entrypoint): the device reported `wifi_caps` `0x2
 `atf_enabled` over REST pushed `atf.mode=disabled`, both stub files became `0`, and
 `state.json` got `"atf_enabled":false`. After both files were reset to `3` and inform was
 restarted, the startup reapply wrote `0` again. Toggling back pushed `enabled`, and both
-went to `3`. `handle_response failed` = 0 throughout. **Hardware tier not yet run**: no
-write to a real `airtime_flags`, and no airtime measurement with it off.
+went to `3`. `handle_response failed` = 0 throughout.
+
+Hardware, 2026-09-27 (both APs on fd30306, real UCG Ultra): both devices reported
+`wifi_caps` 44 (0x2C), and the controller had **`atf_enabled: false`** stored for both. That
+setting was inert while the bit was unclaimed, but it would have switched the scheduler off at
+the next push. It was set to true over REST, the push carried `atf.mode=enabled`, and on all four
+radios (ath10k, ath9k, mt76 ×2) the write read back as `AIRTIME_TX | AIRTIME_RX` with no
+error. `state.json` holds `"atf_enabled":true`. **Not yet run on hardware:** the off direction
+(a real write of 0, and per-station airtime totals stopping).
 
 **`radio_caps2` `0x8` (Enhanced Open / OWE): CLAIMED, confirmed in the lab 2026-09-27.**
 Predicate: radio DTO `NoFWvUa()`, tested in `plVcFpIybmrpXclX` for an open WLAN with
