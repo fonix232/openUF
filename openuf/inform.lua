@@ -1714,6 +1714,16 @@ function M.build_json(st, cfg, ufhw)
 		-- an obfuscation-induced macOS case-folding extraction bug along
 		-- the way).
 		fw_caps          = 0x110,
+		-- wifi_caps, the first WiFi bitmask. Bit 0x4 is
+		-- Device.supportBandsteering(): without it the controller never emits
+		-- the device-level bandsteering.* block (the AP's own Band Steering
+		-- setting). Bit 0x8, supportVapBasedBandsteering(), keeps that block
+		-- enabled when some WLAN has no 2.4/5 GHz pair; without it one
+		-- single-band WLAN switches the device's steering off. See
+		-- _parse_bandsteering_system_cfg. Decompiled from controller
+		-- 10.6.101, captured on 10.4.57. The other bits gate features openUF
+		-- does not implement (PROTOCOL-VALIDATION.md, Capability bitmasks).
+		wifi_caps        = 0xC,
 		-- Bit 0x40 (64): Device.supportAdvertisingDeviceNameInBeacon() in the
 		-- decompiled controller is exactly hasWifiCapability2(64) -- i.e. bit
 		-- 6 of a SECOND capability bitmask, wifi_caps2, entirely separate
@@ -2464,6 +2474,76 @@ function M._parse_wifi_system_cfg(sys_raw)
 	return radio_table, vap_table
 end
 
+-- Parse the device-level `bandsteering.*` block: the AP's own Band Steering
+-- setting (Devices -> [AP] -> Band Steering: Off / Prefer 5G / Balance),
+-- REST field device.bandsteering_mode. The controller emits it only for a
+-- device claiming wifi_caps 0x4 (see build_json). Captured live 2026-09-27:
+--
+--   bandsteering.status=enabled
+--   bandsteering.mode=prefer_5g          -- or "equal" (Balance)
+--   bandsteering.1.status=enabled        -- one pair per WLAN whose 2.4 and
+--   bandsteering.1.vap.1.devname=ath1    -- 5 GHz vaps share name, security
+--   bandsteering.1.vap.2.devname=ath3    -- and passphrase (needs 0x8)
+--
+-- Off is bandsteering.status=disabled with no mode. So is "no WLAN can be
+-- paired", and so is the site's advanced features switch being off, so
+-- "disabled" means only "no device-level steering", never "turn the per-WLAN
+-- toggle (no2ghz_oui) off". The pairs are not read: usteer steers a client
+-- only toward a same-SSID 5 GHz interface, which is the pairing already.
+--
+-- Returns nil when the blob has no bandsteering.status line, else
+-- {enabled = bool, mode = string|nil}.
+function M._parse_bandsteering_system_cfg(sys_raw)
+	local status = sys_raw:match("\nbandsteering%.status=([%w_]+)")
+		or sys_raw:match("^bandsteering%.status=([%w_]+)")
+	if not status then return nil end
+	return {
+		enabled = status == "enabled",
+		mode    = sys_raw:match("\nbandsteering%.mode=([%w_]+)")
+			or sys_raw:match("^bandsteering%.mode=([%w_]+)"),
+	}
+end
+
+-- Whether usteer should band-steer and whether Roaming Assistant needs it,
+-- from the parsed vaps and the raw system_cfg (for the device-level block).
+function M._steering_flags(vap_table, sys_raw)
+	-- Band Steering (wireless.<n>.no2ghz_oui) is confirmed
+	-- live to be a per-WLAN wire field, not a per-device
+	-- one -- but usteer (the daemon that actually
+	-- implements steering on OpenWrt) is a single
+	-- device-wide config, so band steering is treated as
+	-- active for the whole device whenever ANY WLAN has it
+	-- enabled.
+	--
+	-- Roaming Assistant (wireless.<n>.btm_disassoc) is
+	-- decided per WLAN by openuf/roamassist.lua, but it reads
+	-- usteer's cross-AP view and sends 802.11v requests, so
+	-- it needs the daemon and 802.11k/v the same way.
+	local steering_active, roam_assist_active = false, false
+	for _, vap in ipairs(vap_table) do
+		if vap.no2ghz_oui then steering_active = true end
+		if vap.roam_assist_enabled then roam_assist_active = true end
+	end
+	-- The device-level setting adds to the per-WLAN one.
+	-- "equal" (Balance) has no usteer equivalent: usteer
+	-- balances client counts only by rejecting association
+	-- requests (assoc_steering), which would also move
+	-- clients between APs; probe_steering is compiled in
+	-- but not configurable. It is reported, not faked.
+	local bs = M._parse_bandsteering_system_cfg(sys_raw)
+	if bs and bs.enabled then
+		if bs.mode == "prefer_5g" then
+			steering_active = true
+		elseif not M._warned_bandsteering_mode then
+			M._warned_bandsteering_mode = true
+			io.stderr:write(("inform: device Band Steering mode %q "
+				.. "is not supported, only prefer_5g; per-WLAN "
+				.. "Band Steering still applies\n"):format(tostring(bs.mode)))
+		end
+	end
+	return steering_active, roam_assist_active
+end
+
 -- Parse the `switch.*` block: per-port VLAN assignment.
 --
 -- Wire shape, fully mapped live 2026-07-19 by diffing system_cfg across five
@@ -2586,6 +2666,10 @@ local RECOGNIZED_SYSTEM_CFG = {
 	"^radio%.%d+%.",     -- per-radio config
 	"^stamgr%.%d+%.",    -- Minimum RSSI
 	"^macacl%.%d+%.",    -- MAC Address Filter
+	-- Device-level Band Steering. The per-WLAN pairs (bandsteering.<n>.*)
+	-- are not read, so they stay in the report.
+	"^bandsteering%.status$",
+	"^bandsteering%.mode$",
 	"^qos%.vap%.%d+%.",  -- WiFi Speed Limit
 	"^netconf%.1%.",     -- IP Settings
 	"^route%.1%.gateway$",
@@ -2934,23 +3018,8 @@ function M.handle_response(json_str, st, cfg)
 			local ufuci = M._ucihelper
 			if ufuci and ufuci.apply_config then
 				if #radio_table > 0 or #vap_table > 0 then
-					-- Band Steering (wireless.<n>.no2ghz_oui) is confirmed
-					-- live to be a per-WLAN wire field, not a per-device
-					-- one -- but usteer (the daemon that actually
-					-- implements steering on OpenWrt) is a single
-					-- device-wide config, so band steering is treated as
-					-- active for the whole device whenever ANY WLAN has it
-					-- enabled.
-					--
-					-- Roaming Assistant (wireless.<n>.btm_disassoc) is
-					-- decided per WLAN by openuf/roamassist.lua, but it reads
-					-- usteer's cross-AP view and sends 802.11v requests, so
-					-- it needs the daemon and 802.11k/v the same way.
-					local steering_active, roam_assist_active = false, false
-					for _, vap in ipairs(vap_table) do
-						if vap.no2ghz_oui then steering_active = true end
-						if vap.roam_assist_enabled then roam_assist_active = true end
-					end
+					local steering_active, roam_assist_active =
+						M._steering_flags(vap_table, sys_raw)
 					M._usteer.set_enabled(steering_active, cfg, roam_assist_active)
 					pcall(ufuci.apply_config,
 						{radio_table = radio_table, vap_table = vap_table, network_table = {}},

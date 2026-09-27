@@ -1540,6 +1540,18 @@ return {
 		end
 	},
 	{
+		name = "inform json: wifi_caps claims exactly band steering (0x4) and per-VAP pairs (0x8)",
+		fn = function()
+			-- Device.supportBandsteering() is hasWifiCapability(4): without it
+			-- the device-level bandsteering.* block is never emitted.
+			-- supportVapBasedBandsteering() (8) keeps it on when some WLAN has
+			-- no 2.4/5 GHz pair. The other wifi_caps bits gate features openUF
+			-- does not implement (PROTOCOL-VALIDATION.md, Capability bitmasks).
+			local d = build()
+			assert_eq(d.wifi_caps, 0xC, "wifi_caps is exactly 0x4|0x8")
+		end
+	},
+	{
 		name = "inform json: port_table has one entry per configured port, 1-based port_idx",
 		fn = function()
 			-- No cfg passed (build() always calls build_json with cfg=nil), so

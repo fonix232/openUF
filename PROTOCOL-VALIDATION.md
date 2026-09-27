@@ -11,7 +11,7 @@ decompiling the controller's own Java bytecode and React bundles.
 **Where this document and the third-party references disagree, this document wins.**
 In particular, go-unifi models the controller's *admin REST API*, which is a different
 surface from the inform wire protocol — several fields that exist there
-(`dtim_mode`) have no counterpart on the wire. `bandsteering_mode` does have one, but only for a device that claims `wifi_caps` bit `0x4`, which openUF does not (see [Capability bitmasks](#capability-bitmasks)).
+(`dtim_mode`) have no counterpart on the wire. `bandsteering_mode` does have one, but only for a device that claims `wifi_caps` bit `0x4`. openUF claims it since 2026-09-27 (see [Capability bitmasks](#capability-bitmasks)).
 
 This is a **reference for the confirmed current state**, not a lab journal. Superseded
 hypotheses and the investigation trails that produced these facts have been removed;
@@ -1449,7 +1449,7 @@ by the controller's own startup log: `firmware[U6IW] new version (6.8.2.15592) i
 | `wifi_caps2` | `0x20` (32) | `Device.supportsAssistedRoaming()` = `hasWifiCapability2(32)` | The controller never emits a WLAN's Roaming Assistant (`wireless.<n>.btm_disassoc.*`). Confirmed live in the lab: set, the keys appear on the 5 GHz entry. |
 
 `wifi_caps2` is a **second, entirely separate** bitmask from `wifi_caps` (which gates
-`supportBandsteering()`/`supportZeroHandoff()` — openUF sets neither). Only bits `0x40` and
+`supportBandsteering()`/`supportZeroHandoff()`; openUF claims `0x4`/`0x8`, see below). Only bits `0x40` and
 `0x20` are claimed; the mask also gates Mesh MLO, quick/neighbour scan, roam topology stats,
 Green AP, ACS-DFS and the multicast suppressor, which openUF does not implement and must not
 claim.
@@ -1462,8 +1462,8 @@ traced to its callers, mainly the AP config generator `com.ubnt.service.config.o
 the per-radio WLAN security filter `com.ubnt.service.config.ubntconf.plVcFpIybmrpXclX`.
 Calls on `com.ubnt.i.g.OZQcnZuvnRweLFaaG` in oHgVgY check the **model registry**, not
 anything the device sends, and are excluded. **This table comes from decompiled code only:
-none of the unclaimed rows has been checked on the wire.** openUF sends no `wifi_caps`,
-`fw2_caps`, `fw3_caps` or `hw_caps` field at all, so each of those reads as 0.
+none of the unclaimed rows has been checked on the wire.** openUF sends `wifi_caps = 0xC`
+(since 2026-09-27) and no `fw2_caps`, `fw3_caps` or `hw_caps` field at all, so each of those reads as 0.
 
 Gates that drop or weaken a feature openUF could implement (claimed ones are listed after the table):
 
@@ -1471,10 +1471,49 @@ Gates that drop or weaken a feature openUF could implement (claimed ones are lis
 |---|---|---|---|
 | `radio_caps2` | `0x8` | radio DTO, OWE | An Enhanced Open WLAN is **not provisioned** ("WPA3-OWE cannot provision"). With OWE transition on it goes out as plain open |
 | `wifi_caps` | `0x100000` | `supportWpaPpsk()` | A WLAN with Private Pre-Shared Keys, or UID IoT, is **skipped** ("PPSK is not supported … will be skipped") |
-| `wifi_caps` | `0x4` / `0x8` | `supportBandsteering()` / `supportVapBasedBandsteering()` | The device-level `bandsteering.status`/`mode` section and its per-VAP pairs (`bandsteering.<n>.vap.1.devname`/`vap.2.devname`) are never emitted. This is where the device's `bandsteering_mode` goes. Per-WLAN `no2ghz_oui` is independent of it |
 | `wifi_caps` | `0x20` | `supportATFConfig()` | `atf.status`/`atf.mode` (Airtime Fairness) is never emitted |
 | `fw_caps` | `0x1000` | `supportMultiBlockWlanSchedule()` | A WLAN Schedule with several blocks per day goes out as one `wireless.<n>.schedule_<day>` key per block, all under the same name, so the last one wins. With the bit set they become `schedule_<day>.<i>` |
 | `fw_caps` | `0x400000` | `supportWlanScheduleInvert()` | The controller inverts a schedule itself instead of sending `schedule_invert` |
+
+**`wifi_caps` `0x4` + `0x8` (device-level Band Steering): CLAIMED, confirmed in the lab 2026-09-27.**
+Predicates: `supportBandsteering()` = `hasWifiCapability(4)` and
+`supportVapBasedBandsteering()` = `hasWifiCapability(8)`, used by oHgVgY's band steering
+generator. The setting is the AP's own (Devices → *AP* → Band Steering: Off / Prefer 5G /
+Balance, REST `device.bandsteering_mode`), separate from the per-WLAN toggle
+(`no2ghz_oui`). The generator emits `bandsteering.status=disabled` when the mode is `off`
+(the default when unset), when the site's advanced features switch is off, or when no WLAN
+pairs up. A pair is one WLAN's 2.4 and 5 GHz vaps with the same name, security and
+passphrase and no wireless uplink. Without `0x8`, a single unpaired WLAN also disables it.
+With the device set to Prefer 5G on the lab controller (10.4.57) and two dual-band WLANs:
+
+- Before claiming the bits, setting the mode left `cfgversion` and `provisioned_at` unchanged: nothing to push.
+- With `wifi_caps = 0xC` the whole `system_cfg` diff was these added lines:
+
+```
+# bandsteering
+bandsteering.status=enabled
+bandsteering.mode=prefer_5g            (equal for Balance)
+bandsteering.1.status=enabled
+bandsteering.1.vap.1.devname=ath1      (vap.1 = the 2.4 GHz devname)
+bandsteering.1.vap.2.devname=ath3      (vap.2 = the 5 GHz devname)
+bandsteering.2.status=enabled
+bandsteering.2.vap.1.devname=ath0
+bandsteering.2.vap.2.devname=ath2
+```
+
+- Off is `bandsteering.status=disabled`, with no mode and no pairs.
+
+openUF reads `status` and `mode` only (`_parse_bandsteering_system_cfg`). Prefer 5G turns
+usteer's band steering on for the device, in addition to any WLAN's own toggle. `disabled`
+never switches the per-WLAN toggle off, because it also means "advanced features off" or
+"nothing paired". The pairs are not read: usteer only steers a client toward a same-SSID
+5 GHz interface, which is the pairing already, so they stay in the dropped-key report.
+**Balance (`equal`) is not supported**: it is logged once and changes nothing. usteer
+balances client counts only through `assoc_steering`, which rejects association requests
+and also balances between APs. `probe_steering` is compiled in but cannot be configured
+(it is not in usteer's ubus `_cfg` list or its init script, 2025.10.04 and HEAD). The lab run of
+the real code had 0 `handle_response failed` and logged the `equal` warning once. Hardware
+(a steer driven by the device setting alone) is still pending.
 
 **`radio_caps2` `0x2` (FT with WPA3): CLAIMED, confirmed in the lab 2026-09-27.**
 Predicate: radio DTO `ytajcagDggPuTaL()`, tested in `plVcFpIybmrpXclX`. Without it

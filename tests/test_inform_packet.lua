@@ -3892,4 +3892,68 @@ return {
 			inform._warned_400 = false
 		end
 	},
+	{
+		name = "inform: device-level bandsteering block parses as captured (prefer_5g, equal, off)",
+		fn = function()
+			-- Captured on 10.4.57 2026-09-27 with wifi_caps 0xC claimed, two
+			-- dual-band WLANs, and the device's Band Steering set to each mode.
+			local pairs_blk = "bandsteering.1.status=enabled\n"
+				.. "bandsteering.1.vap.1.devname=ath1\nbandsteering.1.vap.2.devname=ath3\n"
+				.. "bandsteering.2.status=enabled\n"
+				.. "bandsteering.2.vap.1.devname=ath0\nbandsteering.2.vap.2.devname=ath2\n"
+			local on = inform._parse_bandsteering_system_cfg("# bandsteering\n"
+				.. "bandsteering.status=enabled\nbandsteering.mode=prefer_5g\n" .. pairs_blk)
+			assert_true(on.enabled, "prefer_5g is enabled")
+			assert_eq(on.mode, "prefer_5g", "mode read")
+			local eq = inform._parse_bandsteering_system_cfg(
+				"bandsteering.status=enabled\nbandsteering.mode=equal\n" .. pairs_blk)
+			assert_eq(eq.mode, "equal", "equal read")
+			local off = inform._parse_bandsteering_system_cfg(
+				"# bandsteering\nbandsteering.status=disabled\n")
+			assert_false(off.enabled, "off is disabled")
+			assert_nil(off.mode, "and carries no mode")
+			assert_nil(inform._parse_bandsteering_system_cfg("wireless.1.devname=ath0\n"),
+				"no block (bit not claimed) is nil, not off")
+			-- A pair's own status line is not the device's.
+			assert_nil(inform._parse_bandsteering_system_cfg(pairs_blk),
+				"bandsteering.<n>.status is not bandsteering.status")
+		end
+	},
+	{
+		name = "inform: device Band Steering prefer_5g turns steering on; off and equal leave per-WLAN alone",
+		fn = function()
+			local orig_stderr = io.stderr
+			local logged = {}
+			io.stderr = {write = function(_, ...)
+				for _, v in ipairs({...}) do logged[#logged + 1] = tostring(v) end
+			end}
+			inform._warned_bandsteering_mode = false
+			local none = {{no2ghz_oui = false}}
+			local wlan_on = {{no2ghz_oui = true}}
+			local pf = "bandsteering.status=enabled\nbandsteering.mode=prefer_5g\n"
+			local eq = "bandsteering.status=enabled\nbandsteering.mode=equal\n"
+			local off = "bandsteering.status=disabled\n"
+
+			assert_true(inform._steering_flags(none, pf), "device prefer_5g steers")
+			assert_false(inform._steering_flags(none, off), "device off, WLANs off: none")
+			assert_true(inform._steering_flags(wlan_on, off),
+				"device off does not override a WLAN's own Band Steering")
+			assert_false(inform._steering_flags(none, ""), "no block: per-WLAN only")
+			assert_true(inform._steering_flags(wlan_on, ""), "no block, WLAN on: steers")
+
+			assert_false(inform._steering_flags(none, eq), "equal is not faked as prefer_5g")
+			assert_true(inform._steering_flags(wlan_on, eq), "equal leaves per-WLAN steering")
+			local out = table.concat(logged)
+			assert_true(out:find("equal", 1, true) ~= nil, "equal is reported")
+			local n = #logged
+			inform._steering_flags(none, eq)
+			assert_eq(#logged, n, "once")
+
+			local _, ra = inform._steering_flags({{roam_assist_enabled = true}}, pf)
+			assert_true(ra, "Roaming Assistant still reported")
+
+			io.stderr = orig_stderr
+			inform._warned_bandsteering_mode = false
+		end
+	},
 }
