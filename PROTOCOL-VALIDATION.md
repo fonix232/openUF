@@ -1512,8 +1512,26 @@ never switches the per-WLAN toggle off, because it also means "advanced features
 balances client counts only through `assoc_steering`, which rejects association requests
 and also balances between APs. `probe_steering` is compiled in but cannot be configured
 (it is not in usteer's ubus `_cfg` list or its init script, 2025.10.04 and HEAD). The lab run of
-the real code had 0 `handle_response failed` and logged the `equal` warning once. Hardware
-(a steer driven by the device setting alone) is still pending.
+the real code had 0 `handle_response failed` and logged the `equal` warning once.
+
+**Real hardware, 2026-09-27** (Archer C5 on HEAD, the real UCG Ultra controller):
+
+- The real controller sends the same block as the lab. The C5 reported `wifi_caps=12`.
+- With the device setting unset or Off it sends `bandsteering.status=disabled`.
+- On Prefer 5G it sends `status=enabled`, `mode=prefer_5g`, and one pair
+  (`vap.1.devname=ath1`, 2.4 GHz; `vap.2.devname=ath0`, 5 GHz) for the dual-band Home WLAN.
+  The 2.4-only IoT WLAN gets no pair.
+- With the WLAN's own Band Steering off and Roaming Assistant on, the running daemon
+  (`ubus call usteer get_config`) had `band_steering_interval: 0`, and openUF had removed
+  the old threshold from UCI. This confirms the off switch on hardware.
+- Setting the device to Prefer 5G (WLAN toggle still off) brought the daemon back to its
+  default 120000 ms.
+- Restoring the WLAN toggle and setting the device to Off left the default interval
+  (WLAN toggle on) and `bandsteering.status=disabled`.
+
+**Still unobserved:** an actual 2.4 → 5 GHz steer caused by the device setting alone. No
+client that supports BSS Transition was on the C5 at the time. Its two 5 GHz clients have
+the BTM bit clear, and usteer only steers clients that have it.
 
 **`radio_caps2` `0x2` (FT with WPA3): CLAIMED, confirmed in the lab 2026-09-27.**
 Predicate: radio DTO `ytajcagDggPuTaL()`, tested in `plVcFpIybmrpXclX`. Without it
