@@ -882,6 +882,60 @@ return {
 		end
 	},
 	{
+		name = "inform json: satisfaction scores recent retries, not the association's lifetime",
+		fn = function()
+			-- A Google Home Mini at -36 dBm with 30 % lifetime retries
+			-- scored 69 for as long as it stayed associated.
+			-- The signal side scores 100 here, so the score is the retry side.
+			inform._sta_stats_cache = {}
+			local orig_time = inform._time
+			local t = 1000
+			inform._time = function() return t end
+			local st = {
+				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+				ip = "192.168.1.100", hostname = "testap",
+			}
+			local function score(pkts, retries)
+				inject_ucihelper()
+				inform._sysinfo._run_cmd = function(cmd)
+					if cmd:find("station dump") then
+						return "Station aa:bb:cc:dd:ee:ff (on wlan0)\n" ..
+							"\ttx packets:\t" .. pkts .. "\n\ttx retries:\t" .. retries .. "\n" ..
+							"\tsignal:  \t-36 dBm\n"
+					end
+					return ""
+				end
+				t = t + 10
+				local d = cjson.decode(inform.build_json(st, nil, ufhw))
+				return d.vap_table[1].sta_table[1]
+			end
+
+			local s = score(14000, 6000)
+			assert_eq(s.satisfaction, 70, "first sample: only the lifetime ratio is known (30 %)")
+
+			s = score(14010, 6005)
+			assert_eq(s.satisfaction, 70, "a 15-attempt window is too small to move the score")
+			s = score(14020, 6005)
+			assert_eq(s.satisfaction, 72, "it closes at 25 attempts, 5 retried: 30 + 0.2*(20-30) = 28 -> 72")
+
+			for _ = 1, 20 do s = score(14020 + _ * 30, 6005) end
+			assert_true(s.satisfaction >= 97, "clean windows pull it back toward 100, got " .. s.satisfaction)
+			assert_true(math.abs(s.wifi_tx_retries_percentage - 6005 * 100 / (14620 + 6005)) < 1e-10,
+				"wifi_tx_retries_percentage stays the lifetime ratio")
+
+			local before = s.satisfaction
+			s = score(14650, 6035)
+			assert_true(s.satisfaction < before, "a bad window drops it again")
+
+			s = score(100, 50)
+			assert_eq(s.satisfaction, 66, "counters went backwards (reassociation): lifetime again")
+
+			inform._time = orig_time
+			inform._sta_stats_cache = {}
+		end
+	},
+	{
 		name = "inform json: radio_table_stats derived from survey dump",
 		fn = function()
 			local d = build({with_uci = true, with_clients = true})

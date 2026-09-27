@@ -138,9 +138,16 @@ M._spectrum_cache = {}
 -- used to delta-sample a throughput estimate the same way M._sysinfo's
 -- cpu_percent() delta-samples /proc/stat between calls (first sample for a
 -- given MAC has no prior delta, so throughput is reported as 0 that time).
+-- It also carries the windowed retry ratio behind satisfaction: see
+-- windowed_retry_pct().
 M._sta_stats_cache = {}
 -- ...and how long an unseen station stays in it. See the sweep in build_json.
 M.STA_STATS_FORGET_AFTER = 600
+-- Windowed retry ratio: a window closes once it holds this many tx attempts
+-- (packets + retries), however many informs that takes, and is folded into
+-- an EWMA with this weight.
+M.RETRY_WINDOW_MIN_ATTEMPTS = 20
+M.RETRY_EWMA_ALPHA = 0.2
 
 -- Injectable: override in tests to control elapsed time deterministically
 -- (used by the sta_table throughput delta-sample below).
@@ -490,6 +497,35 @@ local function estimate_satisfaction(signal, retry_pct)
 	if retry_score < 0 then retry_score = 0 end
 	local score = math.min(signal_score, retry_score)
 	return math.floor(score)
+end
+
+-- The retry ratio estimate_satisfaction() scores on, over recent traffic.
+-- iw's counters are lifetime-of-association, so scoring them directly let
+-- one bad stretch pin a client's score for as long as it stayed associated,
+-- and hours of good traffic hide a problem that starts now the same way. A
+-- window opens at base_packets/
+-- base_retries and closes once it holds RETRY_WINDOW_MIN_ATTEMPTS attempts,
+-- so a client sending one frame a second still closes one every ~20 s and a
+-- 7-of-10 burst can't swing the score alone. Each closed window is folded
+-- into an EWMA. The first sample, and a counter that went backwards (a
+-- reassociation), start from the lifetime ratio, which is all that's known.
+-- prev: the station's cache entry or nil. Returns pct, base_packets,
+-- base_retries for the next cache entry.
+local function windowed_retry_pct(prev, tx_packets, tx_retries, lifetime_pct)
+	if not (prev and prev.retry_ewma) then
+		return lifetime_pct, tx_packets, tx_retries
+	end
+	local dp = tx_packets - prev.base_packets
+	local dr = tx_retries - prev.base_retries
+	if dp < 0 or dr < 0 then
+		return lifetime_pct, tx_packets, tx_retries
+	end
+	if dp + dr < M.RETRY_WINDOW_MIN_ATTEMPTS then
+		return prev.retry_ewma, prev.base_packets, prev.base_retries
+	end
+	local window_pct = dr * 100 / (dp + dr)
+	return prev.retry_ewma + M.RETRY_EWMA_ALPHA * (window_pct - prev.retry_ewma),
+		tx_packets, tx_retries
 end
 
 -- ─── JSON payload builder ────────────────────────────────────────────────────
@@ -1201,25 +1237,30 @@ function M.build_json(st, cfg, ufhw)
 						)
 					end
 				end
-				M._sta_stats_cache[sta.mac] = {
-					rx_bytes = sta.rx_bytes or 0,
-					tx_bytes = sta.tx_bytes or 0,
-					time     = now,
-				}
-
 				-- wifi_tx_attempts: total transmission attempts (successful +
 				-- retried), i.e. tx_packets + tx_retries -- both already
 				-- parsed from iw. wifi_tx_retries_percentage: retries as a
 				-- fraction of attempts. Confirmed real field names/semantics
 				-- via the decompiled wireless-client model
 				-- (com.ubnt.service.l.e.AQODNNoMmBlFpWXX) and unpoller/unifi's
-				-- REST client struct.
+				-- REST client struct. Both stay lifetime values; only the
+				-- satisfaction estimate uses the windowed ratio.
 				local wifi_tx_attempts = (sta.tx_packets or 0) + (sta.tx_retries or 0)
 				local wifi_tx_retries_pct = 0
 				if wifi_tx_attempts > 0 then
 					wifi_tx_retries_pct = (sta.tx_retries or 0) * 100 / wifi_tx_attempts
 				end
-				local satisfaction_now = estimate_satisfaction(sta.signal, wifi_tx_retries_pct)
+				local retry_ewma, base_packets, base_retries = windowed_retry_pct(prev,
+					sta.tx_packets or 0, sta.tx_retries or 0, wifi_tx_retries_pct)
+				M._sta_stats_cache[sta.mac] = {
+					rx_bytes     = sta.rx_bytes or 0,
+					tx_bytes     = sta.tx_bytes or 0,
+					time         = now,
+					retry_ewma   = retry_ewma,
+					base_packets = base_packets,
+					base_retries = base_retries,
+				}
+				local satisfaction_now = estimate_satisfaction(sta.signal, retry_ewma)
 				if satisfaction_now then
 					sat_sum, sat_count = sat_sum + satisfaction_now, sat_count + 1
 					sat_sum_all, sat_count_all = sat_sum_all + satisfaction_now, sat_count_all + 1
