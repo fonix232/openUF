@@ -161,6 +161,45 @@ async function checkPorts(page, route) {
 		console.log(`  ok   ports on ${route}: ${seen.linked} linked, ${seen.unlinked} not`);
 }
 
+/* Network > Switch/VLAN config is the theme's copy of LuCI's page
+ * (view/openuf-theme/switch-vlan.js): br-lan's switch ports as tiles, and its
+ * wireless member (wl0-ap0, add-ports.sh) named and left out, where LuCI's own
+ * page refuses a bridge with a wireless member in it. */
+const BRIDGE_PORTS = [ 'lan1', 'lan2', 'lan3', 'lan4' ];
+
+async function checkSwitchVlan(page) {
+	const route = 'admin/network/switch-vlan';
+
+	await page.goto(`${base}/cgi-bin/luci/${route}`);
+	await settle(page);
+
+	/* The page asks to be taken as experimental on every visit. */
+	const agree = page.locator('.modal button', { hasText: 'I understand, continue' });
+
+	if (await agree.count())
+		await agree.first().click();
+
+	const seen = await page.evaluate(() => ({
+		ours: document.querySelector('link[href*="view/openuf-theme/switch-vlan.css"]') != null,
+		blockers: [ ...document.querySelectorAll('#view .alert-message h4') ].map((n) => n.textContent.trim()),
+		ports: [ ...document.querySelectorAll('.svc-port-tile .svc-port-name') ].map((n) => n.textContent.trim()),
+		notes: [ ...document.querySelectorAll('#switch-vlan-view > .cbi-section-descr') ].map((n) => n.textContent).join(' ')
+	}));
+
+	if (seen.blockers.length)
+		fail(`${route}: ${seen.blockers.join('; ')}`);
+	else if (!seen.ours)
+		fail(`${route}: LuCI's own page, not the theme's`);
+	else if (seen.ports.join(' ') != BRIDGE_PORTS.join(' '))
+		fail(`${route}: ports ${seen.ports.join(' ') || 'none'}, not ${BRIDGE_PORTS.join(' ')}`);
+	else if (!/\bwl0-ap0\b/.test(seen.notes))
+		fail(`${route}: the wireless member wl0-ap0 is not named`);
+	else
+		console.log(`  ok   ${route}: ports ${seen.ports.join(' ')}, wl0-ap0 left to its wireless network`);
+
+	await shot(page, 'switch-vlan-light');
+}
+
 /* The designs (System > openUF Theme, luci.openuf_theme): each comes round on
  * Interfaces and on Wireless, with another one on the other page, so a
  * stylesheet or script leaking between pages or designs shows; the Port
@@ -299,6 +338,8 @@ async function signIn(page) {
 		await page.goto(`${base}/cgi-bin/luci/admin/network/network`);
 		await settle(page);
 		await shot(page, 'ports-light');
+
+		await checkSwitchVlan(page);
 	}
 
 	/* Each design, on each page, wide and on a phone. */

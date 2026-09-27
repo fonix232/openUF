@@ -40,6 +40,19 @@ reads DSA ports (`board.json`, netifd) and swconfig switches alike, with their
 VLANs from `bridge-vlan` or `switch_vlan`; the code is
 `htdocs/luci-static/resources/view/openuf-theme/ports.js`, reusable by any view.
 
+### Switch/VLAN config
+
+*Network → Switch/VLAN config* is the theme's copy of LuCI's page (added to
+luci-mod-network in May 2026), in its place: the same port tiles, VLAN rows
+and labels, on a bridge with VLAN filtering. LuCI's own page refuses a bridge
+with anything but Ethernet or DSA ports in it, which is every VLAN-aware bridge
+on an access point, where netifd puts each SSID in the bridge with its
+network's VLAN. This copy leaves wireless members out of the ports instead,
+names them under the description, and never changes them: their VLAN is set
+on their wireless network. Bridges with other virtual members (tunnels, VLAN
+sub-interfaces) are still refused. The page appears where LuCI's would, and
+also on LuCI builds without it.
+
 ### Network designs
 
 *Network → Interfaces* and *Network → Wireless* each come in three designs,
@@ -155,14 +168,15 @@ luci-app-uhttpd and luci-app-usteer from LuCI's sources (with a fake usteer
 daemon, `test/fixtures/usteer.uc`) and a two-radio wireless config so the
 Wireless pages have something to show, gives it switch ports
 (`test/add-ports.sh`: veth pairs lan1-lan4 and wan, made from the host with
-`nsenter`, some with link and some without, in a VLAN-filtering `br-lan`;
-`UF_PORTS=0` leaves them out), and installs the theme: this checkout via
+`nsenter`, some with link and some without, in a VLAN-filtering `br-lan`
+that also holds a stand-in SSID, `wl0-ap0`; `UF_PORTS=0` leaves them out), and installs the theme: this checkout via
 `install.sh`, or, with `UF_APK` naming a built `.apk`, the package via `apk`,
 which is how the feed's CI tests exactly what it publishes. Then it drives
 LuCI in headless Chromium: it signs in, visits every page the menu offers,
 and fails on any script error, failed asset, page that never finishes
 loading, or layout wider than the window, and checks that the port panel
-shows the five ports, with and without link. It then saves designs on *System
+shows the five ports, with and without link, and that *Switch/VLAN config*
+shows `br-lan`'s four ports and names `wl0-ap0` without making it a port. It then saves designs on *System
 → openUF Theme* until each has been on Interfaces and on Wireless, and checks
 both pages in each, wide and at phone width: only that design's stylesheet
 loaded, its script's marks on LuCI's rows, no sideways scroll, and the Port
@@ -204,6 +218,7 @@ NODE_PATH=$(npm root -g) node test/shoot.cjs --schemes light,dark,phone admin/ne
 | `htdocs/luci-static/resources/view/openuf-theme/network/interfaces-DESIGN.js`, `wireless-DESIGN.js` | Each design's script: it only marks LuCI's nodes (which fact a row holds, column titles, a state) for its stylesheet, again after every redraw. `menu-openuf.js` loads the chosen one and calls its `enhance()`; without it the page keeps LuCI's rows |
 | `htdocs/luci-static/resources/menu-openuf.js` | Navigation (app bar, rail, secondary column, tabs), the design loader, and the Port Manager card above the Interfaces view |
 | `htdocs/luci-static/resources/view/openuf-theme/ports.js` | The port model (DSA and swconfig) and the strip and list |
+| `htdocs/luci-static/resources/view/openuf-theme/switch-vlan.js`, `bridgevlan.js`, `switch-vlan.css` | *Network → Switch/VLAN config*: copies of LuCI's `view/network/switch-vlan.js`, `tools/bridgevlan.js` and `switch-vlan.css` (luci-mod-network, Apache-2.0), with wireless bridge members left out rather than refused. The theme's `menu.d` entry puts the page in place of LuCI's |
 | `htdocs/luci-static/resources/view/dashboard/include/25_ports.js` | The dashboard's Ports card |
 | `htdocs/luci-static/resources/view/openuf-theme/settings.js` | *System → openUF Theme*; its menu entry is `root/usr/share/luci/menu.d/luci-theme-openuf.json` |
 | `root/usr/share/rpcd/acl.d/luci-theme-openuf.json` | What the port panel reads, and the settings page's access to `luci` |

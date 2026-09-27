@@ -18,6 +18,11 @@
 #   VLAN 30  tagged on lan3, native lan4  network iot, zone iot
 #   wan                                   network wan (DHCP), zone wan
 #
+# A wireless interface, wl0-ap0 (a veth: LuCI types a wl<N> name as
+# wireless), is also in br-lan, the way netifd adds an SSID to a VLAN-aware
+# bridge on an access point; the Switch/VLAN page has to leave it out rather
+# than refuse the bridge.
+#
 # netifd cannot bring anything up without NET_ADMIN either, so the bridge
 # is made here too. eth0 is left alone.
 
@@ -52,12 +57,14 @@ done
 ns ip link add br-lan type bridge vlan_filtering 1 2>/dev/null ||
 	ns ip link add br-lan type bridge
 
-for port in lan1 lan2 lan3 lan4; do
+ns ip link add wl0-ap0 type veth peer name wl0-ap0p
+
+for port in lan1 lan2 lan3 lan4 wl0-ap0; do
 	ns ip link set "$port" master br-lan
 done
 
-# Up with carrier: lan1, lan3, wan. Up without: lan2. Down: lan4.
-for dev in lan1 lan1p lan2 lan3 lan3p wan wanp br-lan; do
+# Up with carrier: lan1, lan3, wan, wl0-ap0. Up without: lan2. Down: lan4.
+for dev in lan1 lan1p lan2 lan3 lan3p wan wanp wl0-ap0 wl0-ap0p br-lan; do
 	ns ip link set "$dev" up
 done
 

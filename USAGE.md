@@ -755,6 +755,13 @@ gateway is reached through (found in the bridge FDB); if that cannot be determin
 
 Inspect the result with `uci show network` and `bridge link`.
 
+LuCI's *Network → Switch/VLAN config* page shows "No managed switch found" on these APs:
+it only takes a bridge whose members are all Ethernet or DSA ports, and the controller-owned
+bridge also holds every SSID. `luci-theme-openuf` replaces it with a copy that leaves the
+SSIDs out and shows the ports and VLANs. Port VLANs on an adopted AP are still the
+controller's (*Ports* in UniFi): the next push that changes the network model rewrites what
+the page changes.
+
 **Band Steering** is `usteer`'s decision, not openUF's: openUF configures the daemon
 (`usteer.local.band_steering_threshold`) and forces 802.11k neighbour reports plus
 `bss_transition=1` onto every VAP, since usteer cannot work without them. If a client is
