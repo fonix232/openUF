@@ -350,6 +350,7 @@ local SECURITY_MAP = {
 	["wpa2"]       = "psk2",
 	["wpa3"]       = "sae",
 	["wpa2/wpa3"]  = "sae-mixed",
+	["owe"]        = "owe",
 }
 
 -- Deterministic 16-bit id from a string, formatted as 4 hex chars (802.11r
@@ -503,8 +504,8 @@ end
 -- Create a new wifi-iface section named openuf_<ssid> on the given radio.
 -- radio:    UCI radio name, e.g. "radio0" or "radio1"
 -- ssid:     SSID string
--- security: "open" | "wpa2" | "wpa3" | "wpa2/wpa3"
--- password: WPA pre-shared key (ignored when security == "open")
+-- security: "open" | "owe" | "wpa2" | "wpa3" | "wpa2/wpa3"
+-- password: WPA pre-shared key (ignored when security is "open" or "owe")
 -- extra:    optional table of additional UCI key/value pairs (802.11r/k/v etc.)
 -- network:  UCI network/interface name to bridge this SSID onto (defaults to
 --           "lan"); pass a VLAN-tagged interface from ensure_vlan_network() to
@@ -563,7 +564,7 @@ function M.wlan_add(radio, ssid, security, password, extra, network, wlanconf_id
 	if wlanconf_id then
 		cursor:set("wireless", section_name, "openuf_wlanconf_id", wlanconf_id)
 	end
-	if password and enc ~= "none" then
+	if password and enc ~= "none" and enc ~= "owe" then
 		cursor:set("wireless", section_name, "key", password)
 	end
 	-- 802.11r/k/v
@@ -1281,6 +1282,16 @@ function M.apply_config(resp, cfg, opts)
 				if vap.pmf_status == "enabled" then w = vap.pmf_mode or 1 end
 				extra.ieee80211w = tostring(w)
 			end
+			if vap.owe_transition then
+				-- Enhanced Open transition mode: the ucode generator (24.10+,
+				-- hostapd.uc/mac80211.sh) turns this one section into the
+				-- hidden OWE BSS plus an open BSS under the section's SSID,
+				-- each pointing at the other. The controller sends the same
+				-- pair as two VAPs; inform.lua keeps the open one only.
+				-- Absent otherwise: wlan_clear drops the section on every
+				-- rebuild.
+				extra.owe_transition = "1"
+			end
 			if vap.mcast_enhance ~= nil then
 				-- Multicast Enhancement: multicast_to_unicast is the
 				-- OpenWrt/mac80211 wifi-iface option that proxies multicast
@@ -1490,9 +1501,9 @@ function M.apply_config(resp, cfg, opts)
 	for _, vap in ipairs(vap_table) do
 		if vap.ssid and vap.radio then
 			-- Resolved once per VAP and shared by both features -- this used to
-			-- be two lookups per VAP through the same ubus status call.
-			local ifname = M.get_ifname_for_vap(vap.radio, vap.ssid)
-			if ifname then
+			-- be two lookups per VAP through the same ubus status call. An OWE
+			-- transition VAP has two netdevs, and both get the rules.
+			for _, ifname in ipairs(M.get_ifnames_for_vap(vap.radio, vap.ssid)) do
 				entries[#entries + 1] = {
 					ifname         = ifname,
 					bcfilt_enabled = vap.bcfilt_enabled,
@@ -1534,19 +1545,21 @@ function M.reapply_runtime_rules()
 		-- teardown: the reload that disabled it took its interface, and with it
 		-- every qdisc and every nft rule that named it.
 		if s.disabled == "1" then return end
-		local ok_if, ifname = pcall(M.get_ifname_for_vap, s.device, s.ssid)
-		if not (ok_if and ifname) then return end
+		local ok_if, ifnames = pcall(M.get_ifnames_for_vap, s.device, s.ssid)
+		if not ok_if then return end
 		local macs = {}
 		for mac in (s.openuf_bcfilt_macs or ""):gmatch("%S+") do
 			macs[#macs + 1] = mac
 		end
-		entries[#entries + 1] = {
-			ifname         = ifname,
-			bcfilt_enabled = (s.openuf_bcfilt == "1"),
-			bcfilt_macs    = macs,
-			down_kbps      = tonumber(s.openuf_ratelimit_down),
-			up_kbps        = tonumber(s.openuf_ratelimit_up),
-		}
+		for _, ifname in ipairs(ifnames) do
+			entries[#entries + 1] = {
+				ifname         = ifname,
+				bcfilt_enabled = (s.openuf_bcfilt == "1"),
+				bcfilt_macs    = macs,
+				down_kbps      = tonumber(s.openuf_ratelimit_down),
+				up_kbps        = tonumber(s.openuf_ratelimit_up),
+			}
+		end
 	end)
 	reconcile_runtime(entries)
 	return #entries
@@ -1696,6 +1709,33 @@ local function wireless_status()
 	return status
 end
 
+-- The second netdev of an Enhanced Open transition section, or nil.
+--
+-- owe_transition=1 makes the generator bring up TWO BSSes from one section:
+-- the section's own netdev is the hidden OWE BSS, and the open BSS gets a
+-- netdev netifd's status never lists (mac80211.sh assigns it as
+-- owe_transition_ifname and hands it only to hostapd). hostapd reports it in
+-- its bss_info, which is where OpenWrt's own iwinfo.uc reads it too. Asked
+-- only for sections that have the option, so no other VAP pays for a ubus
+-- call.
+local function owe_transition_ifname(iface)
+	local on = type(iface.config) == "table" and iface.config.owe_transition
+	if not (on == true or on == 1 or on == "1") then return nil end
+	-- Interpolated into a shell command line.
+	if type(iface.ifname) ~= "string" or not iface.ifname:match("^[%w%-%._]+$") then
+		return nil
+	end
+	local cjson = get_cjson()
+	if not cjson then return nil end
+	local out = M._popen("ubus call hostapd bss_info '{\"iface\":\"" .. iface.ifname .. "\"}'")
+	local ok, info = pcall(cjson.decode, out or "")
+	local peer = ok and type(info) == "table" and info.owe_transition_ifname
+	if type(peer) == "string" and peer:match("^[%w%-%._]+$") and peer ~= iface.ifname then
+		return peer
+	end
+	return nil
+end
+
 -- The live netdev of every AP-mode VAP on the device, from netifd's status
 -- (radio order, then interface order). A station or mesh interface -- a
 -- wireless backhaul -- is not a VAP and is left out: l2guard's tag drop on an
@@ -1716,6 +1756,7 @@ function M.ap_ifnames()
 			if type(i) == "table" and type(i.ifname) == "string" and i.ifname ~= ""
 					and (mode == nil or mode == "ap") then
 				out[#out + 1] = i.ifname
+				out[#out + 1] = owe_transition_ifname(i)
 			end
 		end
 	end
@@ -1743,7 +1784,7 @@ end
 -- hosts a single SSID -- not good enough for per-WLAN features like the
 -- Multicast and Broadcast Blocker, where picking the wrong VAP's netdev would
 -- silently apply one SSID's filter to another. Returns nil if unresolvable.
-function M.get_ifname_for_vap(radio, ssid)
+local function find_vap_iface(radio, ssid)
 	if not radio or not ssid then return nil end
 	local status = wireless_status()
 	if not status then return nil end
@@ -1752,7 +1793,7 @@ function M.get_ifname_for_vap(radio, ssid)
 	for _, iface in ipairs(dev.interfaces) do
 		if type(iface) == "table" and iface.ifname
 			and type(iface.config) == "table" and iface.config.ssid == ssid then
-			return iface.ifname
+			return iface
 		end
 	end
 	-- Fall back to the radio's only interface when the SSID could not be
@@ -1763,9 +1804,27 @@ function M.get_ifname_for_vap(radio, ssid)
 	-- a wrong guess would apply one SSID's filter to another, which is worse
 	-- than not applying it at all.
 	if #dev.interfaces == 1 and type(dev.interfaces[1]) == "table" then
-		return dev.interfaces[1].ifname
+		return dev.interfaces[1]
 	end
 	return nil
+end
+
+function M.get_ifname_for_vap(radio, ssid)
+	local iface = find_vap_iface(radio, ssid)
+	return iface and iface.ifname
+end
+
+-- Every live netdev of one VAP: its own, plus the open BSS of an OWE
+-- transition section. Per-VAP features (station reporting, the blocker, the
+-- speed limit) have to cover both, or the transition WLAN's legacy clients
+-- would fall outside them. Empty when the VAP cannot be resolved.
+function M.get_ifnames_for_vap(radio, ssid)
+	local iface = find_vap_iface(radio, ssid)
+	if not iface then return {} end
+	local out = {iface.ifname}
+	local peer = owe_transition_ifname(iface)
+	if peer then out[2] = peer end
+	return out
 end
 
 -- "Minimum RSSI" enforcement: send a single 802.11 deauthentication frame to

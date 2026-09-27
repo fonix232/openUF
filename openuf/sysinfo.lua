@@ -619,6 +619,30 @@ function M.sae_supported()
 	return found
 end
 
+M._owe_supported_cache = nil
+
+-- Can this device run an Enhanced Open (OWE) WLAN, including its transition
+-- mode?
+--
+-- Claimed to the controller as radio_caps2 bit 0x8; without it an OWE WLAN is
+-- not provisioned at all, and a transition one goes out as plain open. Both
+-- halves are needed. `hostapd -v<feature>` exits 0 only when the running
+-- hostapd build has that feature compiled in (it exits 1 on a name it does not
+-- know), and transition mode is written as one wifi-iface with
+-- owe_transition=1, which only the ucode generator (24.10+) expands into the
+-- hidden OWE BSS plus the open one.
+function M.owe_supported()
+	if M._owe_supported_cache ~= nil then return M._owe_supported_cache end
+	local found = false
+	local gen = M._read_file("/usr/share/ucode/wifi/hostapd.uc")
+	if gen and gen:find("owe_transition", 1, true) then
+		found = M._run_cmd("/usr/sbin/hostapd -vowe >/dev/null 2>&1 && echo yes")
+			:find("yes", 1, true) ~= nil
+	end
+	M._owe_supported_cache = found
+	return found
+end
+
 -- `iw phy phyN info` is tens of kilobytes and was fetched and parsed for every
 -- radio on every heartbeat, although it describes the HARDWARE plus the
 -- regulatory domain and changes only with the latter. Cached per phy with a

@@ -96,12 +96,19 @@ RUN ln -sf /opt/openuf/hook/syswrapper.sh /usr/bin/syswrapper.sh \
     && printf '1735689600 ca:fe:be:ef:00:01 192.168.1.101 printer *\n' > /tmp/dhcp.leases \
     && mkdir -p /usr/share/ucode/wifi \
     && printf "// validation stub: sysinfo.sae_supported() probes for 'psk-sae'\n" \
-        > /usr/share/ucode/wifi/ap.uc
+        > /usr/share/ucode/wifi/ap.uc \
+    && printf "// validation stub: sysinfo.owe_supported() probes for owe_transition\n" \
+        > /usr/share/ucode/wifi/hostapd.uc \
+    && printf '#!/bin/sh\n# validation stub: only answers the -vowe feature probe\n[ "$1" = "-vowe" ]\n' \
+        > /usr/sbin/hostapd \
+    && chmod +x /usr/sbin/hostapd
 
 # The ap.uc stub stands in for OpenWrt 25.12's wifi generator, the file
 # sysinfo.sae_supported() reads. Without it the radios claim no SAE, the
 # radio_caps2 WPA3 bits stay clear, and the controller downgrades or drops
 # every WPA3 WLAN before it reaches the wire, so no WPA3 key is ever capturable.
+# The hostapd.uc and hostapd stubs do the same for Enhanced Open (radio_caps2
+# 0x8, sysinfo.owe_supported()): without them no OWE WLAN is ever pushed.
 
 # generic-dualband-ap.lua assumes real hardware's switch topology (eth0=WAN,
 # eth1=LAN via VLANs) -- this single-NIC container only has eth0. Without

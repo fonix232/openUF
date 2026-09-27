@@ -1469,7 +1469,6 @@ Gates that drop or weaken a feature openUF could implement (claimed ones are lis
 
 | Field | Bit | Predicate | Effect while unclaimed |
 |---|---|---|---|
-| `radio_caps2` | `0x8` | radio DTO, OWE | An Enhanced Open WLAN is **not provisioned** ("WPA3-OWE cannot provision"). With OWE transition on it goes out as plain open |
 | `wifi_caps` | `0x100000` | `supportWpaPpsk()` | A WLAN with Private Pre-Shared Keys, or UID IoT, is **skipped** ("PPSK is not supported … will be skipped") |
 | `wifi_caps` | `0x20` | `supportATFConfig()` | `atf.status`/`atf.mode` (Airtime Fairness) is never emitted |
 | `fw_caps` | `0x1000` | `supportMultiBlockWlanSchedule()` | A WLAN Schedule with several blocks per day goes out as one `wireless.<n>.schedule_<day>` key per block, all under the same name, so the last one wins. With the bit set they become `schedule_<day>.<i>` |
@@ -1532,6 +1531,50 @@ the real code had 0 `handle_response failed` and logged the `equal` warning once
 **Still unobserved:** an actual 2.4 → 5 GHz steer caused by the device setting alone. No
 client that supports BSS Transition was on the C5 at the time. Its two 5 GHz clients have
 the BTM bit clear, and usteer only steers clients that have it.
+
+**`radio_caps2` `0x8` (Enhanced Open / OWE): CLAIMED, confirmed in the lab 2026-09-27.**
+Predicate: radio DTO `NoFWvUa()`, tested in `plVcFpIybmrpXclX` for an open WLAN with
+`wpa3_support` on. Without it an OWE WLAN is dropped from the push entirely (it logs
+"WPA3-OWE cannot provision"), and with `wpa3_transition` on it is sent as a plain open
+WLAN. The lab confirmed both halves on 10.4.57. With `radio_caps2 = 0x3`, a new WLAN
+(`security=open`, `wpa3_support=true`, `wpa3_transition=false`) produced no `aaa`/`wireless`
+entry at all. With `0xB` it arrived as:
+
+```
+aaa.<n>.wpa.key.1.mgmt=OWE        (no aaa.<n>.wpa, no psk; pmf.status/pmf.mode as for any WLAN)
+wireless.<n>.authmode=0
+```
+
+With `wpa3_transition=true`, each radio gets **two** VAPs with the same SSID, linked both
+ways by `owe_devname`. The oHgVgY generator duplicates the WLAN, sets hide_ssid, and adds
+`owe_wpa3_transistion_mode_supplement` to the copy:
+
+```
+aaa.1.devname=ath0  aaa.1.owe_devname=ath1  aaa.1.hide_ssid=false  (no mgmt: the open BSS)
+aaa.2.devname=ath1  aaa.2.owe_devname=ath0  aaa.2.hide_ssid=true   aaa.2.wpa.key.1.mgmt=OWE
+```
+
+OpenWrt 25.12 builds this pair from **one** wifi-iface, `encryption=owe` plus
+`owe_transition=1`. hostapd.uc sets up the section twice, once as the hidden OWE BSS and
+once as the open BSS. mac80211.sh gives the open one a second netdev (`owe_transition_ifname`),
+which only hostapd knows (`ubus call hostapd bss_info`). So `_parse_wifi_system_cfg` keeps
+the open half as a `security="owe", owe_transition=true` VAP and drops the hidden half.
+Provisioning both would put two sections with the same radio and SSID into one section name,
+and the hidden one would win. Station reporting, the blocker, the speed limit and l2guard
+read that second netdev from hostapd, so they cover both BSSes.
+
+Two differences from UniFi firmware. OpenWrt names the hidden BSS `<ssid>OWE`, while UniFi
+reuses the SSID. Clients follow the transition element either way. The pushed
+`pmf.status/pmf.mode` never reaches hostapd: ap.uc forces `ieee80211w=2` on an OWE BSS and
+writes 0 on any BSS below WPA2.
+
+Claimed per radio when `sysinfo.owe_supported()` holds. That needs `hostapd -vowe` to exit 0
+(it exits 1 on a feature the build lacks; both APs' `wpad-mbedtls` pass) and the ucode
+generator to know `owe_transition`. OWE is probed apart from SAE. In the lab (claim from
+code via a stub `hostapd` + `hostapd.uc` in the AP Dockerfile, full `down -v` reset), the
+transition WLAN landed in the UCI mock as `encryption=owe`, `owe_transition=1`, `hidden=0`,
+no key, on both radios, with `handle_response failed` = 0. **Hardware tier not yet run**:
+no OWE BSS has been brought up on a real AP, and no client has joined one.
 
 **`radio_caps2` `0x2` (FT with WPA3): CLAIMED, confirmed in the lab 2026-09-27.**
 Predicate: radio DTO `ytajcagDggPuTaL()`, tested in `plVcFpIybmrpXclX`. Without it
@@ -1613,7 +1656,7 @@ through 0/3/4/5/6/7/15/31/255 only changed *which* of two near-identical errors 
 | `disabled`, `builtin_antenna`, `builtin_ant_gain`, `max_txpower` | |
 | `nss`, `is_11ac`, `is_11ax`, `is_11be`, `has_dfs`, `has_fccdfs`, `has_ht160`, `has_eht240`, `has_eht320` | Read directly off each entry by `PGOcbDWlbnYQdFW`'s `copyAttrsIfPresent`, **independent of `radio_caps`**. Derived by `sysinfo.radio_caps()` from `iw phy phyN info`. |
 | **`radio_caps`** | A separate **integer bitmask**, not `nss`. See below. |
-| **`radio_caps2`** | `0x3` on an SAE-capable radio (`0x1` WPA3, `0x2` FT with WPA3), `0` otherwise. See [Capability bitmasks](#capability-bitmasks). |
+| **`radio_caps2`** | `0x3` on an SAE-capable radio (`0x1` WPA3, `0x2` FT with WPA3), `0` otherwise, plus `0x8` (Enhanced Open) where hostapd has OWE. See [Capability bitmasks](#capability-bitmasks). |
 | `min_rssi`, `min_rssi_enabled` | `min_rssi` is **dBm** on the wire (converted from the raw `stamgr` units using the live noise floor) |
 | **`athstats`** | Nested `{cu_total, cu_self_rx, cu_self_tx, cu_interf}`. See below. |
 

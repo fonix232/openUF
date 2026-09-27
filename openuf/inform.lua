@@ -851,10 +851,18 @@ function M.build_json(st, cfg, ufhw)
 					-- forces wpa3_fast_roaming off on every SAE WLAN, and on
 					-- a WPA3-only one fast_roaming_enabled too, so no 802.11r
 					-- goes out. hostapd runs FT-SAE wherever it runs SAE.
+					--
+					-- Bit 0x8 is Enhanced Open (radio DTO NoFWvUa(), same
+					-- filter). Without it an OWE WLAN is not provisioned at
+					-- all and an OWE transition WLAN goes out as plain open.
+					-- Probed separately: hostapd can have SAE without OWE.
 					if M._sysinfo.sae_supported and M._sysinfo.sae_supported() then
 						radio.radio_caps2 = 0x3
 					else
 						radio.radio_caps2 = 0
+					end
+					if M._sysinfo.owe_supported and M._sysinfo.owe_supported() then
+						radio.radio_caps2 = radio.radio_caps2 + 0x8
 					end
 				end
 				local ok_rs, stats = pcall(M._sysinfo.radio_stats, ifname)
@@ -1108,12 +1116,22 @@ function M.build_json(st, cfg, ufhw)
 			-- `essid` is what get_vap_table() calls it -- the vap has no
 			-- `ssid` field, and passing one silently resolves to nil, which
 			-- would empty every sta_table instead of fixing anything.
-			local ok_if, ifname = pcall(ufuci.get_ifname_for_vap,
+			--
+			-- An Enhanced Open transition VAP is two BSSes, the hidden OWE
+			-- one and the open one, and its clients are the union of both.
+			local ok_if, ifnames = pcall(ufuci.get_ifnames_for_vap,
 				vap.radio_name, vap.essid)
-			local stas = {}
-			if ok_if and ifname then
+			-- sta_ifname[i] is the netdev stas[i] is on, for the kick and
+			-- Roaming Assistant below.
+			local stas, sta_ifname = {}, {}
+			for _, ifname in ipairs(ok_if and ifnames or {}) do
 				local ok_sta, rv2 = pcall(M._sysinfo.sta_table, ifname)
-				if ok_sta then stas = rv2 end
+				if ok_sta then
+					for _, sta in ipairs(rv2) do
+						stas[#stas + 1] = sta
+						sta_ifname[#stas] = ifname
+					end
+				end
 			end
 			vap.num_sta = #stas
 			-- Per-VAP traffic/retry counters ("Air Stats" in the controller
@@ -1135,7 +1153,8 @@ function M.build_json(st, cfg, ufhw)
 			-- outside this loop (sat_sum_all/sat_count_all) -- see below.
 			local sat_sum, sat_count = 0, 0
 			local sta_table = {}
-			for _, sta in ipairs(stas) do
+			for sta_i, sta in ipairs(stas) do
+				local ifname = sta_ifname[sta_i]
 				station_macs[sta.mac] = true
 				vap_rx_bytes    = vap_rx_bytes    + (sta.rx_bytes or 0)
 				vap_tx_bytes    = vap_tx_bytes    + (sta.tx_bytes or 0)
@@ -2123,19 +2142,48 @@ function M._parse_wifi_system_cfg(sys_raw)
 		end
 	end
 
+	-- Aggregate every aaa.<n>.wpa.key.<k>.mgmt entry (transition mode can
+	-- list WPA-PSK and SAE either space-joined on one key or across separate
+	-- keys).
+	local function akm_of(a)
+		local akm = ""
+		for k, val in pairs(a) do
+			if k:match("^wpa%.key%.%d+%.mgmt$") then akm = akm .. " " .. val end
+		end
+		return akm
+	end
+
+	-- Enhanced Open (OWE) transition mode arrives as a PAIR of VAPs per radio
+	-- with the same SSID: an open one with no akm at all, and a hidden one with
+	-- `wpa.key.1.mgmt=OWE`. Each names the other's devname in owe_devname.
+	-- OpenWrt builds that pair from ONE wifi-iface (encryption=owe plus
+	-- owe_transition=1), so the open half becomes the VAP and the hidden half
+	-- is dropped here. Provisioning both as they stand is not an option: they
+	-- share radio and SSID, so they would collapse into one UCI section, and
+	-- the hidden one would win. Captured on 10.4.57 with radio_caps2 0xB
+	-- (PROTOCOL-VALIDATION.md).
+	local aaa_by_dev = {}
+	for _, a in pairs(aaa) do
+		if a.devname then aaa_by_dev[a.devname] = a end
+	end
+	local owe_hidden_half = {}
+	for _, a in pairs(aaa) do
+		local partner = a.owe_devname and aaa_by_dev[a.owe_devname]
+		if partner and not akm_of(a):find("OWE", 1, true)
+				and akm_of(partner):find("OWE", 1, true) then
+			owe_hidden_half[a.owe_devname] = true
+		end
+	end
+
 	local vap_table = {}
 	for _, idx in ipairs(sorted_indices(wireless)) do
 		local w = wireless[idx]
 		local a = aaa[idx] or {}
 
-		-- Aggregate every aaa.<n>.wpa.key.<k>.mgmt entry (transition mode can
-		-- list WPA-PSK and SAE either space-joined on one key or across
-		-- separate keys). Hoisted out of the security branch below because the
-		-- WPA-Enterprise check needs it before anything else is decided.
-		local akm = ""
-		for k, val in pairs(a) do
-			if k:match("^wpa%.key%.%d+%.mgmt$") then akm = akm .. " " .. val end
-		end
+		-- Hoisted out of the security branch below because the WPA-Enterprise
+		-- check needs it before anything else is decided.
+		local akm = akm_of(a)
+		local owe_transition = a.owe_devname ~= nil and owe_hidden_half[a.owe_devname] == true
 
 		-- WPA-Enterprise (802.1X, mgmt "WPA-EAP"). openUF cannot provision it:
 		-- the wire carries no RADIUS server/port/secret -- aaa.<n>.wpa.psk is
@@ -2153,9 +2201,16 @@ function M._parse_wifi_system_cfg(sys_raw)
 				:format(w.ssid, (akm:gsub("^%s+", ""))))
 		end
 
-		if w.ssid and w.parent and not is_enterprise then
+		if w.ssid and w.parent and not is_enterprise
+				and not (a.devname and owe_hidden_half[a.devname]) then
 			local security = "open"
-			if a.wpa == "2" or a.wpa == "3" then
+			-- Enhanced Open: the akm is the only marker. It carries no
+			-- aaa.<n>.wpa and no psk. The pmf.* keys that do come along
+			-- cannot reach hostapd: OpenWrt's ap.uc forces ieee80211w=2 on
+			-- an OWE BSS and writes 0 on the open transition BSS.
+			if owe_transition or (a.wpa == nil and akm:find("OWE", 1, true)) then
+				security = "owe"
+			elseif a.wpa == "2" or a.wpa == "3" then
 				local has_sae = akm:find("SAE", 1, true) ~= nil
 				local has_psk = akm:find("PSK", 1, true) ~= nil
 				-- WPA3 rides on its OWN keys, and the akm set alone cannot
@@ -2232,6 +2287,7 @@ function M._parse_wifi_system_cfg(sys_raw)
 				ssid                  = w.ssid,
 				radio                 = w.parent,
 				security              = security,
+				owe_transition        = owe_transition or nil,
 				-- aaa.<n>.id is the controller's wlanconf ObjectId; the
 				-- controller only accepts a vap_table entry whose "id" echoes
 				-- it back (vapInformProcessor drops usage=user vaps without

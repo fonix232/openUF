@@ -2135,6 +2135,62 @@ return {
 		end
 	},
 	{
+		name = "inform packet: an Enhanced Open WLAN parses as owe",
+		fn = function()
+			-- Captured on 10.4.57 with radio_caps2 0xB (2026-09-27), trimmed.
+			-- The akm is the only marker: no aaa.<n>.wpa, psk or pmf keys.
+			local sys_cfg = "aaa.5.devname=ath4\naaa.5.ssid=ouf-owe\naaa.5.hide_ssid=false\n"
+				.. "aaa.5.ft.status=disabled\naaa.5.id=6ab8d43fc18fc00c5f8f6756\n"
+				.. "aaa.5.wpa.key.1.mgmt=OWE\n"
+				.. "wireless.5.devname=ath4\nwireless.5.ssid=ouf-owe\n"
+				.. "wireless.5.parent=radio0\nwireless.5.authmode=0\nwireless.5.hide_ssid=false\n"
+			local _, vap_table = inform._parse_wifi_system_cfg(sys_cfg)
+			assert_eq(#vap_table, 1, "one vap")
+			assert_eq(vap_table[1].security, "owe", "OWE akm -> owe, not open")
+			assert_nil(vap_table[1].owe_transition, "no transition without a partner")
+		end
+	},
+	{
+		name = "inform packet: an OWE transition pair collapses into one owe_transition vap",
+		fn = function()
+			-- Captured on 10.4.57 (2026-09-27), trimmed to one radio: the open
+			-- half and the hidden OWE half share the SSID and name each other
+			-- in owe_devname. OpenWrt builds both BSSes from one section, and
+			-- two sections on one radio with one SSID would collapse anyway.
+			local sys_cfg = "aaa.5.devname=ath4\naaa.5.ssid=ouf-owe\naaa.5.hide_ssid=false\n"
+				.. "aaa.5.id=6ab8d43fc18fc00c5f8f6756\naaa.5.owe_devname=ath6\n"
+				.. "wireless.5.devname=ath4\nwireless.5.ssid=ouf-owe\n"
+				.. "wireless.5.parent=radio0\nwireless.5.authmode=0\nwireless.5.hide_ssid=false\n"
+				.. "aaa.7.devname=ath6\naaa.7.ssid=ouf-owe\naaa.7.hide_ssid=true\n"
+				.. "aaa.7.id=6ab8d43fc18fc00c5f8f6756\naaa.7.owe_devname=ath4\n"
+				.. "aaa.7.wpa.key.1.mgmt=OWE\n"
+				.. "wireless.7.devname=ath6\nwireless.7.ssid=ouf-owe\n"
+				.. "wireless.7.parent=radio0\nwireless.7.authmode=0\nwireless.7.hide_ssid=true\n"
+			local _, vap_table = inform._parse_wifi_system_cfg(sys_cfg)
+			assert_eq(#vap_table, 1, "the hidden OWE half is not a vap of its own")
+			local v = vap_table[1]
+			assert_eq(v.security, "owe", "the open half carries the WLAN as owe")
+			assert_true(v.owe_transition, "marked for owe_transition")
+			assert_false(v.hide_ssid, "the visible half's hide_ssid, not the hidden one's")
+			assert_eq(v.wlanconf_id, "6ab8d43fc18fc00c5f8f6756", "id kept")
+		end
+	},
+	{
+		name = "inform packet: owe_devname pointing at a non-OWE vap is not a transition",
+		fn = function()
+			-- Only a partner that really is OWE makes a pair. Anything else
+			-- stays as the wire says, rather than silently dropping a WLAN.
+			local sys_cfg = "aaa.1.devname=ath0\naaa.1.ssid=a\naaa.1.owe_devname=ath1\n"
+				.. "wireless.1.ssid=a\nwireless.1.parent=radio0\n"
+				.. "aaa.2.devname=ath1\naaa.2.ssid=b\n"
+				.. "wireless.2.ssid=b\nwireless.2.parent=radio0\n"
+			local _, vap_table = inform._parse_wifi_system_cfg(sys_cfg)
+			assert_eq(#vap_table, 2, "both kept")
+			assert_eq(vap_table[1].security, "open", "still open")
+			assert_nil(vap_table[1].owe_transition, "no transition")
+		end
+	},
+	{
 		name = "inform packet: _parse_wifi_system_cfg wpa=2 without any key.mgmt stays wpa2",
 		fn = function()
 			local sys_cfg = "aaa.1.ssid=openuf-test\naaa.1.wpa=2\n"

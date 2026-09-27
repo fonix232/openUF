@@ -83,6 +83,9 @@ end
 
 -- Inject a mock ucihelper so build_json's radio/vap/stats wiring can be
 -- exercised without a real UCI environment.
+-- Set by a test to replace the per-VAP netdev resolution below for one build.
+local ifnames_override
+
 local function inject_ucihelper()
 	inform._ucihelper = {
 		get_radio_table = function()
@@ -114,11 +117,12 @@ local function inject_ucihelper()
 		-- that ignored the ssid would happily pass a build that hands every
 		-- vap on a radio the first vap's clients, which is the live bug this
 		-- guards.
-		get_ifname_for_vap = function(radio, ssid)
-			if radio ~= "radio0" then return nil end
-			if ssid == "test" then return "wlan0" end
-			if ssid == "guest" then return "wlan0-1" end
-			return nil
+		get_ifnames_for_vap = function(radio, ssid)
+			if ifnames_override then return ifnames_override(radio, ssid) end
+			if radio ~= "radio0" then return {} end
+			if ssid == "test" then return {"wlan0"} end
+			if ssid == "guest" then return {"wlan0-1"} end
+			return {}
 		end,
 	}
 end
@@ -611,6 +615,37 @@ return {
 			assert_eq(rs.wifi_tx_dropped, vap.wifi_tx_dropped, "and their drops")
 			-- The per-station field this aggregates must still be there.
 			assert_not_nil(vap.sta_table[1].wifi_tx_attempts, "per-station copy kept")
+		end
+	},
+	{
+		name = "inform json: an OWE transition vap reports the clients of both its BSSes",
+		fn = function()
+			-- Transition mode is one section and two netdevs: OWE-capable
+			-- clients sit on the hidden OWE BSS, the rest on the open one.
+			local orig_sta = inform._sysinfo.sta_table
+			inform._sysinfo.sta_table = function(ifname)
+				if ifname == "wlan0" then
+					return {{mac = "aa:bb:cc:dd:ee:01", signal = -50, tx_packets = 1}}
+				end
+				if ifname == "wlan0-2" then
+					return {{mac = "aa:bb:cc:dd:ee:02", signal = -60, tx_packets = 1}}
+				end
+				return {}
+			end
+			ifnames_override = function(radio, ssid)
+				if radio == "radio0" and ssid == "test" then return {"wlan0", "wlan0-2"} end
+				return {}
+			end
+			local ok, err = pcall(function()
+				local d = build({with_uci = true, with_clients = true})
+				local vap
+				for _, v in ipairs(d.vap_table) do if v.essid == "test" then vap = v end end
+				assert_not_nil(vap, "fixture sanity: the vap exists")
+				assert_eq(vap.num_sta, 2, "one client per BSS, both counted")
+				assert_eq(#vap.sta_table, 2, "and both listed")
+			end)
+			inform._sysinfo.sta_table, ifnames_override = orig_sta, nil
+			if not ok then error(err, 0) end
 		end
 	},
 	{
@@ -1341,7 +1376,7 @@ return {
 		end
 	},
 	{
-		name = "inform json: radio_table carries radio_caps2 bits 0x1 (WPA3) and 0x2 (WPA3 FT)",
+		name = "inform json: radio_table carries radio_caps2 bits 0x1 (WPA3), 0x2 (WPA3 FT), 0x8 (OWE)",
 		fn = function()
 			-- This bit is the ONLY thing that makes the controller provision
 			-- WPA3/SAE to a device. Traced through the 10.4.57 bytecode:
@@ -1363,7 +1398,9 @@ return {
 			-- the bit on a build whose hostapd cannot do SAE would make the
 			-- controller push a config the radio then fails to start.
 			local prev = inform._sysinfo._sae_supported_cache
+			local prev_owe = inform._sysinfo._owe_supported_cache
 			inform._sysinfo._sae_supported_cache = true
+			inform._sysinfo._owe_supported_cache = false
 			local d = build({with_uci = true, with_radio_caps = true})
 			assert_eq(#d.radio_table > 0, true, "fixture produced radios")
 			for _, r in ipairs(d.radio_table) do
@@ -1384,7 +1421,23 @@ return {
 				assert_eq(r.radio_caps2, 0,
 					"no SAE: the bit is NOT claimed, so no unrunnable config is pushed")
 			end
+
+			-- Bit 0x8 is Enhanced Open, probed on its own: without it an OWE
+			-- WLAN is not provisioned at all, and a transition one goes out
+			-- as plain open (lab capture, 2026-09-27).
+			inform._sysinfo._sae_supported_cache = true
+			inform._sysinfo._owe_supported_cache = true
+			local d3 = build({with_uci = true, with_radio_caps = true})
+			for _, r in ipairs(d3.radio_table) do
+				assert_eq(r.radio_caps2, 0xB, "SAE + OWE: 0x1 | 0x2 | 0x8")
+			end
+			inform._sysinfo._sae_supported_cache = false
+			local d4 = build({with_uci = true, with_radio_caps = true})
+			for _, r in ipairs(d4.radio_table) do
+				assert_eq(r.radio_caps2, 0x8, "OWE does not depend on SAE")
+			end
 			inform._sysinfo._sae_supported_cache = prev
+			inform._sysinfo._owe_supported_cache = prev_owe
 		end
 	},
 	{

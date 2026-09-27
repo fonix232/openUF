@@ -1065,6 +1065,42 @@ return {
 		end
 	},
 	{
+		name = "sysinfo: owe_supported() needs both hostapd's OWE build and the ucode generator",
+		fn = function()
+			-- Claimed as radio_caps2 0x8: the controller then pushes Enhanced
+			-- Open WLANs, and a transition one as a pair openUF writes as one
+			-- owe_transition section. Both halves must be there.
+			local orig_r, orig_c = sysinfo._read_file, sysinfo._run_cmd
+			local cmds
+			local function probe(gen, hostapd_yes)
+				sysinfo._owe_supported_cache = nil
+				cmds = {}
+				sysinfo._read_file = function(path)
+					if path == "/usr/share/ucode/wifi/hostapd.uc" then return gen end
+					return nil
+				end
+				sysinfo._run_cmd = function(cmd)
+					cmds[#cmds + 1] = cmd
+					return hostapd_yes and "yes\n" or ""
+				end
+				return sysinfo.owe_supported()
+			end
+			local ok, err = pcall(function()
+				local gen = "let owe = interface.config.encryption == 'owe' && interface.config.owe_transition;"
+				assert_true(probe(gen, true), "generator + hostapd -vowe -> supported")
+				assert_true(cmds[1]:find("hostapd -vowe", 1, true) ~= nil, "asks hostapd itself")
+				assert_false(probe(gen, false), "hostapd built without OWE -> not claimed")
+				assert_false(probe(nil, true), "no ucode generator -> not claimed")
+				assert_eq(#cmds, 0, "and hostapd is not even asked")
+				assert_false(probe("hostapd_set_bss_options", true),
+					"a generator without owe_transition cannot write transition mode")
+			end)
+			sysinfo._read_file, sysinfo._run_cmd = orig_r, orig_c
+			sysinfo._owe_supported_cache = nil
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "sysinfo: sae_supported() caches its answer",
 		fn = function()
 			local orig, reads = sysinfo._read_file, 0

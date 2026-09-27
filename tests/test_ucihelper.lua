@@ -115,8 +115,8 @@ local function with_ucihelper(fn)
 	local cmds = {}
 	local orig_uci, orig_popen, orig_read, orig_run =
 		ucihelper._uci, ucihelper._popen, ucihelper._read_file, ucihelper._run_cmd
-	local orig_bcf, orig_shaper, orig_ifname_vap =
-		ucihelper._bcfilter, ucihelper._shaper, ucihelper.get_ifname_for_vap
+	local orig_bcf, orig_shaper, orig_ifnames_vap =
+		ucihelper._bcfilter, ucihelper._shaper, ucihelper.get_ifnames_for_vap
 	ucihelper._uci = m.mock
 	ucihelper._popen = function() return "" end       -- no live ifname resolution in tests
 	-- Hardware capability probing is cached (it describes hardware); clear it
@@ -130,8 +130,8 @@ local function with_ucihelper(fn)
 	local ok, err = pcall(fn, m.db, cmds, m.commits)
 	ucihelper._uci, ucihelper._popen, ucihelper._read_file, ucihelper._run_cmd =
 		orig_uci, orig_popen, orig_read, orig_run
-	ucihelper._bcfilter, ucihelper._shaper, ucihelper.get_ifname_for_vap =
-		orig_bcf, orig_shaper, orig_ifname_vap
+	ucihelper._bcfilter, ucihelper._shaper, ucihelper.get_ifnames_for_vap =
+		orig_bcf, orig_shaper, orig_ifnames_vap
 	ucihelper._phy_caps_cache = nil
 	if not ok then error(err, 2) end
 end
@@ -1005,11 +1005,12 @@ return {
 			with_ucihelper(function(db)
 				local got
 				ucihelper._bcfilter = {reconcile = function(rules) got = rules end}
-				-- get_ifname_for_vap goes through _popen, stubbed to "" by the
+				-- get_ifnames_for_vap goes through _popen, stubbed to "" by the
 				-- harness, so resolve it directly here instead.
-				local orig = ucihelper.get_ifname_for_vap
-				ucihelper.get_ifname_for_vap = function(radio, ssid)
-					if radio == "radio0" and ssid == "corp" then return "wlan0" end
+				local orig = ucihelper.get_ifnames_for_vap
+				ucihelper.get_ifnames_for_vap = function(radio, ssid)
+					if radio == "radio0" and ssid == "corp" then return {"wlan0"} end
+					return {}
 				end
 				local resp = {
 					radio_table = {},
@@ -1020,7 +1021,7 @@ return {
 					},
 				}
 				ucihelper.apply_config(resp, nil)
-				ucihelper.get_ifname_for_vap = orig
+				ucihelper.get_ifnames_for_vap = orig
 				ucihelper._bcfilter = nil
 
 				local s = db.wireless.openuf_radio0_corp
@@ -1078,8 +1079,9 @@ return {
 				local bc, sh
 				ucihelper._bcfilter = {reconcile = function(r) bc = r end}
 				ucihelper._shaper   = {reconcile = function(r) sh = r end}
-				ucihelper.get_ifname_for_vap = function(radio, ssid)
-					if radio == "radio0" and ssid == "corp" then return "wlan0" end
+				ucihelper.get_ifnames_for_vap = function(radio, ssid)
+					if radio == "radio0" and ssid == "corp" then return {"wlan0"} end
+					return {}
 				end
 
 				local n = ucihelper.reapply_runtime_rules()
@@ -1116,7 +1118,7 @@ return {
 				local bc, sh
 				ucihelper._bcfilter = {reconcile = function(r) bc = r end}
 				ucihelper._shaper   = {reconcile = function(r) sh = r end}
-				ucihelper.get_ifname_for_vap = function() return "wlan0" end
+				ucihelper.get_ifnames_for_vap = function() return {"wlan0"} end
 
 				assert_eq(ucihelper.reapply_runtime_rules(), 0, "neither section qualifies")
 				-- Still reconciled, with nothing: each rebuilds from scratch, so
@@ -1141,7 +1143,7 @@ return {
 				ucihelper._shaper   = {reconcile = function() end}
 				-- Radio down, wifi not up yet, no ubus: all ordinary, and a
 				-- rule with a nil ifname would be worse than no rule.
-				ucihelper.get_ifname_for_vap = function() return nil end
+				ucihelper.get_ifnames_for_vap = function() return {} end
 				assert_eq(ucihelper.reapply_runtime_rules(), 0, "unresolvable vap is skipped")
 				assert_eq(#bc, 0, "no rule is built without a netdev name")
 			end)
@@ -1191,9 +1193,10 @@ return {
 			with_ucihelper(function(db)
 				local got
 				ucihelper._shaper = {reconcile = function(rules) got = rules end}
-				ucihelper.get_ifname_for_vap = function(radio, ssid)
-					if ssid == "capped" then return "wlan0" end
-					if ssid == "uncapped" then return "wlan1" end
+				ucihelper.get_ifnames_for_vap = function(radio, ssid)
+					if ssid == "capped" then return {"wlan0"} end
+					if ssid == "uncapped" then return {"wlan1"} end
+					return {}
 				end
 				local resp = {
 					radio_table = {},
@@ -3268,6 +3271,66 @@ return {
 			ucihelper._popen = function() return "" end
 			assert_eq(#ucihelper.ap_ifnames(), 0, "no ubus answer -> empty")
 			ucihelper._popen = orig
+		end
+	},
+	{
+		name = "ucihelper: apply_config writes an OWE WLAN as encryption=owe, transition as owe_transition=1",
+		fn = function()
+			with_ucihelper(function(db)
+				ucihelper.apply_config({
+					radio_table = {},
+					vap_table = {
+						{ssid = "plain", radio = "radio0", security = "owe"},
+						{ssid = "trans", radio = "radio0", security = "owe",
+						 owe_transition = true, x_passphrase = "ignored"},
+					},
+				}, nil)
+				local p = db.wireless.openuf_radio0_plain
+				assert_eq(p.encryption, "owe", "OWE, not an open network")
+				assert_nil(p.owe_transition, "pure OWE has no open BSS beside it")
+				local t = db.wireless.openuf_radio0_trans
+				assert_eq(t.encryption, "owe", "transition is written as owe too")
+				assert_eq(t.owe_transition, "1", "the generator adds the open BSS")
+				assert_nil(t.key, "OWE has no key")
+			end)
+		end
+	},
+	{
+		name = "ucihelper: get_ifnames_for_vap adds an OWE transition section's open BSS from hostapd",
+		fn = function()
+			local orig = ucihelper._popen
+			local calls = {}
+			ucihelper._popen = function(cmd)
+				calls[#calls + 1] = cmd
+				if cmd:find("network.wireless status", 1, true) then
+					return '{"radio0":{"interfaces":['
+						.. '{"ifname":"phy0-ap0","config":{"ssid":"corp"}},'
+						.. '{"ifname":"phy0-ap1","config":{"ssid":"cafe","encryption":"owe","owe_transition":true}}]}}'
+				end
+				if cmd:find('"iface":"phy0-ap1"', 1, true) then
+					return '{"wpa":"2","wpa_key_mgmt":"OWE","owe_transition_ifname":"phy0-ap2"}'
+				end
+				return ""
+			end
+			ucihelper.end_pass()
+			local ok, err = pcall(function()
+				local cafe = ucihelper.get_ifnames_for_vap("radio0", "cafe")
+				assert_eq(table.concat(cafe, ","), "phy0-ap1,phy0-ap2",
+					"the section's own (OWE) netdev, then the open BSS")
+				calls = {}
+				local corp = ucihelper.get_ifnames_for_vap("radio0", "corp")
+				assert_eq(table.concat(corp, ","), "phy0-ap0", "an ordinary VAP has one")
+				for _, c in ipairs(calls) do
+					assert_true(c:find("bss_info", 1, true) == nil,
+						"and costs no hostapd call")
+				end
+				assert_eq(#ucihelper.get_ifnames_for_vap("radio0", "nosuch"), 0,
+					"an unresolvable VAP has none")
+				assert_eq(table.concat(ucihelper.ap_ifnames(), ","),
+					"phy0-ap0,phy0-ap1,phy0-ap2", "l2guard covers the open BSS too")
+			end)
+			ucihelper._popen = orig
+			if not ok then error(err, 0) end
 		end
 	},
 }
