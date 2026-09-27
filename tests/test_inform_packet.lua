@@ -2077,6 +2077,53 @@ return {
 		end
 	},
 	{
+		-- Replay of a real 10.4.57 push (lab, 2026-09-27) for a WPA3-only
+		-- WLAN with Fast Roaming on, once radio_caps2 claims bit 0x2. Before
+		-- the bit, the same WLAN arrived with ft.status=disabled and
+		-- wpa3.ft.status=disabled, so no 802.11r reached hostapd at all.
+		name = "inform packet: captured WPA3-only + FT push reaches UCI as sae + ieee80211r",
+		fn = function()
+			local function run(ft)
+				local ucihelper, db = new_apply_env()
+				local sys_cfg = table.concat({
+					"aaa.1.bss_transition=enabled", "aaa.1.devname=ath0",
+					"aaa.1.ft.status=" .. ft, "aaa.1.id=6ab8c7ecc18fc00c5f8f66ed",
+					"aaa.1.pmf.cipher=AES-128-CMAC", "aaa.1.pmf.mode=2",
+					"aaa.1.pmf.status=enabled",
+					"aaa.1.sae.psk.1.mac=ff:ff:ff:ff:ff:ff",
+					"aaa.1.sae.psk.1.psk=openufopenuf",
+					"aaa.1.ssid=ouf-w3only", "aaa.1.status=enabled",
+					"aaa.1.wpa.1.pairwise=CCMP", "aaa.1.wpa.key.1.mgmt=SAE",
+					"aaa.1.wpa.psk=openufopenuf",
+					"aaa.1.wpa3.ft.status=" .. ft, "aaa.1.wpa3.support=enabled",
+					"aaa.1.wpa3.transition=disabled", "aaa.1.wpa=2",
+					"wireless.1.devname=ath0", "wireless.1.parent=radio0",
+					"wireless.1.ssid=ouf-w3only", "wireless.1.status=enabled",
+					"wireless.1.usage=user",
+					"radio.1.phyname=radio0",
+				}, "\n") .. "\n"
+				local rt, vt = inform._parse_wifi_system_cfg(sys_cfg)
+				ucihelper.apply_config({radio_table = rt, vap_table = vt}, nil)
+				local section = "openuf_radio0_ouf_w3only_"
+					.. ucihelper.derive_mobility_domain("ouf-w3only")
+				return db.wireless and db.wireless[section], ucihelper
+			end
+
+			local s, ucihelper = run("enabled")
+			assert_true(s ~= nil, "vap section created")
+			assert_eq(s.encryption, "sae", "WPA3-only -> sae, not sae-mixed")
+			assert_eq(s.ieee80211w, "2", "pmf.mode=2 -> ieee80211w required")
+			assert_eq(s.ieee80211r, "1", "ft.status/wpa3.ft.status enabled -> 802.11r")
+			assert_eq(s.mobility_domain, ucihelper.derive_mobility_domain("ouf-w3only"),
+				"mobility domain derived from the SSID")
+
+			local s2 = run("disabled")
+			assert_true(s2 ~= nil, "vap section created")
+			assert_true(s2.ieee80211r ~= "1",
+				"the pre-0x2 push (both FT keys disabled) leaves 802.11r off")
+		end
+	},
+	{
 		name = "inform packet: wpa3.support without transition is WPA3-only",
 		fn = function()
 			local sys_cfg = "aaa.1.ssid=openuf-test\naaa.1.wpa=2\n"

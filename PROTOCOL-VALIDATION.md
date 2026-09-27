@@ -629,7 +629,7 @@ an **absent block means disabled** — there is generally no explicit `status=fa
 | `pmf.status` / `pmf.mode` | 802.11w. `mode` is `0`\|`1`\|`2` (disabled/optional/required), mapping 1:1 onto hostapd's `ieee80211w`. On this madwifi model, **WPA2/WPA3 transition intent is carried entirely by these fields** — dropping them silently collapses mixed mode to plain WPA2. |
 | `pmf.cipher` | `AES-128-CMAC`. Not translated — hostapd's default BIP group-mgmt cipher already is this. |
 | `ft.status` | Fast Roaming (802.11r) for the WLAN. No `mobility_domain`/`r0kh`/`r1kh` on the wire — the controller computes and syncs those internally across the site; `ucihelper.derive_mobility_domain()` fills the gap locally. |
-| `wpa3.ft.status` | FT for the **SAE akm alone**, a separate toggle from `ft.status`, from the wlanconf's `isWpa3SaeFastRoamingEnabled()`. Emitted unconditionally on any SAE push (the first key `OXMua` writes) and absent otherwise. OpenWrt has one `ieee80211r` switch feeding hostapd's `key_mgmt`, and on `sae-mixed` it yields FT-PSK **and** FT-SAE together, so openUF enables FT if *either* toggle asks and logs the disagreement. |
+| `wpa3.ft.status` | FT for the **SAE akm alone**, a separate toggle from `ft.status`, from the wlanconf's `isWpa3SaeFastRoamingEnabled()`. Emitted unconditionally on any SAE push (the first key `OXMua` writes) and absent otherwise. OpenWrt has one `ieee80211r` switch feeding hostapd's `key_mgmt`, and on `sae-mixed` it yields FT-PSK **and** FT-SAE together, so openUF enables FT if *either* toggle asks and logs the disagreement. Forced to `disabled` unless the radio claims `radio_caps2` bit `0x2` (see [Capability bitmasks](#capability-bitmasks)). |
 | `bss_transition` | 802.11v. Present on every band's block, flips independently of Fast Roaming. |
 | `br.devname` | `br0` untagged, **`br0.<vlan>`** when the WLAN is assigned to a VLAN network — CONFIRMED live 2026-08-01, the first capture of a tagged WLAN on real hardware. This suffix is the *only* per-WLAN VLAN signal; there is no `network_table`/`networkconf_id` join anywhere in the wire format. |
 | `sae.anti_clogging` / `sae.sync` | Plain integers, emitted only when > 0 **and** the WLAN is genuinely WPA3 (see below). |
@@ -1465,17 +1465,40 @@ anything the device sends, and are excluded. **This table comes from decompiled 
 none of the unclaimed rows has been checked on the wire.** openUF sends no `wifi_caps`,
 `fw2_caps`, `fw3_caps` or `hw_caps` field at all, so each of those reads as 0.
 
-Gates that drop or weaken a feature openUF could implement:
+Gates that drop or weaken a feature openUF could implement (claimed ones are listed after the table):
 
 | Field | Bit | Predicate | Effect while unclaimed |
 |---|---|---|---|
-| `radio_caps2` | `0x2` | radio DTO, FT-with-WPA3 | On an SAE WLAN, `wpa3_fast_roaming` is forced off, so `aaa.<n>.wpa3.ft.status` is always `disabled`. On a WPA3-only WLAN (no transition) `fast_roaming_enabled` is forced off too, and no 802.11r goes out at all |
 | `radio_caps2` | `0x8` | radio DTO, OWE | An Enhanced Open WLAN is **not provisioned** ("WPA3-OWE cannot provision"). With OWE transition on it goes out as plain open |
 | `wifi_caps` | `0x100000` | `supportWpaPpsk()` | A WLAN with Private Pre-Shared Keys, or UID IoT, is **skipped** ("PPSK is not supported … will be skipped") |
 | `wifi_caps` | `0x4` / `0x8` | `supportBandsteering()` / `supportVapBasedBandsteering()` | The device-level `bandsteering.status`/`mode` section and its per-VAP pairs (`bandsteering.<n>.vap.1.devname`/`vap.2.devname`) are never emitted. This is where the device's `bandsteering_mode` goes. Per-WLAN `no2ghz_oui` is independent of it |
 | `wifi_caps` | `0x20` | `supportATFConfig()` | `atf.status`/`atf.mode` (Airtime Fairness) is never emitted |
 | `fw_caps` | `0x1000` | `supportMultiBlockWlanSchedule()` | A WLAN Schedule with several blocks per day goes out as one `wireless.<n>.schedule_<day>` key per block, all under the same name, so the last one wins. With the bit set they become `schedule_<day>.<i>` |
 | `fw_caps` | `0x400000` | `supportWlanScheduleInvert()` | The controller inverts a schedule itself instead of sending `schedule_invert` |
+
+**`radio_caps2` `0x2` (FT with WPA3): CLAIMED, confirmed in the lab 2026-09-27.**
+Predicate: radio DTO `ytajcagDggPuTaL()`, tested in `plVcFpIybmrpXclX`. Without it
+the controller forces `wpa3_fast_roaming` off on every SAE WLAN, and on a WPA3-only one
+(no transition) it forces `fast_roaming_enabled` off too. openUF now sends
+`radio_caps2 = 0x3` on each SAE-capable radio. The same gate exists on 10.4.57: on the
+lab controller two WLANs, both with Fast Roaming and WPA3 fast roaming on (one WPA3-only,
+one WPA2/WPA3), went out as follows across the switch from `0x1` to `0x3`:
+
+```
+                          radio_caps2=0x1     radio_caps2=0x3
+WPA3-only  ft.status      disabled            enabled
+WPA3-only  wpa3.ft.status disabled            enabled
+WPA2/WPA3  ft.status      enabled             enabled
+WPA2/WPA3  wpa3.ft.status disabled            enabled
+```
+
+Those keys, on both radios' copies of each WLAN (six lines), were the whole diff across
+474 `system_cfg` lines. So before this change a WPA3-only WLAN never got 802.11r from
+openUF. A mixed WLAN already had it, because openUF enables FT when either toggle asks.
+The captured WPA3-only block replays through `_parse_wifi_system_cfg` + `apply_config` to
+`encryption=sae`, `ieee80211w=2`, `ieee80211r=1` (unit test). The lab AP claims SAE through
+a stub `/usr/share/ucode/wifi/ap.uc` in its Dockerfile, since `sysinfo.sae_supported()`
+reads that file. Hardware tier (FT-SAE roam on a WPA3-only WLAN): not yet run.
 
 The two schedule bits are not claimed because openUF implements no WLAN Schedule: the
 `schedule_*` keys are emitted whenever a WLAN has a schedule, regardless of any bit, and
@@ -1533,6 +1556,7 @@ through 0/3/4/5/6/7/15/31/255 only changed *which* of two near-identical errors 
 | `disabled`, `builtin_antenna`, `builtin_ant_gain`, `max_txpower` | |
 | `nss`, `is_11ac`, `is_11ax`, `is_11be`, `has_dfs`, `has_fccdfs`, `has_ht160`, `has_eht240`, `has_eht320` | Read directly off each entry by `PGOcbDWlbnYQdFW`'s `copyAttrsIfPresent`, **independent of `radio_caps`**. Derived by `sysinfo.radio_caps()` from `iw phy phyN info`. |
 | **`radio_caps`** | A separate **integer bitmask**, not `nss`. See below. |
+| **`radio_caps2`** | `0x3` on an SAE-capable radio (`0x1` WPA3, `0x2` FT with WPA3), `0` otherwise. See [Capability bitmasks](#capability-bitmasks). |
 | `min_rssi`, `min_rssi_enabled` | `min_rssi` is **dBm** on the wire (converted from the raw `stamgr` units using the live noise floor) |
 | **`athstats`** | Nested `{cu_total, cu_self_rx, cu_self_tx, cu_interf}`. See below. |
 
@@ -1996,7 +2020,8 @@ be dropped from the device altogether with that one server-side log line.
 field-level trace. openUF used to send `radio_caps` (the MIMO column:
 `0x8`/`0x10`/`0x20`/`0x4000000` for 1x1…4x4) and **no `radio_caps2` at all**, so
 the bit was clear and every WPA3 WLAN was downgraded on every openUF device.
-That is fixed: `radio_caps2 = 0x1` now ships on each SAE-capable radio.
+That is fixed: `radio_caps2 = 0x1` now ships on each SAE-capable radio (`0x3` since
+2026-09-27, adding FT with WPA3; see [Capability bitmasks](#capability-bitmasks)).
 
 The emission side is gated separately, on the WLAN alone
 (`com.ubnt.service.config.j.rYtJfMBbtgWvku`: `isWpa3() || band == 6E`), and

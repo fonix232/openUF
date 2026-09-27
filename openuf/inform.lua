@@ -844,8 +844,15 @@ function M.build_json(st, cfg, ufhw)
 					-- fails the bit test, so every WPA3 WLAN was downgraded.
 					-- Gated on real SAE support for the same reason as
 					-- wpa3_supported: never claim what hostapd cannot run.
+					--
+					-- Bit 0x2 is FT with WPA3 (10.6.101: radio DTO
+					-- ytajcagDggPuTaL(), tested in the per-radio security
+					-- filter plVcFpIybmrpXclX). Without it the controller
+					-- forces wpa3_fast_roaming off on every SAE WLAN, and on
+					-- a WPA3-only one fast_roaming_enabled too, so no 802.11r
+					-- goes out. hostapd runs FT-SAE wherever it runs SAE.
 					if M._sysinfo.sae_supported and M._sysinfo.sae_supported() then
-						radio.radio_caps2 = 0x1
+						radio.radio_caps2 = 0x3
 					else
 						radio.radio_caps2 = 0
 					end

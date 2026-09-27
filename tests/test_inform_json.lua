@@ -1341,7 +1341,7 @@ return {
 		end
 	},
 	{
-		name = "inform json: radio_table carries radio_caps2 bit 0x1 -- the WPA3 gate",
+		name = "inform json: radio_table carries radio_caps2 bits 0x1 (WPA3) and 0x2 (WPA3 FT)",
 		fn = function()
 			-- This bit is the ONLY thing that makes the controller provision
 			-- WPA3/SAE to a device. Traced through the 10.4.57 bytecode:
@@ -1367,8 +1367,15 @@ return {
 			local d = build({with_uci = true, with_radio_caps = true})
 			assert_eq(#d.radio_table > 0, true, "fixture produced radios")
 			for _, r in ipairs(d.radio_table) do
-				assert_eq(r.radio_caps2, 0x1,
+				assert_eq(r.radio_caps2 % 2, 1,
 					"SAE-capable: radio_caps2 bit 0x1 set, so the controller provisions WPA3")
+				-- Bit 0x2 is FT with WPA3. Without it the controller forces
+				-- wpa3.ft.status=disabled on every SAE WLAN, and ft.status too
+				-- on WPA3-only ones (lab capture, 2026-09-27).
+				assert_eq(math.floor(r.radio_caps2 / 2) % 2, 1,
+					"SAE-capable: radio_caps2 bit 0x2 set, so 802.11r survives on WPA3")
+				assert_eq(r.radio_caps2, 0x3,
+					"no other radio_caps2 bit claimed: each one needs an implementation")
 			end
 
 			inform._sysinfo._sae_supported_cache = false
