@@ -11,7 +11,7 @@ decompiling the controller's own Java bytecode and React bundles.
 **Where this document and the third-party references disagree, this document wins.**
 In particular, go-unifi models the controller's *admin REST API*, which is a different
 surface from the inform wire protocol — several fields that exist there
-(`bandsteering_mode`, `dtim_mode`) have no counterpart on the wire.
+(`dtim_mode`) have no counterpart on the wire. `bandsteering_mode` does have one, but only for a device that claims `wifi_caps` bit `0x4`, which openUF does not (see [Capability bitmasks](#capability-bitmasks)).
 
 This is a **reference for the confirmed current state**, not a lab journal. Superseded
 hypotheses and the investigation trails that produced these facts have been removed;
@@ -1453,6 +1453,51 @@ by the controller's own startup log: `firmware[U6IW] new version (6.8.2.15592) i
 `0x20` are claimed; the mask also gates Mesh MLO, quick/neighbour scan, roam topology stats,
 Green AP, ACS-DFS and the multicast suppressor, which openUF does not implement and must not
 claim.
+
+#### Full sweep of the capability gates (controller 10.6.101, 2026-09-27)
+
+Every `has*Capability` predicate on `com.ubnt.data.dChnXOlwHH` (the `Device` class) and
+every `radio_caps`/`radio_caps2` bit test on the radio DTO `com.ubnt.i.g.e.DXufmCC` was
+traced to its callers, mainly the AP config generator `com.ubnt.service.config.oHgVgY` and
+the per-radio WLAN security filter `com.ubnt.service.config.ubntconf.plVcFpIybmrpXclX`.
+Calls on `com.ubnt.i.g.OZQcnZuvnRweLFaaG` in oHgVgY check the **model registry**, not
+anything the device sends, and are excluded. **This table comes from decompiled code only:
+none of the unclaimed rows has been checked on the wire.** openUF sends no `wifi_caps`,
+`fw2_caps`, `fw3_caps` or `hw_caps` field at all, so each of those reads as 0.
+
+Gates that drop or weaken a feature openUF could implement:
+
+| Field | Bit | Predicate | Effect while unclaimed |
+|---|---|---|---|
+| `radio_caps2` | `0x2` | radio DTO, FT-with-WPA3 | On an SAE WLAN, `wpa3_fast_roaming` is forced off, so `aaa.<n>.wpa3.ft.status` is always `disabled`. On a WPA3-only WLAN (no transition) `fast_roaming_enabled` is forced off too, and no 802.11r goes out at all |
+| `radio_caps2` | `0x8` | radio DTO, OWE | An Enhanced Open WLAN is **not provisioned** ("WPA3-OWE cannot provision"). With OWE transition on it goes out as plain open |
+| `wifi_caps` | `0x100000` | `supportWpaPpsk()` | A WLAN with Private Pre-Shared Keys, or UID IoT, is **skipped** ("PPSK is not supported … will be skipped") |
+| `wifi_caps` | `0x4` / `0x8` | `supportBandsteering()` / `supportVapBasedBandsteering()` | The device-level `bandsteering.status`/`mode` section and its per-VAP pairs (`bandsteering.<n>.vap.1.devname`/`vap.2.devname`) are never emitted. This is where the device's `bandsteering_mode` goes. Per-WLAN `no2ghz_oui` is independent of it |
+| `wifi_caps` | `0x20` | `supportATFConfig()` | `atf.status`/`atf.mode` (Airtime Fairness) is never emitted |
+| `fw_caps` | `0x1000` | `supportMultiBlockWlanSchedule()` | A WLAN Schedule with several blocks per day goes out as one `wireless.<n>.schedule_<day>` key per block, all under the same name, so the last one wins. With the bit set they become `schedule_<day>.<i>` |
+| `fw_caps` | `0x400000` | `supportWlanScheduleInvert()` | The controller inverts a schedule itself instead of sending `schedule_invert` |
+
+The two schedule bits are not claimed because openUF implements no WLAN Schedule: the
+`schedule_*` keys are emitted whenever a WLAN has a schedule, regardless of any bit, and
+openUF parses none of them. Claim both when the feature is built.
+
+Gated, and not to be claimed:
+- **No OpenWrt equivalent, or out of scope:**
+  - `radio_caps2` `0x4`: WPA3-Enterprise-192.
+  - `radio_caps2` `0x400` and `wifi_caps2` `0x1`/`0x4000`/`0x8000`: MLO and Mesh-MLO.
+  - `radio_caps` `0x20000`: `radio.<n>.hard_noisefloor.*` / sensitivity level, a QCA RX-sensitivity setting.
+  - `wifi_caps` `0x1`/`0x80`/`0x800`/`0x4000`/`0x8000`: vwire, mesh, meshv3, multi-vport and Element.
+  - `wifi_caps` `0x10` spectrum scan, `0x2000` "open hostapd", `0x40` `bga_filter`, `0x4000000` low-performance mode.
+  - `wifi_caps2` `0x4` Green AP, `0x10` ACS-DFS, `0x80` quick scan, `0x200` neighbour-in-scan, `0x20000` (an AP-group check, purpose unclear).
+  - `fw_caps` `0x800000` Hotspot 2.0 (such a WLAN is skipped without it) and `0x20000000` RADIUS `filter_id`.
+  - `fw2_caps` `0x80000` RadSec, `0x20` `port_table.mac_table_ipv6`, `0x80` device command retry.
+- **Multicast Suppressor** (`wifi_caps2` `0x400000` → `wireless.<n>.multicast.suppressor`):
+  could be enforced in nft like the Multicast/Broadcast Blocker, but it is the same feature
+  class that breaks casting. Low priority.
+- **No callers in the controller**, so a bit does nothing: `supportMinRateCtrl` (`wifi_caps`
+  `0x200`), `supportMultiAclList` (`0x400`), `supportRadiusMacAuth` (`0x1000`),
+  `supportHideChWidth` (`0x10000`), `supportZeroHandoff` (`0x2`), `supportLockAp`
+  (`0x1000000`), `supportsRoamTopologyStats` (`wifi_caps2` `0x2000`).
 
 **The per-port VLAN validator** (`com.ubnt.ace.api.e.VVyiC`, reachable only once
 `hasQCASwitch()` is true):
