@@ -90,20 +90,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The release the feed is built for.
+          # The release the feed is built for. No switch ports: on GitHub's
+          # runners this image's netifd stops answering once add-ports.sh
+          # reloads the network, and every page's network calls time out.
           - target: "25.12"
             image: openwrt/rootfs:x86-64-25.12.5
             luci: openwrt-25.12
+            ports: "0"
           # SNAPSHOT ships without LuCI: run.sh installs it from the
           # snapshot feed, and the extras come from LuCI master.
           - target: SNAPSHOT
             image: openwrt/rootfs:x86-64
             luci: master
+            ports: "1"
           # luci-mod-dashboard before its rework (LuCI of 8 September
           # 2026), as 24.10 and older 25.12 feeds still ship it.
           - target: classic dashboard
             image: openwrt/rootfs:x86-64-25.12.5
             luci: a8c110bed82375b69eb3881b2e54e617520e8c7d
+            ports: "0"
     steps:
       - uses: actions/checkout@v4
 
@@ -125,6 +130,7 @@ jobs:
         env:
           OPENWRT_IMAGE: ${{ matrix.image }}
           LUCI_BRANCH: ${{ matrix.luci }}
+          UF_PORTS: ${{ matrix.ports }}
         run: |
           UF_APK=$(ls out/luci-theme-openuf-*.apk | head -n 1) \
           NODE_PATH="$RUNNER_TEMP/pw/node_modules" sh luci-theme-openuf/test/run.sh

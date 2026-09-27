@@ -189,11 +189,16 @@ are checked too (`test/compat.cjs`; `UF_COMPAT=0` skips it).
 
 CI runs it three times, on what devices run:
 
-| Target | `OPENWRT_IMAGE` | `LUCI_BRANCH` |
-|---|---|---|
-| 25.12, the release the feed is built for | `openwrt/rootfs:x86-64-25.12.5` | `openwrt-25.12` |
-| SNAPSHOT (no LuCI in the image; `run.sh` installs it from the snapshot feed, which needs internet) | `openwrt/rootfs:x86-64` | `master` |
-| luci-mod-dashboard before its rework (September 2026), as 24.10 and older 25.12 feeds ship it | `openwrt/rootfs:x86-64-25.12.5` | `a8c110bed82375b69eb3881b2e54e617520e8c7d` |
+| Target | `OPENWRT_IMAGE` | `LUCI_BRANCH` | `UF_PORTS` |
+|---|---|---|---|
+| 25.12, the release the feed is built for | `openwrt/rootfs:x86-64-25.12.5` | `openwrt-25.12` | `0` |
+| SNAPSHOT (no LuCI in the image; `run.sh` installs it from the snapshot feed, which needs internet) | `openwrt/rootfs:x86-64` | `master` | `1` |
+| luci-mod-dashboard before its rework (September 2026), as 24.10 and older 25.12 feeds ship it | `openwrt/rootfs:x86-64-25.12.5` | `a8c110bed82375b69eb3881b2e54e617520e8c7d` | `0` |
+
+The port checks (the Port Manager, *Switch/VLAN config*) run on SNAPSHOT only:
+on GitHub's runners the 25.12 image's netifd stops answering once
+`add-ports.sh` reloads the network, and every page's network calls then time
+out. CI's runner user gets the ports through password-less `sudo`.
 
 `LUCI_BRANCH` takes a branch, a tag or a full commit id.
 
