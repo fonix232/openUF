@@ -39,8 +39,15 @@ done
 
 pid=$(docker inspect -f '{{.State.Pid}}' "$name")
 
+# Entering the namespace takes root: through sudo where it asks for no
+# password (GitHub's runners), which is how CI gets its ports.
+sudo=
+if [ "$(id -u)" != 0 ] && command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+	sudo="sudo -n"
+fi
+
 ns() {
-	nsenter -t "$pid" -n "$@"
+	$sudo nsenter -t "$pid" -n "$@"
 }
 
 if ! ns ip link show lo >/dev/null 2>&1; then

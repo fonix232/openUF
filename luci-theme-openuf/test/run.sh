@@ -14,7 +14,8 @@
 # the image (luci-mod-dashboard) are installed from LuCI's own sources, and a
 # two-radio wireless config gives the Wireless pages something to show.
 # Switch ports (lan1-lan4, wan) for the port panel are veth pairs made from
-# the host (test/add-ports.sh; needs root, nsenter and iproute2 here).
+# the host (test/add-ports.sh; needs root or password-less sudo, nsenter and
+# iproute2 here).
 #
 # Environment knobs:
 #   OPENWRT_IMAGE  image to test against      (openwrt/rootfs:x86-64-25.12.5)
