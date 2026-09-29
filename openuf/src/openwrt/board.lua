@@ -19,8 +19,11 @@
 	                the uplink sits in, else board.json's label MAC. NOT the
 	                uplink socket's own MAC, which on some boards (a Netgear
 	                WAX220's eth0) is random on every boot
-	  • LED         the first of status/power/system/run, preferring blue,
-	                white, green
+	  • LED         the board's status LED: the one diag.sh lights once boot
+	                is done (the device tree's led-running alias), else its
+	                boot LED, else the first of status/power/system/run by
+	                name, preferring blue, white, green. Locate blinks it;
+	                the controller's LED switch covers every LED (led.lua)
 
 	Both choices are kept: the layout in /etc/openuf/modelmap-auto.json once
 	the uplink could actually be DETECTED, the identity in
@@ -168,6 +171,20 @@ function M.derive(board, uplink_idx)
 	}, detected
 end
 
+-- The board's status LED as OpenWrt itself names it (leds.sh get_dt_led,
+-- which resolves the device tree's led-running/led-boot alias), if the
+-- kernel registered it; else `fallback`. Asked on every start rather than
+-- kept in the layout: it is a fact of the board, not a choice to pin.
+function M.status_led(fallback)
+	local have = {}
+	for n in M._sh("ls /sys/class/leds"):gmatch("%S+") do have[n] = true end
+	for _, role in ipairs({"running", "boot"}) do
+		local n = M._sh(". /lib/functions/leds.sh && get_dt_led " .. role):match("^%s*(%S+)%s*$")
+		if n and have[n] then return n end
+	end
+	return fallback
+end
+
 -- The device description the daemon works from: dev.conf (net, led) and
 -- dev.identity (the UniFi model presented).
 ---@return Dev
@@ -194,7 +211,7 @@ function M.describe()
 	for _, p in ipairs(layout.ports) do
 		dev.conf.net.ports[#dev.conf.net.ports + 1] = {idx = p.idx, ifname = p.ifname}
 	end
-	dev.conf.led = layout.led
+	dev.conf.led = M.status_led(layout.led)
 	return dev
 end
 

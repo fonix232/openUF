@@ -266,7 +266,7 @@ return {
 				state.save({
 					adopted = true, authkey = "f00d",
 					mac = "00:00:5e:00:53:16", led_enabled = false,
-					locating = true, locate_prev_trigger = "phy0tpt",
+					locating = true, led_scheme = 2,
 					ip_mode = "static", dsa_brlan_ports = {"lan1", "lan2"},
 					atf_enabled = false,
 				})
@@ -274,7 +274,7 @@ return {
 				assert_eq(st.mac, "00:00:5e:00:53:16", "identity mac survives")
 				assert_false(st.led_enabled, "led_enabled survives as false, not nil")
 				assert_true(st.locating, "locating survives")
-				assert_eq(st.locate_prev_trigger, "phy0tpt", "the LED's trigger survives")
+				assert_eq(st.led_scheme, 2, "the LED hand-back marker survives")
 				assert_eq(st.ip_mode, "static", "the static-vs-DHCP guard survives")
 				assert_eq(st.dsa_brlan_ports[2], "lan2", "the VLAN ledger survives")
 				assert_eq(st.atf_enabled, false, "a pushed ATF off survives as false, not nil")

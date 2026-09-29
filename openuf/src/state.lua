@@ -87,10 +87,13 @@ M.FIELDS = {
 	static_gateway            = "string",
 	static_dns                = "table",
 	-- Live kernel state, not UCI, so it is reapplied from here at startup the
-	-- way the blocked-client rules are.
+	-- way the blocked-client rules are. What the LEDs were doing before openUF
+	-- touched them is not kept here: it only holds until the next reboot, so
+	-- it lives in tmpfs (led.lua). led_scheme marks a device whose LEDs were
+	-- once driven by the single-LED scheme and have been handed back (2).
 	led_enabled               = "boolean",
 	locating                  = "boolean",
-	locate_prev_trigger       = "string",
+	led_scheme                = "number",
 	-- The per-port VLAN reversibility ledger: br-lan's port list exactly as
 	-- the board shipped it, before per-port VLAN moved any socket out of it.
 	-- Without it restore() has nothing to put back and the board keeps

@@ -38,6 +38,22 @@ local FIXED_IV = string.rep("\0", 16)
 crypto._random_bytes = function(n) return string.rep("\0", n) end
 
 -- Minimal state for packet building
+-- inform._led replaced by a recorder: calls as {fn, args...}. `baseline`
+-- is what load_baseline answers. Returns the calls and a restore function.
+local function led_recorder(baseline)
+	local calls, orig = {}, inform._led
+	local function rec(name, ret)
+		return function(...) calls[#calls + 1] = {name, ...}; return ret end
+	end
+	inform._led = {
+		set_enabled = rec("set_enabled", true), locate_start = rec("locate_start", true),
+		locate_stop = rec("locate_stop", true), reassert = rec("reassert", 0),
+		restore_status_leds = rec("restore_status_leds"),
+		load_baseline = function() return baseline end,
+	}
+	return calls, function() inform._led = orig end
+end
+
 local function sample_state(overrides)
 	local st = {
 		authkey    = state.DEFAULT_KEY,
@@ -400,31 +416,28 @@ return {
 		end
 	},
 	{
-		name = "inform packet: handle_response setparam sets st.led_enabled from mgmt_cfg",
+		name = "inform packet: led_enabled switches all of the board's LEDs",
 		fn = function()
-			local st = sample_state()
-			local resp = '{"_type":"setparam","mgmt_cfg":"mgmt_url=http://x:8080/inform\\nled_enabled=false\\n"}'
-			inform.handle_response(resp, st)
-			assert_false(st.led_enabled, "led_enabled set to false from mgmt_cfg")
-		end
-	},
-	{
-		name = "inform packet: handle_response setparam led_enabled drives led.set_enabled",
-		fn = function()
-			local st = sample_state()
-			local writes = {}
-			local orig = inform._led._write_file
-			inform._led._write_file = function(path, contents)
-				writes[#writes + 1] = {path = path, contents = contents}
-				return true
-			end
-			local cfg = {led = "/sys/class/leds/test"}
-			local resp = '{"_type":"setparam","mgmt_cfg":"mgmt_url=http://x:8080/inform\\nled_enabled=false\\n"}'
-			inform.handle_response(resp, st, cfg)
-			inform._led._write_file = orig
-			assert_eq(#writes, 2, "two sysfs writes")
-			assert_eq(writes[2].path, "/sys/class/leds/test/brightness", "brightness path")
-			assert_eq(writes[2].contents, "0", "brightness off for led_enabled=false")
+			local calls, done = led_recorder()
+			local ok, err = pcall(function()
+				local st = sample_state()
+				local cfg = {led = "power:blue"}
+				local resp = '{"_type":"setparam","mgmt_cfg":"mgmt_url=http://x:8080/inform\\nled_enabled=false\\n"}'
+				inform.handle_response(resp, st, cfg)
+				assert_false(st.led_enabled, "led_enabled set to false from mgmt_cfg")
+				assert_eq(calls[1][1], "set_enabled", "the board-wide switch")
+				assert_false(calls[1][2], "off")
+				assert_nil(calls[1][3], "no LED spared: nothing is locating")
+
+				st.locating = true
+				resp = '{"_type":"setparam","mgmt_cfg":"mgmt_url=http://x:8080/inform\\nled_enabled=true\\n"}'
+				inform.handle_response(resp, st, cfg)
+				assert_true(st.led_enabled, "led_enabled set to true")
+				assert_true(calls[2][2], "on")
+				assert_eq(calls[2][3], "power:blue", "the blinking status LED is left to Locate")
+			end)
+			done()
+			if not ok then error(err, 0) end
 		end
 	},
 	{
@@ -2635,89 +2648,81 @@ return {
 		end
 	},
 	{
-		name = "inform packet: a Locate persists the trigger it took over",
+		name = "inform packet: Locate blinks the status LED and hands it back to the LED switch",
 		fn = function()
-			-- set-locate and unset-locate are two independent commands with
-			-- nothing bounding the gap between them, so a restart lands there
-			-- easily. Holding the snapshot only in memory means the process
-			-- that stops the blink is not the one that started it and has
-			-- nothing to put back -- on a board whose only LED belongs to a
-			-- radio, that costs the activity light until someone notices.
-			local st = sample_state()
-			local writes = {}
-			local orig_w, orig_r = inform._led._write_file, inform._led._read_file
-			inform._led._write_file = function(path, contents)
-				writes[#writes + 1] = {path = path, contents = contents}
-				return true
-			end
-			inform._led._read_file = function(path)
-				if path:find("/trigger", 1, true) then
-					return "none timer [phy0tpt] phy1tpt\n"
-				end
-				return nil
-			end
-			local cfg = {led = "/sys/class/leds/mt76-phy0"}
+			local calls, done = led_recorder()
 			local ok, err = pcall(function()
+				local st = sample_state({led_enabled = false})
+				local cfg = {led = "green:power"}
 				inform.handle_response('{"_type":"cmd","cmd":"set-locate"}', st, cfg)
-				assert_true(st.locating, "locating set")
-				assert_eq(st.locate_prev_trigger, "phy0tpt",
-					"and the trigger it took over is in state, not just in memory")
-
-				-- The restart: a fresh module with no in-memory snapshot.
-				inform._led._saved_trigger = {}
+				assert_eq(calls[1][1], "locate_start", "blink")
+				assert_eq(calls[1][2], "green:power", "on the board's status LED")
 				inform.handle_response('{"_type":"cmd","cmd":"unset-locate"}', st, cfg)
-				assert_eq(writes[#writes].contents, "phy0tpt",
-					"the persisted trigger is what gets restored")
-				assert_nil(st.locate_prev_trigger, "and is cleared once spent")
+				assert_eq(calls[2][1], "locate_stop", "stop")
+				assert_eq(calls[2][2], "green:power", "the same LED")
+				assert_false(calls[2][3], "back to what the switch says: off")
+				assert_false(st.locating, "no longer locating")
 			end)
-			inform._led._write_file, inform._led._read_file = orig_w, orig_r
-			inform._led._saved_trigger = {}
+			done()
 			if not ok then error(err, 0) end
 		end
 	},
 	{
-		name = "inform packet: stopping a Locate returns the LED to its chosen idle state",
+		name = "inform: at startup the old single-LED override is undone once, then the switch applies",
 		fn = function()
-			-- Restoring the trigger is not the whole idle state. A dedicated
-			-- status LED's normal look is "trigger none, brightness on" --
-			-- exactly what set_enabled leaves behind -- so restoring only the
-			-- trigger brings it back on none/0, i.e. dark. Seen on an
-			-- AX3000T: blue:status came out of Locate on trigger none with
-			-- brightness 0 and the AP went dark.
-			local st = sample_state({led_enabled = true})
-			local writes = {}
-			local orig_w, orig_r = inform._led._write_file, inform._led._read_file
-			inform._led._write_file = function(path, contents)
-				writes[#writes + 1] = {path = path, contents = contents}
-				return true
-			end
-			inform._led._read_file = function(path)
-				if path:find("/trigger", 1, true) then return "[none] timer\n" end
-				return nil
-			end
-			local cfg = {led = "/sys/class/leds/blue:status"}
+			local calls, done = led_recorder(nil)
+			local orig_save = inform._state.save
+			local saved = 0
+			inform._state.save = function() saved = saved + 1 end
 			local ok, err = pcall(function()
-				inform.handle_response('{"_type":"cmd","cmd":"set-locate"}', st, cfg)
-				inform.handle_response('{"_type":"cmd","cmd":"unset-locate"}', st, cfg)
-				local last = writes[#writes]
-				assert_eq(last.path, "/sys/class/leds/blue:status/brightness",
-					"the last write is the brightness, not the trigger")
-				assert_eq(last.contents, "1", "and it puts the LED back on")
+				local st = sample_state({led_enabled = true, locating = true})
+				inform._reapply_leds(st, {led = "green:power"})
+				local names = {}
+				for _, c in ipairs(calls) do names[#names + 1] = c[1] end
+				assert_eq(table.concat(names, ","), "restore_status_leds,locate_stop,set_enabled",
+					"hand back the old override, end the Locate, then apply the switch")
+				assert_eq(calls[2][2], "green:power", "the Locate is ended on the status LED")
+				assert_true(calls[3][2], "the switch as last pushed")
+				assert_eq(st.led_scheme, 2, "marked, so it happens once")
+				assert_false(st.locating, "a Locate does not survive a restart")
+				assert_true(saved > 0, "and that is saved")
+
+				for i = #calls, 1, -1 do calls[i] = nil end
+				inform._reapply_leds(st, {led = "green:power"})
+				assert_eq(#calls, 1, "the next start only applies the switch")
+				assert_eq(calls[1][1], "set_enabled", "the switch, reapplied")
+
+				-- Never pushed: the old scheme never touched an LED, and
+				-- neither does this one.
+				for i = #calls, 1, -1 do calls[i] = nil end
+				local fresh = sample_state()
+				inform._reapply_leds(fresh, {led = "green:power"})
+				assert_eq(#calls, 0, "nothing at all")
+				assert_eq(fresh.led_scheme, 2, "but marked")
 			end)
-			-- Never pushed: the board's own default must be left alone.
-			local st2 = sample_state()
-			local n_before
-			local ok2, err2 = pcall(function()
-				inform.handle_response('{"_type":"cmd","cmd":"set-locate"}', st2, cfg)
-				n_before = #writes
-				inform.handle_response('{"_type":"cmd","cmd":"unset-locate"}', st2, cfg)
-				assert_eq(#writes, n_before + 1,
-					"one write -- the trigger restore -- and no brightness assertion")
-			end)
-			inform._led._write_file, inform._led._read_file = orig_w, orig_r
-			inform._led._saved_trigger = {}
+			inform._state.save = orig_save
+			done()
 			if not ok then error(err, 0) end
-			if not ok2 then error(err2, 0) end
+		end
+	},
+	{
+		name = "inform: a restart with openUF's snapshot in tmpfs skips the hand-back",
+		fn = function()
+			-- A snapshot means the new scheme already ran this boot: the LEDs
+			-- are dark or blinking by its hand, and diag.sh must not relight
+			-- them behind its back.
+			local calls, done = led_recorder({order = {}, leds = {}})
+			local orig_save = inform._state.save
+			inform._state.save = function() end
+			local ok, err = pcall(function()
+				local st = sample_state({led_enabled = false})
+				inform._reapply_leds(st, {led = "power:blue"})
+				assert_eq(calls[1][1], "set_enabled", "straight to the switch")
+				assert_false(calls[1][2], "off")
+			end)
+			inform._state.save = orig_save
+			done()
+			if not ok then error(err, 0) end
 		end
 	},
 	{
@@ -4842,6 +4847,57 @@ return {
 			assert_contains(out, "2 dropped key(s)", "only the pair lines are dropped")
 			assert_contains(out, "bandsteering.<n>.status x1", "a pair's status is not read")
 			assert_nil(out:find("bandsteering.mode", 1, true), "mode is read")
+		end
+	},
+	{
+		name = "inform: while the controller has LEDs off, a relit LED is undone once a minute",
+		fn = function()
+			local calls, done = led_recorder()
+			local orig = {
+				build_json = inform.build_json, build_packet = inform.build_packet,
+				http_post = inform.http_post, parse_packet = inform.parse_packet,
+				handle_response = inform.handle_response, time = inform._time,
+				reload = inform._reload_if_changed, rrm = inform._rrm_tick,
+			}
+			local t = 1000
+			inform._time = function() return t end
+			inform._reload_if_changed = function(_, _, last) return last end
+			inform._rrm_tick = function() return false end
+			inform.build_json = function() return "{}" end
+			inform.build_packet = function() return "pkt" end
+			inform.http_post = function() return "body" end
+			inform.parse_packet = function() return '{"_type":"noop"}' end
+			inform.handle_response = function() return false end
+			local ok, err = pcall(function()
+				local function reasserts()
+					local n = 0
+					for _, c in ipairs(calls) do if c[1] == "reassert" then n = n + 1 end end
+					return n
+				end
+				local ctx = {interval = 10, backoff = 10}
+				local st = {inform_url = "http://unifi:8080/inform", led_enabled = false}
+				inform._tick(st, {led = "power:blue"}, nil, ctx)
+				assert_eq(reasserts(), 1, "checked on the first heartbeat")
+				t = t + 10
+				inform._tick(st, {led = "power:blue"}, nil, ctx)
+				assert_eq(reasserts(), 1, "not again within the minute")
+				t = t + inform.LED_CHECK_INTERVAL
+				st.locating = true
+				inform._tick(st, {led = "power:blue"}, nil, ctx)
+				assert_eq(reasserts(), 2, "again after it")
+				assert_eq(calls[#calls][2], "power:blue", "sparing the LED Locate is blinking")
+
+				local on = {inform_url = "http://unifi:8080/inform", led_enabled = true}
+				t = t + inform.LED_CHECK_INTERVAL
+				inform._tick(on, nil, nil, {interval = 10, backoff = 10})
+				assert_eq(reasserts(), 2, "never while the LEDs are on")
+			end)
+			inform.build_json, inform.build_packet, inform.http_post, inform.parse_packet,
+				inform.handle_response, inform._time, inform._reload_if_changed, inform._rrm_tick =
+				orig.build_json, orig.build_packet, orig.http_post, orig.parse_packet,
+				orig.handle_response, orig.time, orig.reload, orig.rrm
+			done()
+			if not ok then error(err, 0) end
 		end
 	},
 }

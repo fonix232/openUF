@@ -32,7 +32,7 @@
 
 ---@class DevConf
 ---@field net DevNet
----@field led string?        a /sys/class/leds name, or nil when the board has none usable
+---@field led string?        the status LED Locate blinks (a /sys/class/leds name), or nil when the board has none usable
 ---@field config Config      the options (set by the entry points)
 ---@field hwassign string[]? the UCI radios reported, from local.lua; nil: all
 ---@field radio table<string, RadioPolicy>? per-band limits, from local.lua

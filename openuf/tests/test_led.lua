@@ -1,257 +1,302 @@
--- Tests for src/openwrt/led.lua (locate LED sysfs control).
--- Run from project root: lua tests/run_tests.lua
+-- Tests for src/openwrt/led.lua (the board's LEDs as the controller switches
+-- them, and Locate).
+-- Run from the package directory: lua tests/run_tests.lua
 
 local led = dofile("src/openwrt/led.lua")
 
-local function with_capture(fn, trigger)
-	local writes = {}
-	local orig_w, orig_r = led._write_file, led._read_file
+-- The settings a trigger creates when it is set, at the kernel's defaults.
+local TRIGGER_DEFAULTS = {
+	netdev = {device_name = "", link = "0", rx = "0", tx = "0", interval = "50"},
+	timer  = {delay_on = "500", delay_off = "500"},
+}
+
+-- A /sys/class/leds that behaves like the kernel's for what led.lua does:
+-- setting a trigger replaces its settings with that trigger's defaults,
+-- removing one (trigger none) turns the LED off, and writing brightness 0
+-- removes the trigger. `leds`: name -> {trigger, brightness, attrs}.
+-- Returns the LED table (live) and the other files (baseline, tmp).
+local function sysfs(leds)
+	local files = {}
+	local orig = {led._read_file, led._write_file, led._rename, led._remove, led._sh}
+	local function split(path)
+		local name, file = path:match("^/sys/class/leds/([^/]+)/(.+)$")
+		return name and leds[name], file
+	end
+	led._read_file = function(path)
+		local l, file = split(path)
+		if not l then return files[path] end
+		if file == "trigger" then
+			local out = {}
+			for _, t in ipairs({"none", "timer", "heartbeat", "netdev", "phy0tpt", "default-on"}) do
+				out[#out + 1] = (t == l.trigger) and ("[" .. t .. "]") or t
+			end
+			return table.concat(out, " ") .. "\n"
+		elseif file == "brightness" then
+			return tostring(l.brightness) .. "\n"
+		end
+		local v = l.attrs and l.attrs[file]
+		return v and (v .. "\n") or nil
+	end
 	led._write_file = function(path, contents)
-		writes[#writes + 1] = {path = path, contents = contents}
+		local l, file = split(path)
+		if not l then files[path] = contents; return true end
+		if file == "trigger" then
+			if contents == "none" and l.trigger ~= "none" then l.brightness = 0 end
+			l.trigger = contents
+			l.attrs = {}
+			for k, v in pairs(TRIGGER_DEFAULTS[contents] or {}) do l.attrs[k] = v end
+		elseif file == "brightness" then
+			local b = tonumber(contents)
+			if b == 0 then l.trigger = "none"; l.attrs = {} end
+			l.brightness = b
+		else
+			if not (l.attrs and l.attrs[file] ~= nil) then return false end
+			l.attrs[file] = contents
+		end
 		return true
 	end
-	-- What sysfs really returns: every available trigger, the active one in
-	-- brackets. `trigger` nil means the file could not be read at all.
-	led._read_file = function(path)
-		if trigger and path:find("/trigger", 1, true) then return trigger end
-		return nil
+	led._rename = function(from, to) files[to] = files[from]; files[from] = nil; return true end
+	led._remove = function(path) files[path] = nil; return true end
+	led._sh = function(cmd)
+		if cmd:find("^ls ") then
+			local names = {}
+			for n in pairs(leds) do names[#names + 1] = n end
+			return table.concat(names, "\n") .. "\n"
+		end
+		files["sh:" .. cmd] = true
+		return ""
 	end
-	led._saved_trigger = {}
-	local ok, err = pcall(fn, writes)
-	led._write_file, led._read_file = orig_w, orig_r
-	led._saved_trigger = {}
+	local function restore_stubs()
+		led._read_file, led._write_file, led._rename, led._remove, led._sh =
+			orig[1], orig[2], orig[3], orig[4], orig[5]
+	end
+	return leds, files, restore_stubs
+end
+
+-- An E8450 after boot: the running LED on, the internet LED on a netdev
+-- trigger, a radio LED on its throughput trigger, an unused LED off.
+local function e8450()
+	return {
+		["power:blue"]   = {trigger = "none", brightness = 1},
+		["power:orange"] = {trigger = "none", brightness = 0},
+		["inet:blue"]    = {trigger = "netdev", brightness = 0,
+			attrs = {device_name = "br-lan.1", link = "1", rx = "1", tx = "0", interval = "50"}},
+		["mt76-phy0"]    = {trigger = "phy0tpt", brightness = 0},
+	}
+end
+
+local function with(fn)
+	local leds, files, done = sysfs(e8450())
+	local ok, err = pcall(fn, leds, files)
+	done()
 	if not ok then error(err, 2) end
+end
+
+local function all_dark(leds)
+	for name, l in pairs(leds) do
+		if l.trigger ~= "none" or l.brightness ~= 0 then return false, name end
+	end
+	return true
 end
 
 return {
 	{
-		name = "led: locate_start returns false with nil led_path (no-op)",
+		name = "led: off darkens every LED, on puts each back as the board had it",
 		fn = function()
-			assert_false(led.locate_start(nil), "no-op without led_path")
-		end
-	},
-	{
-		name = "led: locate_stop returns false with nil led_path (no-op)",
-		fn = function()
-			assert_false(led.locate_stop(nil), "no-op without led_path")
-		end
-	},
-	{
-		name = "led: locate_start writes timer trigger and blink delays",
-		fn = function()
-			with_capture(function(writes)
-				local ok = led.locate_start("/sys/class/leds/test")
-				assert_true(ok, "locate_start returns true")
-				assert_eq(#writes, 3, "three sysfs writes")
-				assert_eq(writes[1].path, "/sys/class/leds/test/trigger", "trigger path")
-				assert_eq(writes[1].contents, "timer", "trigger set to timer")
-				assert_eq(writes[2].path, "/sys/class/leds/test/delay_on", "delay_on path")
-				assert_eq(writes[2].contents, "250", "blink on-phase is 250ms")
-				assert_eq(writes[3].path, "/sys/class/leds/test/delay_off", "delay_off path")
-				assert_eq(writes[3].contents, "250", "blink off-phase is 250ms")
-			end)
-		end
-	},
-	{
-		name = "led: locate_stop writes trigger=none",
-		fn = function()
-			with_capture(function(writes)
-				local ok = led.locate_stop("/sys/class/leds/test")
-				assert_true(ok, "locate_stop returns true")
-				assert_eq(#writes, 1, "one sysfs write")
-				assert_eq(writes[1].path, "/sys/class/leds/test/trigger", "trigger path")
-				assert_eq(writes[1].contents, "none", "trigger cleared")
-			end)
-		end
-	},
-	{
-		name = "led: set_enabled returns false with nil led_path (no-op)",
-		fn = function()
-			assert_false(led.set_enabled(nil, true), "no-op without led_path")
-		end
-	},
-	{
-		name = "led: set_enabled(true) writes trigger=none and brightness=1",
-		fn = function()
-			with_capture(function(writes)
-				local ok = led.set_enabled("/sys/class/leds/test", true)
-				assert_true(ok, "set_enabled returns true")
-				assert_eq(#writes, 2, "two sysfs writes")
-				assert_eq(writes[1].path, "/sys/class/leds/test/trigger", "trigger path")
-				assert_eq(writes[1].contents, "none", "trigger cleared")
-				assert_eq(writes[2].path, "/sys/class/leds/test/brightness", "brightness path")
-				assert_eq(writes[2].contents, "1", "brightness on")
-			end)
-		end
-	},
-	{
-		name = "led: set_enabled(false) writes brightness=0",
-		fn = function()
-			with_capture(function(writes)
-				led.set_enabled("/sys/class/leds/test", false)
-				assert_eq(writes[2].contents, "0", "brightness off")
-			end)
-		end
-	},
+			with(function(leds, files)
+				assert_true(led.set_enabled(false), "switched off")
+				local dark, lit = all_dark(leds)
+				assert_true(dark, "every LED is dark (lit: " .. tostring(lit) .. ")")
+				assert_true(files[led.BASELINE_FILE] ~= nil, "the board's state is kept in tmpfs")
 
-	-- dev.conf.led shapes. The modelmaps disagreed historically (one nil, one
-	-- a {name, desc, sysfs} table) while led.lua concatenated the value
-	-- directly, so a Locate click threw "attempt to concatenate a table
-	-- value" out of handle_response -- which inform.lua does not pcall, so it
-	-- killed the daemon. All shapes now resolve, and an unusable one no-ops.
-	{
-		name = "led: bare LED name resolves under /sys/class/leds",
-		fn = function()
-			with_capture(function(writes)
-				assert_true(led.locate_start("tp-link:green:system"), "resolves")
-				assert_eq(writes[1].path,
-					"/sys/class/leds/tp-link:green:system/trigger",
-					"bare name gets the sysfs root prefix")
+				assert_true(led.set_enabled(true), "switched on")
+				assert_eq(leds["power:blue"].trigger, "none", "the running LED needs no trigger")
+				assert_eq(leds["power:blue"].brightness, 1, "and is on again")
+				assert_eq(leds["power:orange"].brightness, 0, "an LED that was off stays off")
+				assert_eq(leds["mt76-phy0"].trigger, "phy0tpt",
+					"a radio LED gets its throughput trigger back (OpenWrt's turnon loses it)")
+				local inet = leds["inet:blue"]
+				assert_eq(inet.trigger, "netdev", "the netdev trigger is back")
+				assert_eq(inet.attrs.device_name, "br-lan.1", "on the same device")
+				assert_eq(inet.attrs.link, "1", "with its link mode")
+				assert_eq(inet.attrs.rx, "1", "and rx")
+				assert_eq(inet.attrs.tx, "0", "and without tx, as configured")
+				assert_nil(files[led.BASELINE_FILE], "nothing left to undo, so the snapshot is gone")
 			end)
 		end
 	},
 	{
-		name = "led: full sysfs path is used as-is",
+		name = "led: on without an earlier off touches nothing",
 		fn = function()
-			with_capture(function(writes)
-				led.locate_start("/sys/class/leds/x:green:y")
-				assert_eq(writes[1].path, "/sys/class/leds/x:green:y/trigger",
-					"path passed through unchanged")
+			with(function(leds, files)
+				leds["power:blue"].brightness = 1
+				assert_true(led.set_enabled(true), "switched on")
+				assert_eq(leds["mt76-phy0"].trigger, "phy0tpt", "untouched")
+				assert_nil(files[led.BASELINE_FILE], "no snapshot taken")
 			end)
 		end
 	},
 	{
-		name = "led: unusable led config no-ops instead of throwing",
+		name = "led: nil (never pushed) leaves the board alone",
 		fn = function()
-			for _, bad in ipairs({42, true, "", {}, {sysfs = "tp-link:green:system"}}) do
-				assert_false(led.locate_start(bad), "locate_start no-op")
-				assert_false(led.locate_stop(bad), "locate_stop no-op")
-				assert_false(led.set_enabled(bad, true), "set_enabled no-op")
-			end
-		end
-	},
-	{
-		name = "led: locate restores the trigger the LED was already driving",
-		fn = function()
-			-- On a board whose only driveable LED belongs to a radio -- the
-			-- AX3000T has nothing but mt76-phy0/mt76-phy1 -- ending Locate
-			-- with a blanket "none" permanently kills the throughput blink.
-			-- A transient identify action must not make a one-way change.
-			with_capture(function(writes)
-				led.locate_start("/sys/class/leds/mt76-phy0")
-				assert_eq(writes[1].contents, "timer", "Locate still blinks")
-				led.locate_stop("/sys/class/leds/mt76-phy0")
-				assert_eq(writes[#writes].path,
-					"/sys/class/leds/mt76-phy0/trigger", "trigger written back")
-				assert_eq(writes[#writes].contents, "phy0tpt",
-					"and it is the trigger the LED had, not none")
-			end, "none timer heartbeat netdev [phy0tpt] phy1tpt\n")
-		end
-	},
-	{
-		name = "led: locate_stop falls back to none when the trigger is unreadable",
-		fn = function()
-			-- Unknown previous state is the one case where the old blanket
-			-- write is still the right answer: leaving the LED on the timer
-			-- would blink forever.
-			with_capture(function(writes)
-				led.locate_start("/sys/class/leds/test")
-				led.locate_stop("/sys/class/leds/test")
-				assert_eq(writes[#writes].contents, "none", "falls back to none")
-			end)   -- no trigger file
-			-- Present but with nothing bracketed: same fallback.
-			with_capture(function(writes)
-				led.locate_start("/sys/class/leds/test")
-				led.locate_stop("/sys/class/leds/test")
-				assert_eq(writes[#writes].contents, "none", "no active trigger -> none")
-			end, "none timer heartbeat\n")
-		end
-	},
-	{
-		name = "led: a second locate_stop does not re-restore a stale trigger",
-		fn = function()
-			-- The snapshot is consumed by the stop that uses it. A stop with
-			-- no preceding start (a restart mid-Locate, a duplicate response)
-			-- must not write back whatever the last Locate happened to see.
-			with_capture(function(writes)
-				led.locate_start("/sys/class/leds/mt76-phy0")
-				led.locate_stop("/sys/class/leds/mt76-phy0")
-				led.set_enabled("/sys/class/leds/mt76-phy0", false)
-				local before = #writes
-				led.locate_stop("/sys/class/leds/mt76-phy0")
-				assert_eq(#writes, before + 1, "one write")
-				assert_eq(writes[#writes].contents, "none",
-					"and it is none, not the trigger from the earlier Locate")
-			end, "none timer [phy0tpt]\n")
-		end
-	},
-	{
-		name = "led: the snapshot is handed back to the caller to persist",
-		fn = function()
-			-- set-locate and unset-locate are two independent commands with
-			-- nothing bounding the gap, so a restart lands between them
-			-- easily. The process that stops the blink is then not the one
-			-- that started it and has nothing remembered -- only the caller's
-			-- persisted copy knows what the LED was on.
-			with_capture(function(writes)
-				local ok, prev = led.locate_start("/sys/class/leds/mt76-phy0")
-				assert_true(ok, "locate_start still reports success")
-				assert_eq(prev, "phy0tpt", "and hands back what it snapshotted")
-
-				-- A fresh process: no in-memory snapshot at all.
-				led._saved_trigger = {}
-				led.locate_stop("/sys/class/leds/mt76-phy0", prev)
-				assert_eq(writes[#writes].contents, "phy0tpt",
-					"the persisted trigger restores it across the gap")
-			end, "none timer [phy0tpt] phy1tpt\n")
-		end
-	},
-	{
-		name = "led: a snapshot of the blink itself is refused, from either source",
-		fn = function()
-			-- What a second locate_start records when an earlier Locate is
-			-- still running: "timer" is the blink, not a thing to restore.
-			-- Observed on real hardware -- an AX3000T's radio LED stayed on
-			-- the identify blink across three Locate cycles, each one
-			-- faithfully restoring what the last had left behind.
-			with_capture(function(writes)
-				local _, prev = led.locate_start("/sys/class/leds/mt76-phy0")
-				assert_eq(prev, "timer", "it does snapshot what it found")
-				led.locate_stop("/sys/class/leds/mt76-phy0")
-				assert_eq(writes[#writes].contents, "none",
-					"but stopping falls back to none rather than re-blinking")
-			end, "none [timer] phy0tpt\n")
-
-			-- Same refusal for a persisted one, which is where a stale
-			-- snapshot actually survives long enough to do damage.
-			with_capture(function(writes)
-				led.locate_stop("/sys/class/leds/mt76-phy0", "timer")
-				assert_eq(writes[#writes].contents, "none", "persisted 'timer' refused too")
-			end, "none timer [phy0tpt]\n")
-		end
-	},
-	{
-		name = "led: locate_active tells a caller whether there is a blink to undo",
-		fn = function()
-			-- The question a restarting daemon has to answer before touching
-			-- anything: state says "locating", but did the DEVICE reboot (the
-			-- kernel already restored the LED's own trigger) or only the
-			-- daemon (the blink is still running)? Writing none in the first
-			-- case destroys a perfectly good activity light.
-			with_capture(function()
-				assert_true(led.locate_active("/sys/class/leds/mt76-phy0"),
-					"still blinking -> there is something to undo")
-			end, "none [timer] phy0tpt\n")
-			with_capture(function()
-				assert_false(led.locate_active("/sys/class/leds/mt76-phy0"),
-					"back on its own trigger -> leave it alone")
-			end, "none timer [phy0tpt]\n")
-			-- Unreadable, and no LED configured at all.
-			with_capture(function()
-				assert_false(led.locate_active("/sys/class/leds/mt76-phy0"),
-					"unreadable trigger -> do not touch")
+			with(function(leds)
+				assert_false(led.set_enabled(nil), "nothing to do")
+				assert_eq(leds["power:blue"].brightness, 1, "untouched")
 			end)
-			assert_false(led.locate_active(nil), "no LED configured -> false, not a crash")
+		end
+	},
+	{
+		name = "led: a second off (or a restart while off) never snapshots the dark state",
+		fn = function()
+			with(function(leds)
+				led.set_enabled(false)
+				led.set_enabled(false)   -- a repeated push, or the startup reapply
+				led.set_enabled(true)
+				assert_eq(leds["power:blue"].brightness, 1, "the board's state, not the dark one")
+				assert_eq(leds["mt76-phy0"].trigger, "phy0tpt", "the board's trigger, not none")
+			end)
+		end
+	},
+	{
+		name = "led: a torn or foreign snapshot file is ignored, not trusted",
+		fn = function()
+			with(function(_, files)
+				files[led.BASELINE_FILE] = "{not json"
+				assert_nil(led.load_baseline(), "undecodable")
+				files[led.BASELINE_FILE] = '{"order":"x","leds":{}}'
+				assert_nil(led.load_baseline(), "wrong shape")
+			end)
+		end
+	},
+	{
+		name = "led: restore refuses a snapshot naming a path, not a sysfs attribute",
+		fn = function()
+			with(function(leds)
+				local wrote = {}
+				local w = led._write_file
+				led._write_file = function(path, c) wrote[#wrote + 1] = path; return w(path, c) end
+				led.restore("inet:blue", {trigger = "netdev", attrs = {{"../../../etc/passwd", "x"}}})
+				led._write_file = w
+				for _, p in ipairs(wrote) do
+					assert_true(not p:find("..", 1, true), "no write outside the LED: " .. p)
+				end
+				assert_false(led.restore("../x", {trigger = "none"}), "an LED name with a path is refused")
+				assert_eq(leds["inet:blue"].trigger, "netdev", "the trigger itself was set")
+			end)
+		end
+	},
+	{
+		name = "led: while off, an LED something relit goes dark again and its new state is kept",
+		fn = function()
+			with(function(leds)
+				led.set_enabled(false)
+				assert_eq(led.reassert(), 0, "nothing relit yet")
+				-- LuCI saved the LED page: OpenWrt's led service put the
+				-- internet LED on a netdev trigger for another device.
+				leds["inet:blue"] = {trigger = "netdev", brightness = 0,
+					attrs = {device_name = "lan4", link = "1", rx = "0", tx = "0", interval = "50"}}
+				assert_eq(led.reassert(), 1, "one LED relit")
+				assert_true(all_dark(leds), "dark again")
+				led.set_enabled(true)
+				assert_eq(leds["inet:blue"].attrs.device_name, "lan4",
+					"switched on, it does what it is now configured to do")
+			end)
+		end
+	},
+	{
+		name = "led: Locate blinks the status LED and hands it back to the board",
+		fn = function()
+			with(function(leds, files)
+				assert_true(led.locate_start("power:blue"), "blinking")
+				assert_eq(leds["power:blue"].trigger, "timer", "on the timer trigger")
+				assert_eq(leds["power:blue"].attrs.delay_on, "250", "fast blink on-phase")
+				assert_eq(leds["power:blue"].attrs.delay_off, "250", "fast blink off-phase")
+				assert_eq(leds["mt76-phy0"].trigger, "phy0tpt", "no other LED is touched")
+				assert_true(led.locate_stop("power:blue", true), "stopped")
+				assert_eq(leds["power:blue"].trigger, "none", "no trigger, as before")
+				assert_eq(leds["power:blue"].brightness, 1,
+					"and ON: the steady running LED, not left dark by the trigger removal")
+				assert_nil(files[led.BASELINE_FILE], "nothing left overridden")
+			end)
+		end
+	},
+	{
+		name = "led: Locate with the LEDs off blinks, then goes back to dark",
+		fn = function()
+			with(function(leds)
+				led.set_enabled(false)
+				led.locate_start("power:blue")
+				assert_eq(leds["power:blue"].trigger, "timer", "the blink shows even with LEDs off")
+				assert_eq(led.reassert("power:blue"), 0, "the blink is not undone while locating")
+				led.locate_stop("power:blue", false)
+				assert_true(all_dark(leds), "dark again after Locate")
+				led.set_enabled(true)
+				assert_eq(leds["power:blue"].brightness, 1, "and the board's state after that")
+			end)
+		end
+	},
+	{
+		name = "led: switching off during a Locate spares the blink, which then ends dark",
+		fn = function()
+			with(function(leds)
+				led.locate_start("power:blue")
+				led.set_enabled(false, "power:blue")
+				assert_eq(leds["power:blue"].trigger, "timer", "the blink goes on")
+				assert_eq(leds["mt76-phy0"].trigger, "none", "everything else is dark")
+				led.locate_stop("power:blue", false)
+				assert_true(all_dark(leds), "and so is the status LED once Locate ends")
+				led.set_enabled(true)
+				assert_eq(leds["power:blue"].brightness, 1,
+					"the snapshot is from before the blink, not of it")
+			end)
+		end
+	},
+	{
+		name = "led: switching on during a Locate leaves the blink, which ends in the board's state",
+		fn = function()
+			with(function(leds, files)
+				led.set_enabled(false)
+				led.locate_start("power:blue")
+				led.set_enabled(true, "power:blue")
+				assert_eq(leds["mt76-phy0"].trigger, "phy0tpt", "the rest is back")
+				assert_eq(leds["power:blue"].trigger, "timer", "the blink goes on")
+				assert_true(files[led.BASELINE_FILE] ~= nil, "the snapshot stays for the blink")
+				led.locate_stop("power:blue", true)
+				assert_eq(leds["power:blue"].brightness, 1, "the board's state")
+				assert_nil(files[led.BASELINE_FILE], "then it goes")
+			end)
+		end
+	},
+	{
+		name = "led: a Locate that ended in a reboot has nothing to stop",
+		fn = function()
+			with(function(leds)
+				-- The reboot cleared the tmpfs snapshot and the blink with it.
+				assert_false(led.locate_stop("power:blue", true), "nothing to do")
+				assert_eq(leds["power:blue"].brightness, 1, "the board's own state stands")
+			end)
+		end
+	},
+	{
+		name = "led: no status LED means Locate is a no-op",
+		fn = function()
+			assert_false(led.locate_start(nil), "no LED")
+			assert_false(led.locate_stop(nil, true), "no LED")
+			assert_false(led.locate_start(""), "empty name")
+		end
+	},
+	{
+		name = "led: the single-LED scheme is undone through diag.sh's own post-boot state",
+		fn = function()
+			with(function(_, files)
+				led.restore_status_leds()
+				local ran
+				for k in pairs(files) do
+					if k:find("^sh:") and k:find("set_state done", 1, true) then ran = k end
+				end
+				assert_true(ran ~= nil, "diag.sh set_state done")
+				assert_true(ran:find("/etc/diag.sh", 1, true) ~= nil, "guarded by diag.sh existing")
+			end)
 		end
 	},
 }

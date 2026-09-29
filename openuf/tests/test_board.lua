@@ -63,6 +63,27 @@ return {
 		end
 	},
 	{
+		name = "board: the status LED is the one the board lights after boot, not a name guess",
+		fn = function()
+			-- A WAX220: led-boot is blue:power, led-running green:power. The
+			-- name guess prefers blue, which is the BOOT LED -- the one diag.sh
+			-- turns off once boot is done.
+			local files, cmds = bifrost()
+			cmds["ls /sys/class/leds"] = "amber:power\nblue:power\ngreen:power\ngreen:lan\nmt76-phy0\n"
+			cmds[". /lib/functions/leds.sh && get_dt_led running"] = "green:power\n"
+			cmds[". /lib/functions/leds.sh && get_dt_led boot"] = "blue:power\n"
+			device(files, cmds)
+			assert_eq(board.status_led("blue:power"), "green:power", "the running LED")
+
+			cmds[". /lib/functions/leds.sh && get_dt_led running"] = "\n"
+			assert_eq(board.status_led("x"), "blue:power", "no running alias: the boot LED")
+
+			cmds[". /lib/functions/leds.sh && get_dt_led boot"] = "white:status\n"
+			assert_eq(board.status_led("blue:power"), "blue:power",
+				"an alias naming an LED the kernel did not register falls back to the guess")
+		end
+	},
+	{
 		name = "board: a plain AP model takes the uplink on port 1",
 		fn = function()
 			device(bifrost())

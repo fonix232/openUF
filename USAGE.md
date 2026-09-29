@@ -140,8 +140,11 @@ device itself, once, and keeps the result.
 - **Identity MAC:** the MAC the network already knows the AP by, the bridge the uplink sits
   in, else board.json's label MAC. Never a socket MAC: a Netgear WAX220's `eth0` gets a
   random one on every boot.
-- **LED:** the first of `status`/`power`/`system`/`run` in `/sys/class/leds`, blue, white
-  or green preferred. It drives the controller's Locate action and **Manage → LED** toggle.
+- **Status LED:** the one OpenWrt lights once boot is done (`get_dt_led running` in
+  `/lib/functions/leds.sh`, from the device tree), else its boot LED, else the first of
+  `status`/`power`/`system`/`run` in `/sys/class/leds`, blue, white or green preferred.
+  Locate blinks it. The controller's LED setting is not tied to it: that switches every
+  LED (§ LEDs below).
 - **Radios:** every `wifi-device` in `/etc/config/wireless`. openUF never touches a radio it
   does not report.
 - **Port numbers:** the chosen UniFi model's own layout (below). A model with a built-in
@@ -160,7 +163,7 @@ To correct the description, set what is wrong in `/etc/openuf/local.lua`, which 
 with `dev` in scope:
 
 ```lua
-dev.conf.led = "green:status"        -- a LED name from `ls /sys/class/leds`
+dev.conf.led = "green:status"        -- the LED Locate blinks, from `ls /sys/class/leds`
 dev.conf.hwassign = {"radio0"}       -- report only this radio
 ```
 
@@ -173,6 +176,32 @@ and looking at the box:
 ```sh
 echo none > /sys/class/leds/<led>/trigger; echo 1 > /sys/class/leds/<led>/brightness
 ```
+
+### LEDs
+
+The controller sends one LED setting per device, `led_enabled` in `mgmt_cfg`: the device's
+own LED override (Default/On/Off) resolved against the site's Device LED switch. openUF
+applies it to every LED the board has:
+
+- **Off:** every LED in `/sys/class/leds` dark (trigger `none`, brightness 0). Before the
+  first change after a boot, each LED's state is snapshotted to `/var/run/openuf-leds.json`:
+  its trigger, the trigger's settings (a netdev LED's device and link/rx/tx modes, timer
+  delays), brightness and colour.
+- **On:** each LED is put back from that snapshot, and the snapshot is dropped. Nothing is
+  taken from UCI here: OpenWrt's own `/etc/init.d/led turnon` puts back only the LEDs with a
+  `system` `led` section or a diag.sh role, so a radio LED (`mt76-phy0` on `phy0tpt`) would
+  stay dark after one off/on.
+- **Never pushed:** the LEDs are not touched.
+
+The snapshot is in tmpfs on purpose: it describes kernel state and lives exactly as long.
+A restart of openUF finds it (the LEDs are dark by openUF's hand, not the board's); a
+reboot clears it, and the board comes up in its own state before openUF applies the
+setting again. While the setting is off, openUF checks once a minute for an LED that
+something relit — saving LuCI's LED page restarts OpenWrt's `led` service — and darkens it
+again, keeping its new state as the one to restore.
+
+To change what an LED does, configure it in OpenWrt as usual (LuCI → System → LED
+Configuration, or `/etc/config/system`); the controller's switch then turns that on and off.
 
 ### Device identity
 
@@ -1250,7 +1279,8 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 | A WLAN Schedule has no effect: the SSID stays up outside its schedule | Expected: WLAN Schedule is not implemented (README capability table). Turn the WLAN off in the controller instead |
 | Airtime Fairness switch does nothing | `ls /sys/kernel/debug/ieee80211/phy*/airtime_flags` must list a file per radio. Without it openUF does not claim `wifi_caps` bit `0x20` and the controller sends no `atf.*` at all (debugfs not mounted, or a kernel without `CONFIG_MAC80211_DEBUGFS`). `cat` it after a push: two flag names for on, none for off. A driver that does not schedule through mac80211 TXQs ignores the flags |
 | A client shows poor WiFi Experience | The score is the worst of three terms, all read from `iw dev <ifname> station get <mac>`. **Downlink airtime**: Δ`tx duration` per Δ`tx packets` against the ideal (110 µs per frame plus the payload at the client's ceiling rate). Anything well over ~130 µs for small frames on 2.4 GHz means frames are being re-sent: a weak or noisy link, or a power-saving client that dozes through them. **Uplink** (only while the client sends ≥ 20 frames between heartbeats, since `rx bitrate` is the last frame's rate): `rx bitrate` against the client's ceiling (its streams, width and top MCS from `hostapd_cli -i <ifname> all_sta`, capped by the AP's own, one MCS below the top). **Coverage**: `signal` minus the radio's noise (`iw dev <ifname> survey dump`, the `[in use]` entry, taken as at least −95 dBm): under 20 dB is below Excellent, under ~17 dB below Good. Retry and failure counters are not used, since they mean different things per driver (see PROTOCOL-VALIDATION.md). Without `tx duration` the tx rate against the ceiling stands in, and a client with a legacy rate or no hostapd record is scored on SNR alone |
-| Locate/LED does nothing | The board registered no usable LED — set `dev.conf.led` in `/etc/openuf/local.lua` to a name from `ls /sys/class/leds` (§ 3) |
+| Locate does nothing | The board registered no usable status LED — set `dev.conf.led` in `/etc/openuf/local.lua` to a name from `ls /sys/class/leds` (§ 3) |
+| LEDs stay dark with the LED setting on | `ls /var/run/openuf-leds.json`: present means openUF still holds them (a Locate running, or the setting still off as far as openUF knows — `grep led_enabled /etc/openuf/state.json`). Absent means they are in OpenWrt's own state: check the LED's section in `/etc/config/system` and `cat /sys/class/leds/<led>/trigger` |
 | JSON decode error in controller logs | AES key mismatch — try `syswrapper.sh reset-inform` |
 | `inform: parse error: ... inflate: truncated stream` | A compressed controller response arrived incomplete. One heartbeat is lost and the next retries, so an occasional line is harmless; a steady stream of them points at the link to the controller (an MTU or proxy problem), not at the device |
 | Adopted device goes Offline and the log fills with `HTTP 400` | The identity MAC changed underneath the adoption — usually `dev.conf.net.lan_cpueth` now naming a different interface. openUF says so once per streak, naming the MAC it informs as. Forget the device in the controller and re-adopt, or point `lan_cpueth` back at the interface it was adopted under |

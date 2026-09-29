@@ -120,9 +120,13 @@ function M.handle(ctx, json_str, st, cfg)
 					elseif k == "cfgversion" then
 						if v ~= "" then st.cfgversion = v end
 					elseif k == "led_enabled" then
+						-- The device's LED setting resolved against the site's
+						-- (decompiled 10.6: on for On, or Default with the site
+						-- switch on; off for Off, or a disabled AP). A switch
+						-- over all of the board's LEDs; led.lua.
 						local enabled = (v == "true")
 						st.led_enabled = enabled
-						ctx._led.set_enabled(cfg and cfg.led, enabled)
+						ctx._led.set_enabled(enabled, st.locating and cfg and cfg.led or nil)
 					elseif k == "authkey" then
 						-- Only trusted pre-adoption. Real L3 adoption has no SSH
 						-- step at all (controller logs "skip SSH adoption" for
@@ -635,29 +639,15 @@ function M.handle(ctx, json_str, st, cfg)
 		if not recognized.KNOWN_CMDS[cmd] then ctx._ledger("cmd", tostring(cmd), resp) end
 
 		if cmd == "set-locate" or cmd == "unset-locate" then
-			local led_path = cfg and cfg.led
+			-- The blink is on the status LED; what it goes back to (its own
+			-- state, or dark while the LED switch is off) comes from led.lua's
+			-- tmpfs snapshot, which a restart between the two commands keeps
+			-- and a reboot clears together with the blink itself.
+			local led_name = cfg and cfg.led
 			if cmd == "set-locate" then
-				-- The trigger the LED was on is persisted, not just held in
-				-- memory: the controller sends set-locate and unset-locate as
-				-- two independent commands with nothing bounding the gap, so
-				-- a restart can easily land between them, and only this copy
-				-- then knows what to put back. See ctx.run's startup handling.
-				local _, prev = ctx._led.locate_start(led_path)
-				st.locate_prev_trigger = prev
+				ctx._led.locate_start(led_name)
 			else
-				ctx._led.locate_stop(led_path, st.locate_prev_trigger)
-				st.locate_prev_trigger = nil
-				-- Restoring the TRIGGER is not the whole idle state. An LED
-				-- whose normal look is "trigger none, brightness on" -- which
-				-- is exactly what set_enabled leaves behind, and what a
-				-- dedicated status LED like blue:status or green:system sits
-				-- at -- comes back from a Locate on trigger none and
-				-- brightness 0, i.e. dark. So re-assert the steady state the
-				-- operator actually chose, the same way ctx.run does at
-				-- startup. nil means never pushed: leave the board alone.
-				if st.led_enabled ~= nil then
-					ctx._led.set_enabled(led_path, st.led_enabled)
-				end
+				ctx._led.locate_stop(led_name, st.led_enabled)
 			end
 			st.locating = (cmd == "set-locate")
 			ctx._state.save(st)

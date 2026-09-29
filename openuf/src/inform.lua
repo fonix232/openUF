@@ -107,6 +107,10 @@ M.RRM_REQUEST_INTERVAL = 600
 -- config IS applied (see M._rrm_collector_next), so recovery stays instant
 -- exactly where it matters and the steady state costs nothing.
 M.RRM_COLLECTOR_CHECK_INTERVAL = 60
+
+-- How often, while the controller has the LEDs off, they are checked for
+-- something having lit one again (led.lua reassert).
+M.LED_CHECK_INTERVAL = 60
 M._rrm_collector_next = 0
 
 
@@ -708,6 +712,37 @@ end
 -- kernel's default (on) after every reboot, and the controller does not push
 -- it again (cfgversion matches). Reapplied at startup from state.json; nil
 -- means never pushed, and the board's default stays. Returns whether it wrote.
+-- The LEDs at startup. Kernel state, not UCI: the controller pushes
+-- led_enabled with mgmt_cfg and then only on a change, so without this the
+-- LED switch forgot itself on every reboot while the controller went on
+-- believing it took.
+--  1. Hand back an LED the previous, single-LED scheme was holding (led.lua
+--     restore_status_leds), once per device, before anything is snapshotted.
+--  2. End a Locate: it does not survive a restart, and must not -- nobody is
+--     still standing in front of the AP, and unset-locate only comes while
+--     someone watches the controller. After a reboot there is nothing to end.
+--  3. The switch as last pushed; nil (never pushed) leaves the board alone.
+function M._reapply_leds(st, cfg)
+	local status_led = cfg and cfg.led
+	local dirty = false
+	if st.led_scheme ~= 2 then
+		if st.led_enabled ~= nil and not M._led.load_baseline() then
+			pcall(M._led.restore_status_leds)
+		end
+		st.led_scheme = 2
+		dirty = true
+	end
+	if st.locating then
+		pcall(M._led.locate_stop, status_led, st.led_enabled)
+		st.locating = false
+		dirty = true
+	end
+	if dirty then M._state.save(st) end
+	if st.led_enabled ~= nil then
+		pcall(M._led.set_enabled, st.led_enabled)
+	end
+end
+
 function M._reapply_airtime(st)
 	if not (st and st.atf_enabled ~= nil and M._airtime) then return false end
 	pcall(M._airtime.set_enabled, st.atf_enabled)
@@ -853,6 +888,16 @@ function M._tick(st, cfg, ufhw, ctx)
 	end
 	-- The L2 hardening follows the VAPs as they come and go.
 	pcall(M._l2guard_resync, st, cfg)
+	-- With the LED switch off, whatever relights an LED (LuCI saving the LED
+	-- page restarts OpenWrt's led service) is undone within a minute. Sysfs
+	-- reads only, no fork.
+	if st.led_enabled == false and (not ctx.next_led_check or now >= ctx.next_led_check) then
+		ctx.next_led_check = now + M.LED_CHECK_INTERVAL
+		local ok_l, relit = pcall(M._led.reassert, st.locating and cfg and cfg.led or nil)
+		if ok_l and relit > 0 then
+			io.stderr:write("inform: " .. relit .. " LED(s) lit while the controller has LEDs off -- dark again\n")
+		end
+	end
 	-- The controller's nightly `syswrapper.sh 11k-scan` (its cron job, see
 	-- sysconf.lua): make the next 802.11k beacon request due now.
 	if M._scan_requested() then
@@ -1245,38 +1290,7 @@ function M.run(cfg, ufhw)
 				.. tostring(err_rt) .. "\n")
 		end
 	end
-	-- A Locate does NOT survive a restart, and must not: it is a transient
-	-- "which box is it" blink, nobody is still standing in front of the AP,
-	-- and unset-locate only ever arrives while someone is watching the
-	-- controller. Left alone the device comes back still blinking with no
-	-- snapshot of what the LED was on, and the next unset-locate -- if one
-	-- ever comes -- restores nothing. Worse, a second set-locate would
-	-- snapshot the blink itself as the thing to restore. Observed exactly
-	-- that on an AX3000T, whose radio LED stayed on the identify blink
-	-- across three Locate cycles.
-	if st.locating then
-		-- Only when the LED is really still blinking: a device that REBOOTED
-		-- mid-Locate comes back with the kernel's own default trigger already
-		-- restored, and "stopping" that would write none over it.
-		if M._led.locate_active(cfg and cfg.led) then
-			M._led.locate_stop(cfg and cfg.led, st.locate_prev_trigger)
-		end
-		st.locating = false
-		st.locate_prev_trigger = nil
-		M._state.save(st)
-	end
-	-- LED brightness is live kernel state too, not UCI -- the same reason the
-	-- blocked-client rules are reapplied above. The controller pushes
-	-- led_enabled once, in mgmt_cfg, and never again, so without this the
-	-- Manage > LED toggle silently forgets itself on every reboot while the
-	-- controller goes on believing it took. Applied AFTER the locate teardown:
-	-- if both have something to say, the steady state the operator chose wins
-	-- over whatever trigger the blink displaced. nil means it was never
-	-- pushed, which must leave the board's own default alone rather than
-	-- deciding for it.
-	if st.led_enabled ~= nil then
-		M._led.set_enabled(cfg and cfg.led, st.led_enabled)
-	end
+	M._reapply_leds(st, cfg)
 	M._reapply_airtime(st)
 	-- nftables state does not survive a reboot, so the per-socket MAC tap is
 	-- reinstalled here from the UCI sections that record which sockets have
