@@ -255,6 +255,32 @@ function M.reassert(skip)
 	return relit
 end
 
+-- A netdev LED's device renamed under it (netmodel.lua reconcile_leds,
+-- changes = {{sysfs, from, to}}): the running trigger follows, and so does
+-- the snapshot while openUF holds the LEDs, or the restore would put the
+-- old name back.
+function M.repoint(changes)
+	local b = M.load_baseline()
+	local dirty = false
+	for _, c in ipairs(type(changes) == "table" and changes or {}) do
+		local n = c.sysfs
+		if valid_name(n) and type(c.from) == "string" and type(c.to) == "string" then
+			if active_trigger(n) == "netdev" and attr(n, "device_name") == c.from then
+				set(n, "device_name", c.to)
+			end
+			local s = b and b.leds[n]
+			if s and s.trigger == "netdev" then
+				for _, kv in ipairs(s.attrs or {}) do
+					if kv[1] == "device_name" and kv[2] == c.from then
+						kv[2], dirty = c.to, true
+					end
+				end
+			end
+		end
+	end
+	if dirty then save_baseline(b) end
+end
+
 -- Locate: the fast identify blink on the status LED, after making sure the
 -- snapshot exists to put it back from.
 function M.locate_start(led)

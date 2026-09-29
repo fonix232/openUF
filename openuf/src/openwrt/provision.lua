@@ -338,6 +338,7 @@ function M.handle(ctx, json_str, st, cfg)
 						ip = nil   -- addressing is part of the plan, as UCI
 						if changed then
 							ctx._sysinfo.forget_uplink_cache()
+							if ctx._follow_bridge_leds then ctx._follow_bridge_leds() end
 							-- A new plan is only proven once its rollback window
 							-- closes (ctx._netmodel_check).
 							if type(st.netmodel_pending) == "table" then

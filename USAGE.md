@@ -203,6 +203,15 @@ again, keeping its new state as the one to restore.
 To change what an LED does, configure it in OpenWrt as usual (LuCI → System → LED
 Configuration, or `/etc/config/system`); the controller's switch then turns that on and off.
 
+**LEDs on the bridge.** A netdev LED the board configured on its own bridge — an E8450's
+internet LED and a WAX220's LAN LED both watch `switch.1` on OpenWrt 25.12 — would name a
+device that no longer exists once openUF's network model replaces that bridge, and stay dark.
+While openUF's bridge is in place, such an LED is pointed at it the way interfaces are:
+`<bridge>.<vid>` → `br-lan.<vid>`, the bridge itself → `br-lan`. The board's value is kept in
+the section's `openuf_dev_orig` and goes back when the bridge does (a rollback of the first
+takeover, `syswrapper.sh netmodel-restore`). The old bridge names come from
+`/etc/openuf/network.pre-openuf`; the running LED follows at once, no `led` restart.
+
 ### Device identity
 
 openUF presents itself as the UniFi access point closest to the board, chosen once

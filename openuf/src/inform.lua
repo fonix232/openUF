@@ -722,6 +722,24 @@ end
 --     still standing in front of the AP, and unset-locate only comes while
 --     someone watches the controller. After a reboot there is nothing to end.
 --  3. The switch as last pushed; nil (never pushed) leaves the board alone.
+-- Netdev LEDs follow the bridge openUF owns, in UCI and on the running LEDs
+-- (netmodel.lua reconcile_leds, led.lua repoint). Run at start, after a new
+-- network plan, and after a rollback.
+function M._follow_bridge_leds()
+	if not M._netmodel then return end
+	local ok, changes = pcall(M._netmodel.reconcile_leds)
+	if not ok then
+		io.stderr:write("inform: LEDs on the bridge: " .. tostring(changes) .. "\n")
+		return
+	end
+	if type(changes) ~= "table" or #changes == 0 then return end
+	pcall(M._led.repoint, changes)
+	for _, c in ipairs(changes) do
+		io.stderr:write(("inform: LED %s follows the bridge: %s -> %s\n")
+			:format(tostring(c.sysfs), tostring(c.from), tostring(c.to)))
+	end
+end
+
 function M._reapply_leds(st, cfg)
 	local status_led = cfg and cfg.led
 	local dirty = false
@@ -1096,7 +1114,10 @@ function M._netmodel_check(st, cfg, ok)
 		-- the one this device runs.
 		if res == "rolled_back" then st.cfgversion_effective = before or nil end
 		M._state.save(st)
-		if res == "rolled_back" then pcall(M._sysinfo.forget_uplink_cache) end
+		if res == "rolled_back" then
+			pcall(M._sysinfo.forget_uplink_cache)
+			M._follow_bridge_leds()
+		end
 		pcall(M._netmodel.repair_default_route, (cfg and cfg.net and cfg.net.lan_name) or "lan")
 		-- Either way the management address may have moved (a Management
 		-- VLAN is a new subnet), and `ip` in the payload is what the
@@ -1214,6 +1235,7 @@ function M.run(cfg, ufhw)
 	-- A network plan applied right before a restart gets a fresh rollback
 	-- window measured from now.
 	if M._netmodel then pcall(M._netmodel.on_start, st) end
+	M._follow_bridge_leds()
 	M._reapply_static_ip(st, cfg)
 	-- The MAC persisted by the previous run, before _populate_net_info
 	-- overwrites it with the live one read off dev.conf.net.lan_cpueth.

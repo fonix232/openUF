@@ -574,4 +574,72 @@ return {
 			assert_eq(u.commits.network, commits, "not committed")
 		end
 	},
+	{
+		name = "netmodel: netdev LEDs on the board's old bridge follow openUF's, and go back with it",
+		fn = function()
+			local fs = new_fs()
+			stub_io(fs)
+			fs.files[netmodel.PRISTINE_FILE] = "config device 'switch'\n\toption name 'switch'\n"
+				.. "\toption type 'bridge'\n\tlist ports 'lan1'\n\n"
+				.. "config device\n\toption name 'wan'\n\toption macaddr '00:00:5e:00:53:01'\n"
+			local u = new_mock_uci()
+			local c = u.cursor
+			c:set("network", "openuf_br", "device")
+			c:set("network", "openuf_br", "name", "br-lan")
+			-- The WAX220's LEDs: LAN on the management VLAN device, a radio
+			-- LED on its own netdev, and one on the old bridge itself.
+			for sec, o in pairs({
+				led_eth0   = {sysfs = "green:lan", trigger = "netdev", dev = "switch.1", mode = "link"},
+				led_wlan2g = {sysfs = "green:wlan2g", trigger = "netdev", dev = "phy0-ap0"},
+				led_all    = {sysfs = "green:power", trigger = "netdev", dev = "switch"},
+				led_on     = {sysfs = "blue:power", trigger = "none", default = "1"},
+			}) do
+				c:set("system", sec, "led")
+				for k, v in pairs(o) do c:set("system", sec, k, v) end
+			end
+
+			local changes = netmodel.reconcile_leds(c)
+			assert_eq(#changes, 2, "two LEDs were on the old bridge")
+			assert_eq(c:get("system", "led_eth0", "dev"), "br-lan.1", "a VLAN device maps to ours")
+			assert_eq(c:get("system", "led_eth0", "openuf_dev_orig"), "switch.1", "the board's value is kept")
+			assert_eq(c:get("system", "led_eth0", "mode"), "link", "nothing else about the LED changes")
+			assert_eq(c:get("system", "led_all", "dev"), "br-lan", "the bridge maps to the bridge")
+			assert_eq(c:get("system", "led_wlan2g", "dev"), "phy0-ap0", "an LED on another device is left alone")
+			assert_nil(c:get("system", "led_on", "openuf_dev_orig"), "and so is one without a netdev trigger")
+			assert_eq(u.commits.system, 1, "committed once")
+			local by = {}
+			for _, ch in ipairs(changes) do by[ch.sysfs] = ch end
+			assert_eq(by["green:lan"].from, "switch.1", "the running LED's old device")
+			assert_eq(by["green:lan"].to, "br-lan.1", "and its new one")
+
+			assert_eq(#netmodel.reconcile_leds(c), 0, "idempotent")
+			assert_eq(u.commits.system, 1, "no second commit")
+
+			-- netmodel-restore (or a rollback of the first takeover): our
+			-- bridge is gone, the board's values come back.
+			c:delete("network", "openuf_br")
+			changes = netmodel.reconcile_leds(c)
+			assert_eq(#changes, 2, "both put back")
+			assert_eq(c:get("system", "led_eth0", "dev"), "switch.1", "the board's own device")
+			assert_nil(c:get("system", "led_eth0", "openuf_dev_orig"), "and no stash left")
+			assert_eq(c:get("system", "led_all", "dev"), "switch", "the bridge LED too")
+		end
+	},
+	{
+		name = "netmodel: without a pristine copy, or without openUF's bridge, no LED is touched",
+		fn = function()
+			local fs = new_fs()
+			stub_io(fs)
+			local u = new_mock_uci()
+			local c = u.cursor
+			c:set("system", "led_eth0", "led")
+			c:set("system", "led_eth0", "trigger", "netdev")
+			c:set("system", "led_eth0", "dev", "switch.1")
+			assert_eq(#netmodel.reconcile_leds(c), 0, "no openUF bridge: nothing to follow")
+			c:set("network", "openuf_br", "device")
+			c:set("network", "openuf_br", "name", "br-lan")
+			assert_eq(#netmodel.reconcile_leds(c), 0, "no pristine copy: no old names known")
+			assert_eq(c:get("system", "led_eth0", "dev"), "switch.1", "untouched")
+		end
+	},
 }

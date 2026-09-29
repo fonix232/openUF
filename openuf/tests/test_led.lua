@@ -299,4 +299,27 @@ return {
 			end)
 		end
 	},
+	{
+		name = "led: a netdev LED whose device was renamed follows, live and in the snapshot",
+		fn = function()
+			with(function(leds)
+				leds["inet:blue"].attrs.device_name = "switch.1"
+				led.repoint({{sysfs = "inet:blue", from = "switch.1", to = "br-lan.1"}})
+				assert_eq(leds["inet:blue"].attrs.device_name, "br-lan.1", "the running trigger follows")
+				assert_eq(leds["inet:blue"].attrs.link, "1", "keeping its modes")
+
+				-- Held dark: the rename must reach the snapshot, or switching
+				-- on would put the old name back.
+				leds["inet:blue"].attrs.device_name = "switch.1"
+				led.set_enabled(false)
+				led.repoint({{sysfs = "inet:blue", from = "switch.1", to = "br-lan.1"}})
+				assert_eq(leds["inet:blue"].trigger, "none", "a dark LED stays dark")
+				led.set_enabled(true)
+				assert_eq(leds["inet:blue"].attrs.device_name, "br-lan.1", "and comes back on the new device")
+
+				led.repoint({{sysfs = "../x", from = "a", to = "b"}, {sysfs = "power:blue"}})
+				assert_eq(leds["power:blue"].brightness, 1, "odd entries are ignored")
+			end)
+		end
+	},
 }

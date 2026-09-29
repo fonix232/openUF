@@ -158,6 +158,12 @@ local function cmd_netmodel_restore()
 	local st = load_state()
 	local s  = st.load()
 	local net = nm.restore_pristine(s)
+	if net then
+		-- The board's own bridge is back: so are its LEDs' devices.
+		local ok_c, changes = pcall(nm.reconcile_leds)
+		local ok_l, led = pcall(require, "openwrt.led")
+		if ok_c and ok_l then pcall(led.repoint, changes) end
+	end
 	local wifi = restore_wireless()
 	if not (net or wifi) then
 		io.stderr:write("syswrapper: no " .. nm.PRISTINE_FILE .. " or " .. wireless_pristine

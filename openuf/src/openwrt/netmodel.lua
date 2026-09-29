@@ -37,7 +37,8 @@
 	and its bridge-vlan sections are deleted, interfaces that pointed at it (or
 	at `<it>.<vid>`) are re-pointed at the new bridge (a VLAN they referenced is
 	kept in the table so they keep working), and openUF's own per-VLAN-bridge
-	leftovers are removed. The board's original /etc/config/network is kept once
+	leftovers are removed. Netdev LEDs on the old bridge follow the same way
+	(reconcile_leds), and go back with it. The board's original /etc/config/network is kept once
 	in /etc/openuf/network.pre-openuf.
 
 	SAFETY. Rewriting the bridge that carries the management address can strand
@@ -750,6 +751,81 @@ function M.repair_default_route(iface)
 	M._log("restored the default route via " .. via .. " on " .. dev
 		.. " (netifd had it, the kernel did not)")
 	return true
+end
+
+-- ─── LEDs on the bridge ─────────────────────────────────────────────────────
+
+-- The bridges the board had before openUF, from PRISTINE_FILE: the names a
+-- netdev LED configured then may still carry. A plain reading of UCI's file
+-- format -- `config device` sections of type bridge, their `name`.
+local function pristine_bridges()
+	local names = {}
+	local text = M._read_file(M.PRISTINE_FILE)
+	if not text then return names end
+	local cur
+	local function close()
+		if cur and cur.bridge and cur.name then names[cur.name] = true end
+	end
+	for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+		local stype = line:match("^%s*config%s+(%S+)")
+		if stype then
+			close()
+			cur = (stype == "device") and {} or nil
+		elseif cur then
+			local k, v = line:match("^%s*option%s+(%S+)%s+['\"]?([^'\"]*)['\"]?%s*$")
+			if k == "type" and v == "bridge" then cur.bridge = true end
+			if k == "name" then cur.name = v end
+		end
+	end
+	close()
+	return names
+end
+
+-- A netdev LED (/etc/config/system) configured on the board's bridge, or a
+-- VLAN device of it, names a device the takeover removed and stays dark for
+-- good: both E8450s and the WAX220 lost their internet/LAN LED on switch.1
+-- that way. While openUF's bridge is in place such an LED is pointed at it,
+-- the way the takeover re-points interfaces -- <bridge>.<vid> for a VLAN
+-- device, the bridge for the bridge -- with the board's value kept in
+-- openuf_dev_orig; once the bridge is gone (rolled back, netmodel-restore)
+-- the board's value goes back. Returns {{sysfs, from, to}} for each LED
+-- changed, for the running LEDs to follow (led.lua repoint).
+function M.reconcile_leds(cursor)
+	cursor = cursor or get_uci().cursor()
+	local ours = cursor:get("network", M.SECTION_PREFIX .. "br", "name")
+	local old = {}
+	if type(ours) == "string" then
+		old = pristine_bridges()
+		old[ours] = nil
+	else
+		ours = nil
+	end
+	local changes = {}
+	cursor:foreach("system", "led", function(s)
+		local sec, dev, orig = s[".name"], s.dev, s.openuf_dev_orig
+		if s.trigger ~= "netdev" or type(dev) ~= "string" then return end
+		local to
+		if ours then
+			local base, vid = dev:match("^(.-)%.(%d+)$")
+			if base and old[base] then
+				to = ours .. "." .. vid
+			elseif old[dev] then
+				to = ours
+			end
+			if to and type(orig) ~= "string" then
+				cursor:set("system", sec, "openuf_dev_orig", dev)
+			end
+		elseif type(orig) == "string" then
+			to = orig
+			cursor:delete("system", sec, "openuf_dev_orig")
+		end
+		if to and to ~= dev then
+			cursor:set("system", sec, "dev", to)
+			changes[#changes + 1] = {sysfs = s.sysfs, from = dev, to = to}
+		end
+	end)
+	if #changes > 0 then cursor:commit("system") end
+	return changes
 end
 
 function M.restore_pristine(st)

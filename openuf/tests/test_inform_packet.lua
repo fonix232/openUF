@@ -48,7 +48,7 @@ local function led_recorder(baseline)
 	inform._led = {
 		set_enabled = rec("set_enabled", true), locate_start = rec("locate_start", true),
 		locate_stop = rec("locate_stop", true), reassert = rec("reassert", 0),
-		restore_status_leds = rec("restore_status_leds"),
+		restore_status_leds = rec("restore_status_leds"), repoint = rec("repoint"),
 		load_baseline = function() return baseline end,
 	}
 	return calls, function() inform._led = orig end
@@ -4896,6 +4896,33 @@ return {
 				inform.handle_response, inform._time, inform._reload_if_changed, inform._rrm_tick =
 				orig.build_json, orig.build_packet, orig.http_post, orig.parse_packet,
 				orig.handle_response, orig.time, orig.reload, orig.rrm
+			done()
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform: netdev LEDs re-pointed in UCI are re-pointed on the running LEDs too",
+		fn = function()
+			local calls, done = led_recorder()
+			local orig_nm, orig_err = inform._netmodel, io.stderr
+			local logged = {}
+			io.stderr = {write = function(_, m) logged[#logged + 1] = m end}
+			local change = {sysfs = "green:lan", from = "switch.1", to = "br-lan.1"}
+			inform._netmodel = {reconcile_leds = function() return {change} end}
+			local ok, err = pcall(function()
+				inform._follow_bridge_leds()
+				assert_eq(calls[1][1], "repoint", "the running LEDs follow")
+				assert_eq(calls[1][2][1], change, "with netmodel's changes")
+				assert_true(table.concat(logged):find("green:lan follows the bridge: switch.1 -> br-lan.1", 1, true) ~= nil,
+					"and it is logged")
+				inform._netmodel = {reconcile_leds = function() return {} end}
+				inform._follow_bridge_leds()
+				assert_eq(#calls, 1, "nothing changed, nothing to repoint")
+				inform._netmodel = {reconcile_leds = function() error("uci missing") end}
+				inform._follow_bridge_leds()
+				assert_eq(#calls, 1, "a failure is logged, not raised")
+			end)
+			inform._netmodel, io.stderr = orig_nm, orig_err
 			done()
 			if not ok then error(err, 0) end
 		end
