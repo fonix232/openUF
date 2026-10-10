@@ -48,9 +48,43 @@ M._run_cmd = function(cmd) return os.execute(cmd) end
 -- value an earlier openUF wrote gets removed.
 M.OWNED_OPTIONS = {"band_steering_interval", "band_steering_threshold"}
 
+-- List options of the device's own usteer sections that set_enabled copies
+-- into usteer.local. /etc/init.d/usteer builds one set_config object from
+-- every usteer section, and uci_option_to_json_string_array emits a list's
+-- key even when the section has none; usteerd keeps the last occurrence of a
+-- key, which is `local`'s. Without the copy, an ssid_list or event_log_types
+-- set in the device's own section is silently replaced by an empty array.
+-- aggressiveness_mac_list goes through the same copy in set_locked.
+M.CARRIED_LISTS = {"ssid_list", "event_log_types"}
+
 local function get_uci()
 	if M._uci then return M._uci end
 	return require("uci")
+end
+
+-- A UCI list option as a table: a single value comes back as a string.
+local function as_list(v)
+	if type(v) == "string" then return {v} end
+	return type(v) == "table" and v or {}
+end
+
+local function same_list(a, b)
+	if #a ~= #b then return false end
+	for i = 1, #a do if a[i] ~= b[i] then return false end end
+	return true
+end
+
+-- The entries of list option opt in every usteer section but openUF's
+-- `local`, in section order.
+local function other_entries(cursor, opt)
+	local out = {}
+	if not cursor.foreach then return out end
+	cursor:foreach("usteer", "usteer", function(s)
+		if s[".name"] ~= "local" then
+			for _, e in ipairs(as_list(s[opt])) do out[#out + 1] = e end
+		end
+	end)
+	return out
 end
 
 -- Enable or disable band steering, and keep the daemon running for Roaming
@@ -75,6 +109,8 @@ function M.set_enabled(enabled, cfg, roam_assist)
 	-- nil = delete: the daemon's own default interval is the one that
 	-- steered a real client on hardware (PROTOCOL-VALIDATION.md, #25).
 	local want = {band_steering_interval = (not enabled) and "0" or nil}
+	local carried = {}
+	for _, opt in ipairs(M.CARRIED_LISTS) do carried[opt] = other_entries(cursor, opt) end
 
 	-- No-op discipline (same hazard class as switchvlan's reload guard):
 	-- this runs on EVERY WiFi setparam, and unconditionally committing +
@@ -91,6 +127,11 @@ function M.set_enabled(enabled, cfg, roam_assist)
 	for _, opt in ipairs(M.OWNED_OPTIONS) do
 		if cursor:get("usteer", "local", opt) ~= want[opt] then same = false end
 	end
+	for _, opt in ipairs(M.CARRIED_LISTS) do
+		if not same_list(as_list(cursor:get("usteer", "local", opt)), carried[opt]) then
+			same = false
+		end
+	end
 	if same then return true end
 
 	cursor:set("usteer", "local", "usteer")
@@ -98,6 +139,13 @@ function M.set_enabled(enabled, cfg, roam_assist)
 	for _, opt in ipairs(M.OWNED_OPTIONS) do
 		if want[opt] ~= nil then
 			cursor:set("usteer", "local", opt, want[opt])
+		elseif cursor:get("usteer", "local", opt) ~= nil then
+			cursor:delete("usteer", "local", opt)
+		end
+	end
+	for _, opt in ipairs(M.CARRIED_LISTS) do
+		if #carried[opt] > 0 then
+			cursor:set("usteer", "local", opt, carried[opt])
 		elseif cursor:get("usteer", "local", opt) ~= nil then
 			cursor:delete("usteer", "local", opt)
 		end
@@ -138,19 +186,6 @@ end
 -- settings) are carried into `local`'s list, a locked client's own entry
 -- replaced by the lock's.
 
-local function other_entries(cursor)
-	local out = {}
-	if not cursor.foreach then return out end
-	cursor:foreach("usteer", "usteer", function(s)
-		if s[".name"] ~= "local" then
-			local v = s.aggressiveness_mac_list
-			if type(v) == "string" then v = {v} end
-			for _, e in ipairs(type(v) == "table" and v or {}) do out[#out + 1] = e end
-		end
-	end)
-	return out
-end
-
 -- macs: the clients locked to this AP (lowercase). Writes usteer.local's
 -- aggressiveness_mac_list while openUF runs usteerd, removes it otherwise.
 -- Returns true when it changed the list (and restarted the daemon).
@@ -165,7 +200,7 @@ function M.set_locked(macs)
 				locked[m:lower()] = true
 			end
 		end
-		for _, e in ipairs(other_entries(cursor)) do
+		for _, e in ipairs(other_entries(cursor, "aggressiveness_mac_list")) do
 			if not locked[tostring(e):sub(1, 17):lower()] then want[#want + 1] = e end
 		end
 		local mine = {}
@@ -173,13 +208,8 @@ function M.set_locked(macs)
 		table.sort(mine)
 		for _, e in ipairs(mine) do want[#want + 1] = e end
 	end
-	local have = cursor:get("usteer", "local", "aggressiveness_mac_list")
-	if type(have) == "string" then have = {have} end
-	have = type(have) == "table" and have or {}
-	if #have == #want then
-		local same = true
-		for i = 1, #want do if have[i] ~= want[i] then same = false end end
-		if same then return false end
+	if same_list(as_list(cursor:get("usteer", "local", "aggressiveness_mac_list")), want) then
+		return false
 	end
 	if #want > 0 then
 		cursor:set("usteer", "local", "aggressiveness_mac_list", want)

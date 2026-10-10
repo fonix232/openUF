@@ -859,7 +859,14 @@ for the whole AP, because usteer is a single daemon. Balance is not supported (s
 Troubleshooting). Steering itself is `usteer`'s decision, not openUF's: openUF configures the daemon
 (`usteer.local.band_steering_interval`: `0` when off, and the daemon is stopped unless
 Roaming Assistant needs it; unset when on, so usteer's own default applies) and forces 802.11k neighbour reports plus
-`bss_transition=1` onto every VAP, since usteer cannot work without them. If a client is
+`bss_transition=1` onto every VAP, since usteer cannot work without them. Settings of your
+own go in the device's own usteer section, not in `local`. `/etc/init.d/usteer` merges every
+section into one config and sends each list option from each section, even an empty one,
+and usteerd keeps the last copy, which is `local`'s. So openUF copies `ssid_list` and
+`event_log_types` from the other sections into `local` (and `aggressiveness_mac_list`, see
+§ Lock to Access Point), and restarts usteer only when the copy changes. An edit to them is
+picked up on the next WiFi config push. `ubus call usteer get_config` shows what usteerd
+actually uses. If a client is
 not being steered, check `ubus call usteer get_clients` for a 5 GHz sighting of it and
 `ubus call hostapd.<iface> get_clients` for its `rrm` bits and the BSS-Transition bit in
 `extended_capabilities` — a client with neither cannot be steered by any AP, and usteer's

@@ -205,6 +205,52 @@ return {
 		end
 	},
 	{
+		name = "usteer: set_enabled carries the device's own ssid_list and event_log_types into local",
+		fn = function()
+			-- The init script emits each list key from every section, empty
+			-- or not, and usteerd keeps the last: local's. Live 2026-10-10,
+			-- four ssid_list entries in the device's own section, none in
+			-- get_config.
+			with_usteer(function(db, cmds, commits)
+				db.usteer = {cfg01 = {[".name"] = "cfg01", [".type"] = "usteer",
+					ssid_list = {"Home", "IoT"}, event_log_types = "probe_req_accept"}}
+				usteer.set_enabled(true, nil)
+				local s = db.usteer["local"]
+				assert_eq(table.concat(s.ssid_list, " "), "Home IoT", "ssid_list carried")
+				assert_eq(table.concat(s.event_log_types, " "), "probe_req_accept",
+					"a single-value list carried as a list")
+				assert_eq(commits.usteer, 1, "one write")
+				local n = #cmds
+				usteer.set_enabled(true, nil)
+				assert_eq(commits.usteer, 1, "carried lists unchanged: no write")
+				assert_eq(#cmds, n, "and no restart")
+			end)
+		end
+	},
+	{
+		name = "usteer: a change to the device's own lists rewrites local once; removing them clears it",
+		fn = function()
+			with_usteer(function(db, cmds, commits)
+				usteer.set_enabled(true, nil)
+				assert_nil(db.usteer["local"].ssid_list, "nothing to carry: no list written")
+				assert_eq(commits.usteer, 1, "first write")
+				db.usteer.cfg01 = {[".name"] = "cfg01", [".type"] = "usteer", ssid_list = {"Home"}}
+				local n = #cmds
+				usteer.set_enabled(true, nil)
+				assert_eq(commits.usteer, 2, "the new list is picked up")
+				assert_true(#cmds > n and cmds_contain({cmds[#cmds]}, "usteer restart"),
+					"daemon restarted with it")
+				assert_eq(table.concat(db.usteer["local"].ssid_list, " "), "Home", "carried")
+				db.usteer.cfg01.ssid_list = nil
+				usteer.set_enabled(true, nil)
+				assert_eq(commits.usteer, 3, "removal is a change too")
+				assert_nil(db.usteer["local"].ssid_list, "local's copy deleted")
+				usteer.set_enabled(true, nil)
+				assert_eq(commits.usteer, 3, "then steady")
+			end)
+		end
+	},
+	{
 		name = "usteer: reconcile_filter drops the sync on every VAP, first fragments and the rest",
 		fn = function()
 			local cmds, orig = {}, usteer._exec
