@@ -2166,13 +2166,24 @@ by the controller's own startup log: `firmware[U6IW] new version (6.8.2.15592) i
 | `wifi_caps` | `0x800` (MESHV3) | AP config generator | ⚠️ **Claimed only with `wireless_uplink`.** With `0x1`: the `mesh.*` block and the hidden WDS downlink VAP. Alone it does nothing |
 | `wifi_caps` | `0x80` (MESH) | — | No observable effect on the push (yesrab/openUF, three diffs). Not claimed |
 | `wifi_caps2` | `0x10` (16) | `Device.supportsAcsDfs()` = `hasWifiCapability2(16)` | The controller never emits `radio.<n>.blklst` (the site's Auto-channel exclusions) or `radio.<n>.acsdfs` (its 5 GHz DFS switch). Decompiled from 10.6.106 only — see [`radio.<n>.blklst` / `acsdfs`](#radionblklst--radionacsdfs--auto-channel-exclusions-and-dfs). |
+| `fw_caps` | `0x1000` | `supportMultiBlockWlanSchedule()` = `hasFirmwareCapability(4096)` | A day's schedule blocks go out under one key (`schedule_<day>`), so the last wins. Claimed since 2026-10-10 — see [WLAN Schedule](#wlan-schedule-wirelessnschedule_). |
+| `fw_caps` | `0x400000` | `supportWlanScheduleInvert()` = `hasFirmwareCapability(0x400000)` | The controller sends the complement of the blackout blocks instead of `schedule_invert` + the blocks. Claimed since 2026-10-10 (both readings are implemented). |
+| `fw_caps` | `0x20000000` | `supportsRadiusFilter()` | No `aaa.<n>.filter_id`. Claimed since 2026-10-10 — see [RADIUS Filter-Id](#radius-filter-id-aaanfilter_id). |
+| `fw_caps` | `0x800000` | `supportHotspot2()` | A Hotspot 2.0 or OSEN WLAN is dropped from the push. Claimed where `hostapd -vhs20` passes — see [Hotspot 2.0](#hotspot-20--passpoint-aaanhs20). |
+| `fw_caps` | `0x4000` | `supportsSNMPv3()` | No `snmp.user.1.*` (v1/v2c is sent regardless). Claimed where `snmpd-ssl` is installed — see [SNMP](#snmp-snmp). `0x2000` gates only the UniFi OS (gateway) SNMP path (`config.tmTjAksIyMivqmlnYPu`) and is not claimed. |
+| `fw_caps` | `0x80000000` (bit 31) | `supportsMacBasedVlans()` = `hasFirmwareCapability(Integer.MIN_VALUE)` | No `aaa.<n>.accept_mac.*`, and the site feature (Virtual Network Override) is off while any AP or switch with clients lacks it. Claimed where hostapd has VLAN support. **Sent as a negative number** — see [MAC-based VLANs](#mac-based-vlans-aaanaccept_mac). |
+| `wifi_caps` | `0x1000` | `supportRadiusMacAuth()` | Nothing: no caller in 10.6.106. Claimed because `aaa.<n>.radius.macacl.*` is applied. |
+| `wifi_caps2` | `0x400000` | `supportsMulticastSuppressor()` | No `wireless.<n>.multicast.suppressor` and no Aggressive `bypass_types`. Site feature MULTICAST_SUPPRESSOR needs any one AP. Claimed — see [Multicast Suppressor](#multicast-suppressor-wirelessnmulticastsuppressor). |
+| `wifi_caps2` | `0x200` | `supportNeighbourInScan()` | Radio AI sends the AP `scan_band`; the per-band neighbour-isolation site features need every AP on the band. Claimed while a sibling scan runs — see [Neighbour isolation](#radio-ai-neighbour-isolation-wifi_caps2-0x200). |
+| `wifi_caps2` | `0x2000` | `supportsRoamTopologyStats()` | `sta_roam` is not fed to the roaming detector, and `success` is. Claimed with connection events on — see [Roam topology](#roam-topology-sta_roam-and-assoc_status). |
 
 `wifi_caps2` is a **second, entirely separate** bitmask from `wifi_caps` (which gates
 `supportBandsteering()`/`supportZeroHandoff()` and more; openUF claims `0x4`/`0x8`, and
 `0x20` (`supportATFConfig()`) and `0x100000` (`supportWpaPpsk()`) where supported, as below).
-Only bits `0x40`, `0x20` and `0x10` of `wifi_caps2` are claimed; the mask also gates Mesh MLO,
-quick/neighbour scan, roam topology stats, Green AP and the multicast suppressor,
-which openUF does not implement and must not claim.
+openUF claims `wifi_caps2` bits `0x40`, `0x20`, `0x10`, `0x80` (quick scan), `0x400000`
+(multicast suppressor), `0x2000` (roam topology, with connection events on) and `0x200`
+(neighbour in scan, with a sibling scan configured). The mask also gates Mesh MLO and Green
+AP, which openUF does not implement and must not claim.
 
 **`wifi_caps` `0x4` + `0x8` (device-level Band Steering): CLAIMED, confirmed in the lab
 2026-09-27 (upstream jonasevcik/openUF).** Predicates: `supportBandsteering()` =
@@ -2264,8 +2275,7 @@ Gates that drop or weaken a feature openUF could implement (each bit openUF clai
 
 | Field | Bit | Predicate | Effect while unclaimed |
 |---|---|---|---|
-| `fw_caps` | `0x1000` | `supportMultiBlockWlanSchedule()` | A WLAN Schedule with several blocks per day goes out as one `wireless.<n>.schedule_<day>` key per block, all under the same name, so the last one wins. With the bit set they become `schedule_<day>.<i>` |
-| `fw_caps` | `0x400000` | `supportWlanScheduleInvert()` | The controller inverts a schedule itself instead of sending `schedule_invert` |
+| — | — | — | (2026-10-10: the two WLAN Schedule bits that stood here are claimed now, with the rest of the gates listed in the table above.) |
 
 **`radio_caps2` `0x8` (Enhanced Open / OWE): CLAIMED, confirmed in the lab 2026-09-27.**
 Predicate: radio DTO `NoFWvUa()`, tested in `plVcFpIybmrpXclX` for an open WLAN with
@@ -2351,9 +2361,8 @@ Dockerfile, since `sysinfo.sae_supported()` reads that file. The capture above w
 upstream (jonasevcik/openUF) with identical claim code; this fork's lab was not re-run for
 the port. Hardware tier (FT-SAE roam on a WPA3-only WLAN): not yet run.
 
-The two schedule bits are not claimed because openUF implements no WLAN Schedule: the
-`schedule_*` keys are emitted whenever a WLAN has a schedule, regardless of any bit, and
-openUF parses none of them. Claim both when the feature is built.
+The two schedule bits are claimed since 2026-10-10, with the schedule implemented (see
+[WLAN Schedule](#wlan-schedule-wirelessnschedule_)).
 
 Gated, and not to be claimed:
 - **No OpenWrt equivalent, or out of scope:**
@@ -2362,19 +2371,21 @@ Gated, and not to be claimed:
   - `radio_caps` `0x20000`: `radio.<n>.hard_noisefloor.*` / sensitivity level, a QCA RX-sensitivity setting.
   - `wifi_caps` `0x4000`/`0x8000`: multi-vport and Element. (`0x1`/`0x800`, vwire and meshv3, are claimed with `wireless_uplink`; `0x80` does nothing — see the table above.)
   - `wifi_caps` `0x10` spectrum scan, `0x2000` "open hostapd", `0x40` `bga_filter`, `0x4000000` low-performance mode.
-  - `wifi_caps2` `0x4` Green AP, `0x200` neighbour-in-scan, `0x20000` (an AP-group check, purpose unclear).
-  - `fw_caps` `0x800000` Hotspot 2.0 (such a WLAN is skipped without it) and `0x20000000` RADIUS `filter_id`.
-  - `fw2_caps` `0x80000` RadSec, `0x20` `port_table.mac_table_ipv6`, `0x80` device command retry.
-- **Multicast Suppressor** (`wifi_caps2` `0x400000` → `wireless.<n>.multicast.suppressor`):
-  could be enforced in nft like the Multicast/Broadcast Blocker, but it is the same feature
-  class that breaks casting. Low priority.
+  - `wifi_caps2` `0x4` Green AP, `0x20000` (an AP-group check, purpose unclear).
+  - `fw2_caps` `0x80000` RadSec (no RadSec client on OpenWrt 25.12, see [Hotspot 2.0](#hotspot-20--passpoint-aaanhs20)), `0x20` `port_table.mac_table_ipv6`, `0x80` device command retry.
 - **No callers in the controller**, so a bit does nothing: `supportMinRateCtrl` (`wifi_caps`
-  `0x200`), `supportMultiAclList` (`0x400`), `supportRadiusMacAuth` (`0x1000`),
-  `supportHideChWidth` (`0x10000`), `supportZeroHandoff` (`0x2`),
-  `supportsRoamTopologyStats` (`wifi_caps2` `0x2000`). ⚠️ This list came from the config
-  generators only. `supportLockAp` (`0x1000000`) was on it and is wrong: on 10.6.106 it
-  gates the site feature `LOCK_AP`, i.e. whether the UI offers the client setting at all.
-  openUF claims it since 2026-10-10 (see [Lock to Access Point](#lock-to-access-point-lock2ap)).
+  `0x200`), `supportMultiAclList` (`0x400`), `supportHideChWidth` (`0x10000`),
+  `supportZeroHandoff` (`0x2`). `supportRadiusMacAuth` (`0x1000`) has no caller either and
+  is claimed since 2026-10-10 because the feature is applied. ⚠️ This list came from the
+  config generators only, and two entries on it were wrong: `supportLockAp` (`0x1000000`)
+  gates the site feature `LOCK_AP` (claimed since 2026-10-10, see
+  [Lock to Access Point](#lock-to-access-point-lock2ap)), and `supportsRoamTopologyStats`
+  (`wifi_caps2` `0x2000`) is read by the stats ingest (`devmgr.w.a.RPnnqSiu`,
+  `VsCpQiCuGEvNvUNmH`, `wifi.connectivity.c.gyWdIcvdh`), not by a config generator
+  (claimed since 2026-10-10, see [Roam topology](#roam-topology-sta_roam-and-assoc_status)).
+  2026-10-10 also moved `fw_caps` `0x800000` (Hotspot 2.0), `0x20000000` (RADIUS
+  `filter_id`), `wifi_caps2` `0x200` (neighbour in scan) and `0x400000` (multicast
+  suppressor) out of this list: each is claimed, with its feature.
 
 **The per-port VLAN validator** (`com.ubnt.ace.api.e.VVyiC`, reachable only once
 `hasQCASwitch()` is true):
@@ -3527,6 +3538,239 @@ are exactly where unanchored patterns go wrong.
 
 ---
 
+## Capability features claimed 2026-10-10 (decompiled, not yet seen on the wire)
+
+Every key below was read from the 10.6.106 controller's own generator or ingest code
+(`internal-dependencies.jar`, CFR 0.152, extracted on a case-sensitive volume), **not**
+from a capture: none of it has been seen on the wire, and none of it has run on hardware.
+Each consumer is unit-tested (`tests/test_capsfeatures.lua`, every key path
+mutation-tested); the tier each one reached beyond that is named with it.
+
+### MAC-based VLANs (`aaa.<n>.accept_mac.*`)
+
+`com/ubnt/service/config/ubntconf/fdwW`, called from `VAZShipWTNxlo` (the UAP generator)
+with the list of every WLAN's `aaa` index:
+
+```java
+if (n == 1) rx.NvfcKfHPI("accept_mac.status", "enabled");
+rx.NvfcKfHPI("accept_mac." + n + ".mac", entry.getValue());
+rx.NvfcKfHPI("accept_mac." + n + ".vlanid", String.valueOf(entry.getKey()));
+...
+private boolean kCNoUwYXLXMAUl(hyFnQ d) {
+    return d.supportsMacBasedVlans() && this.kCNoUwYXLXMAUl.kCNoUwYXLXMAUl(d.getSiteId()); }
+```
+
+The entries are the site's clients with `virtual_network_override_enabled`
+(`service/bz/DXjFpHAhtGlwvsEEcf`), grouped by the override network, `vlanid` being that
+network's `getVlan()` (its tag, or `1` for the untagged LAN, `data/qfbKhmmodhjMTf`). The
+site gate (`service/bz/bWpcUrDmeyjdNnrWeZ`) wants a UniFi OS gateway that supports it and
+**every** AP/switch with clients claiming `supportsMacBasedVlans()` =
+`hasFirmwareCapability(Integer.MIN_VALUE)`, bit 31. The same file emits
+`switch.vnet.<n>.name/vlan/mac.<k>` for switches; an AP never gets it.
+
+**Bit 31 on the wire.** The controller keeps capability masks as Java `int`s. The inform
+ingest copies `fw_caps` with `getInt` (`Number.intValue()`, `devmgr.iceUMDuewFNFLMOqti`
+and friends), but the device DTO's builder takes it through a Jackson setter with an
+`int` parameter (`com/ubnt/i/b/l/XtugNwLHsUnnZrF`, `@JsonProperty("fw_caps") void
+setFirmwareCapabilities(int)`), which Jackson refuses to fill from 2147483648 or more. So
+openUF sends a mask with bit 31 as its signed 32-bit value (`report.signed32`, e.g.
+`0xA0501110` goes out as `-1605365488`); every path reads that back bit for bit.
+
+**OpenWrt side** (`ucihelper.macvlan_plan`). hostapd's `accept_mac_file` takes
+`<MAC> <VLAN id>` lines and several `accept_mac_file` lines add up
+(`hostapd_config_read_maclist`). `hostapd_check_acl` consults the accept list *first* and
+returns its VLAN with the accept; with `macaddr_acl=0` everyone else is still accepted. The
+VLAN must be in the BSS's `vlan_file` (`hostapd_vlan_valid`), which 25.12's `ap.uc`
+(`iface_vlan`) builds from `wifi-vlan` sections, and `ap.uc` writes `dynamic_vlan` /
+`vlan_no_bridge` only when `vlan_possible` (PSK, SAE, EAP, or an allow filter). openUF
+writes the list to `/etc/openuf/macvlan-<section>.list` (flash: hostapd reads it at boot),
+names it with a raw `accept_mac_file=` line, sets `dynamic_vlan=1` and adds one `wifi-vlan`
+per VLAN. Because the accept list wins, a MAC refused by the WLAN's deny filter or by Lock
+to Access Point, a MAC not on an allow filter, and every entry of a WLAN with RADIUS MAC
+authentication (an accept would skip the RADIUS check) are left out, as are entries on the
+WLAN's own VLAN and open/OWE WLANs. The VLANs go to the `vlan_filtering` plan like a PPSK
+key's. **Tier:** unit; the generated hostapd config (accept list with VLAN ids + `vlan_file`)
+parses cleanly in 25.12's `wpad-openssl` (rootfs, up to driver init). Not run on hardware.
+
+### Multicast Suppressor (`wireless.<n>.multicast.suppressor`)
+
+`VAZShipWTNxlo`:
+
+```java
+if (wlan.isMulticastSuppressorEnabled() && device.supportsMulticastSuppressor() && n4 == 0)   // n4: isServiceWlan()
+    OWIoHe.kCNoUwYXLXMAUl(sb, "wireless." + n8, "multicast.suppressor", yaXSmtLge.kCNoUwYXLXMAUl(true));   // "enabled"
+```
+
+`com/ubnt/service/config/ubntconf/EYFcHmSpOqr` (the blocker's generator):
+
+```java
+if (!wlan.isBroadcastAndMulticastFilterEnabled() && !aggressive(device, wlan)) return empty;
+kp = new kp().kCNoUwYXLXMAUl("wireless." + n + ".bcfilt.status", true);
+if (aggressive(device, wlan)) kp.kCNoUwYXLXMAUl("wireless." + n + ".bcfilt.bypass_types", "ARP|NSNA|DHCPV4|DHCPV6");
+// bcfilt.<k>.mac: the WLAN's exceptions + every site device MAC + the gateway's LAN peer MACs
+aggressive = device.supportsMulticastSuppressor() && wlan.getMulticastSuppressorMode() == AGGRESSIVE && !wlan.isServiceWlan();
+```
+
+Modes (`com/ubnt/i/b/aL/eevUQSYcUHYjkbIHTHo`): `off`, `conservative`, `aggressive`; the
+React form maps an old `bc_filter_enabled` to Aggressive. The UI text: "Limits multicast and
+broadcast traffic to reduce WiFi airtime usage. Conservative prevents storms; Aggressive
+blocks all except DHCP and ARP, unless a device is allowlisted." The site feature
+(`service/as/RxFvcetMTlkSFFxK`) is on once **any** AP claims `wifi_caps2` `0x400000`. So
+Aggressive is fully specified by the wire; Conservative carries no parameter.
+openUF: Aggressive = the blocker plus one accept per bypass type ahead of the drop;
+⚠️ Conservative = a per-VAP limiter on group-addressed frames (200/s, burst 400), a reading
+of "prevents storms". **Tier:** unit + container with real `nft` 1.0.9: every rule rc 0,
+rebuilt twice identically, torn down by an empty list; with real bridged traffic between
+two network namespaces, Aggressive passed 5/5 broadcasts to UDP 67 and 0/5 to UDP 9999,
+and Conservative passed 401 of a 2000-frame burst and 50/50 after a 2 s pause. The ARP and
+ND accepts load but were not traffic-tested (no ARP/ND sender in the container).
+
+### WLAN Schedule (`wireless.<n>.schedule_*`)
+
+`VAZShipWTNxlo`:
+
+```java
+bnjutafutalctv_0 b = bnjutafutalctv_0.kCNoUwYXLXMAUl(wlan.getScheduleWithDuration());
+if (wlan.hasScheduleWithDuration()) {
+    if (device.supportWlanScheduleInvert()) OWIoHe.kCNoUwYXLXMAUl(sb, string, "schedule_invert", "enabled");
+    else b = b.NvfcKfHPI();                        // the complement, per day
+}
+b.kCNoUwYXLXMAUl().forEach((day, list) -> { ... "schedule_" + day.toString().toLowerCase()
+    + (device.supportMultiBlockWlanSchedule() ? "." + i : "") = start + "-" + end ... });
+```
+
+with `wireless.<n>.schedule_enabled` in the WLAN's main array. Days are `sun`..`sat`
+(`com/ubnt/i/e/n/unLiwXHYlFDg`), times `HHmm`, `2359` the end of the day
+(`service/at/rpnnqsiu_0`), blocks crossing midnight split per day. The complement
+(`service/at/bnjutafutalctv_0.NvfcKfHPI`) turns a day's blackout blocks into the gaps
+between them, a day without blackout into `0000-2359`, and drops a day blacked out end to
+end. The 10.6 UI calls it a "WiFi Blackout Schedule" ("Specify times when this WiFi
+instance should be disabled"). Hence: without invert, blocks are ON times and a day without
+blocks is off; with invert, blocks are OFF times and a day without blocks is on.
+openUF claims both bits and implements both readings (`unifi/schedule.lua`); the device
+side (`openwrt/wlansched.lua`) is described in USAGE § 6. 25.12's `hostapd.uc`
+`iface_reload_config` adds or removes a single BSS when only the BSS list changed, so the
+`disabled` flip plus `wifi reload` leaves the radio and the other WLANs up (read in the
+25.12 `hostapd.uc`, not observed). Lua's `os.date` follows `/etc/TZ` with no `TZ` in the
+environment (checked in the 25.12 rootfs). **Tier:** unit.
+
+### Hotspot 2.0 / Passpoint (`aaa.<n>.hs20.*`)
+
+`com/ubnt/service/config/ubntconf/LsyaJoEysWb`:
+
+```java
+boolean hs = wlan.is("hotspot2conf_enabled", false);
+if ((hs || VsCpQiCuGEvNvUNmH.OSEN == wlan.getSecurityOrOpen()) && !device.supportHotspot2()) {
+    log.warn("Hotspot 2 cannot provision OSEN on {} to {}, hotspot2: {}", ...); return null; }
+```
+
+The keys come from `VAZShipWTNxlo`'s Enterprise branch (`aaa.<n>.hs20.status`, then
+`access_network_type`, `internet`/`asra`/`esr`/`uesa`, `venue_group`/`venue_type`,
+`disable_dgaf`, `deauth_req_timeout`, `t_c_filename`/`t_c_timestamp`, `osu_ssid`,
+`gas_comeback_delay`/`gas_frag_limit`, `network_availability` = (v4 << 2) + v6,
+`network_auth_type` + `network_auth_url`, `anqp_domain_id`, `hessid`,
+`venue_name.<k>.*`, `hs20_domain_name_list`, `nai_realm.<k>.*` with
+`eap_method.auth.<j>.id/val`, `<k>.roaming_consortium`, `3gpp.<k>.mcc/mnc`,
+`friendly_name.<k>.*`, `capab.<k>.protocol/port/status` (protocol already an IP number),
+`qos.*`, `metrics.*`, `icon.<k>.*`, and `aaa.<n>.osu.<k>.*`), plus
+`wireless.<n>.dgaf_disable`. Every non-Hotspot Enterprise WLAN carries
+`aaa.<n>.hs20.status=disabled`. The site's Passpoint flag is
+`supportsHotspot2Passpoint()` = `supportHotspot2() && supportsRadSec()` (`fw2_caps`
+`0x80000`). OpenWrt: 25.12's `wpad-openssl` passes `hostapd -vhs20` (exit 0); openUF writes
+the block as raw lines (`openwrt/hotspot2.lua`), because 25.12's `ap.uc`
+`iface_interworking()` overwrites `domain_name` with the 3GPP list and joins array options
+onto one line. Online sign-up (OSU providers, icons) is not carried (hostapd dropped its OSU
+server support); an OSEN WLAN is skipped (no OpenWrt encryption for it). RadSec: no
+`radsecproxy` in the 25.12 feed and hostapd speaks RADIUS over UDP only, so `fw2_caps`
+`0x80000` is not claimed and the site's Passpoint feature stays off.
+**Tier:** unit; a hostapd config with every generated line (plus the WPA2-EAP/CCMP base)
+parses with 0 errors in 25.12's `wpad-openssl`, including hostapd's own "WPA2-Enterprise/CCMP
+is required for Hotspot 2.0" check, and a deliberately malformed `hs20_wan_metrics` is
+reported, proving the parse ran. Not run on hardware.
+
+### RADIUS Filter-Id (`aaa.<n>.filter_id`)
+
+`VAZShipWTNxlo` (Enterprise branch):
+
+```java
+if (device.supportsRadiusFilter() && this.lWxsLKSR(device.getSiteId())) {   // the gateway runs SERVICES_RADIUS_SERVER
+    rGUtaVWZlySeOK f = wlan.isUidWifi() ? rGUtaVWZlySeOK.UID_WIFI : rGUtaVWZlySeOK.WPA_EAP;
+    OWIoHe.kCNoUwYXLXMAUl(sb, String.format("aaa.%d", n), "filter_id", f.kCNoUwYXLXMAUl()); }   // "uid-wifi" | "wpa-eap"
+```
+
+The enum (`com/ubnt/i/b/W/rGUtaVWZlySeOK`: `mac-acl`, `uid-vpn`, `uid-wifi`, `wpa-eap`,
+`vpn`) is the vocabulary of the gateway's RADIUS accounts' `filter_ids` (the services an
+account may use, `data/unLiwXHYlFDg`), so the AP names its service in the request. The
+gateway's RADIUS server itself is not in this jar. openUF: `list radius_auth_req_attr
+'11:s:<value>'` (RADIUS attribute 11, Filter-Id), an option in 25.12's
+`wireless.wifi-iface.json` that `ap.uc` writes with the authentication servers;
+hostapd parses `radius_auth_req_attr=11:s:uid-wifi` (rootfs, as above). **Tier:** unit.
+
+### SNMP (`snmp.*`)
+
+`com/ubnt/service/config/lwueNrOWUBYJX`, called by the UAP generator with prefix `""`,
+key `"community"`, limit 256:
+
+```java
+boolean v12 = settings.isEnabled();
+boolean v3 = settings.is("enabledV3", false) && device.supportsSNMPv3();      // fw_caps 0x4000
+if (v12 || v3) { sb "snmp" status=enabled, version = v12&&v3 ? "all" : v12 ? "1_2c" : "3";
+                 location / contact when set }
+if (v12) sb "snmp.community" = settings.getString("community", "public");
+if (v3)  sb "snmp.user.1.name" / "snmp.user.1.password";
+```
+
+No `status=disabled`: off is the absence of the block. The UniFi OS side of the same
+setting (`config.tmTjAksIyMivqmlnYPu`) uses SHA authentication and AES privacy with one
+passphrase, and gates on `fw_caps` `0x2000`; that path is a gateway's, not an AP's.
+OpenWrt 25.12 ships `snmpd-ssl`/`snmpd-nossl` (43 KiB + `libnetsnmp` ~1.1 MiB) with a UCI
+init script that turns `config v3` into `createUser`/`rouser`. **Tier:** unit + rootfs: the
+UCI openUF writes, run through 25.12's real init script and `snmpd-ssl`, answered
+`snmpget -v2c -c <community>`, refused `-c public`, and answered `-v3 -l authPriv -a SHA -x AES`.
+
+### Radio AI neighbour isolation (`wifi_caps2` `0x200`)
+
+`com/ubnt/service/system/XbYOtjBEpjeHWlUU` (the Radio AI run) sends
+`{"cmd":"scan_band","band":...}` only to APs without `supportNeighbourInScan()`, and
+`com/ubnt/service/bF/BNJuTaFuTalcTv` enables `RADIO_AI_NEIGHBOR_ISOLATION_{NG,NA,6E}` only
+when every AP with a radio on the band claims it. The isolation matrix
+(`devmgr.kFACvOhX`) is built from the peer-scan cache (`service/aS/eevUQSYcUHYjkbIHTHo`,
+fed by `aS.qikih` from every inform's `scan_radio_table`): an entry tagged `is_unifi` with
+`serialno`, `age` ≤ inform interval + 10 s, mapped to an adopted sibling and kept an hour,
+whose channel must match the sibling's current one. Nothing new is reported by a claiming
+AP: it is trusted to keep its regular scan table current. openUF's is: sibling sightings
+from `idlescan.lua`'s half-hourly sibling scans and idle sweeps, tagged through the sibling
+exchange. Claimed while `sibling_scan_interval` or `idle_scan_interval` is above 0.
+⚠️ Only openUF siblings are tagged; a genuine UniFi AP is reported as a third-party BSS
+(openUF does not parse Ubiquiti's own vendor element), so in a mixed site the matrix lacks
+those pairs. Without the claim a site with an openUF AP had no isolation at all, and the
+`scan_band` it got was ignored. **Tier:** decompile only.
+
+### Roam topology: `sta_roam` and `assoc_status`
+
+`devmgr/w/a/RPnnqSiu` feeds `event_type:"sta_roam"` to the roaming detector
+(`devmgr/w/a/Cuhf`) only when `supportsRoamTopologyStats()`; `VsCpQiCuGEvNvUNmH:70` feeds a
+verified `success` to it only when **not** claimed; `gyWdIcvdh` (sta_leave) feeds it
+always. `Cuhf` treats `sta_roam` like `sta_leave` (the "left" half, 10 s cache) and reads:
+
+```java
+int n2 = ev.getInt("assoc_status");
+.kCNoUwYXLXMAUl(has(n2, rFCHnXVpfjjP.KICKED_DUE_TO_MIN_RSSI.bitmask()))          // 16
+.NvfcKfHPI(has(n2, rFCHnXVpfjjP.MOVED_DUE_TO_ROAMING_ASSISTANT.bitmask()))       // 8192
+```
+
+(enum `devmgr/w/a/rFCHnXVpfjjP`: `SUCCESS(0)`, `KICKED_DUE_TO_MIN_RSSI(16)`,
+`MOVED_DUE_TO_ROAMING_ASSISTANT(8192)`). The "joined" half is an `association` with
+`auth_rssi` (and `auth_algo:"ft"` for FT); a roam whose left half was a `sta_roam` counts as
+seamless. A parallel firmware analysis decoded UniFi's `stahtd` bit names (`0x10` `rssikck`
+… `0x1000` `lock2ap`); `0x2000` is the controller's own Roaming Assistant value, absent from
+the 6.8.2 printer. openUF: every `sta_leave` carries `assoc_status` (0, 16 after a Minimum
+RSSI kick, 8192 after a Roaming Assistant BSS Transition request or forced disassociation,
+within 120 s); a client that left while its BTM request was still pending is also sent as
+`sta_roam` (same fields, its own `event_id`) just before the `sta_leave`, which the station
+manager still needs (`sta_roam` does not reach it). Associations already carry `auth_rssi`,
+so claiming `0x2000` costs no roam data. **Tier:** unit.
+
 ## Feature matrix
 
 Every controller-UI control exercised against a live openUF device. "Confirmed" means driven
@@ -3576,6 +3820,14 @@ through the real UI with the resulting wire payload captured or the effect verif
 | 40 | Roaming Assistant | `wifi_caps2` bit `0x20` → `wireless.<n>.btm_disassoc.status`/`.threshold` | ✅ Wire format, gate and teardown confirmed live in the lab (10.4.57) and against a real UCG Ultra (Network 10.6), 2026-09-26: the keys arrive on the 5 GHz WLAN entry only, and switching off removes openUF's stamp on both APs. **Steering confirmed on real radios:** a client at −80 dBm on one AP, heard at −52 by the other, got a BTM request, answered `BSS-TM-RESP status_code=4` (refused), was disassociated 16 s later by openUF, and reassociated on the other AP within 1 s at −61 dBm. Its hostapd `extended_capabilities` did not advertise BSS Transition, yet it answered, so the capability bytes do not predict which clients reply. It stayed put for all 30 one-minute samples, with no further actions. The no-better-AP rule is unit-tested only: no qualifying client was present. |
 | 41 | Auto-channel exclusions / DFS for Auto | `wifi_caps2` bit `0x10` → `radio.<n>.blklst` / `radio.<n>.acsdfs` | ⚠️ Gate, keys and value formats from the 10.6.106 decompile only; not yet seen on the wire. Mapped to UCI `channels` / `acs_exclude_dfs` while the channel is Auto, stamped and torn down when the keys go; unit-tested through `wlan.parse` + `apply_config`. hostapd applies `chanlist` to the primary channel only, so a wide channel can still cover an excluded secondary. See [`radio.<n>.blklst` / `acsdfs`](#radionblklst--radionacsdfs--auto-channel-exclusions-and-dfs). |
 | 42 | Wireless uplink (mesh) | `wifi_caps` `0x1`+`0x800` → `mesh.*`, `wireless.<n>.usage=uplink\|downlink` `wds=enabled` → `openuf_bh_dl_*` (hidden `wds 1` AP) / `openuf_bh_ul_*` (4-address `sta`, wired-first); reported as `usage`-typed VAPs, `uplink` = the uplink VAP's name, each peer by `serialno` | ⚠️ Ported from yesrab/openUF, who verified it end to end on their hardware against 10.6.106. Opt-in (`wireless_uplink`); unit-tested only here, not run in the lab or on this project's (wired) APs. Only the management network crosses the hop. See [Wireless uplink](#wireless-uplink-mesh--ported-from-yesrabopenuf-2026-10-03) |
+| 43 | MAC-based VLANs (Virtual Network Override) | `fw_caps` bit 31 (sent signed) → `aaa.<n>.accept_mac.*` → `accept_mac_file` + `wifi-vlan` | ⚠️ Decompiled 10.6.106; unit + hostapd config parse (rootfs). See [MAC-based VLANs](#mac-based-vlans-aaanaccept_mac) |
+| 44 | Multicast Suppressor | `wifi_caps2` `0x400000` → `wireless.<n>.multicast.suppressor` (+ Aggressive `bcfilt.bypass_types`) | ⚠️ Decompiled; unit + real nft and bridged traffic in a container. Conservative's threshold is openUF's own |
+| 45 | WLAN Schedule | `fw_caps` `0x1000` + `0x400000` → `wireless.<n>.schedule_<day>.<i>`, `schedule_invert` | ⚠️ Decompiled; unit only |
+| 46 | Hotspot 2.0 / Passpoint | `fw_caps` `0x800000` → `aaa.<n>.hs20.*` → raw hostapd lines | ⚠️ Decompiled; unit + hostapd config parse. RadSec (`fw2_caps` `0x80000`) not claimed |
+| 47 | RADIUS Filter-Id | `fw_caps` `0x20000000` → `aaa.<n>.filter_id` → `radius_auth_req_attr 11:s:` | ⚠️ Decompiled; unit + hostapd parse |
+| 48 | SNMP Monitoring | `snmp.*` (v3 behind `fw_caps` `0x4000`) → `/etc/config/snmpd` | ⚠️ Decompiled; unit + real `snmpd-ssl` in the 25.12 rootfs |
+| 49 | Radio AI neighbour isolation | `wifi_caps2` `0x200` (no keys; the regular `scan_radio_table`) | ⚠️ Decompiled only |
+| 50 | Roam topology | `wifi_caps2` `0x2000`; `sta_roam` + `assoc_status` events | ⚠️ Decompiled; unit only |
 
 ---
 
@@ -3602,6 +3854,14 @@ through the real UI with the resulting wire payload captured or the effect verif
   `sae_anti_clogging_threshold` and `sae_sync` are real hostapd keys but are declared in no
   wifi-iface schema, no ucode generator and no `hostapd.sh` `config_add_*` list, on either
   board. openUF no longer writes them (see feature 27).
+- **The 2026-10-10 capability features** (§ above) need their first live captures:
+  `accept_mac.*` with a client override set, `multicast.suppressor` in both modes, a
+  schedule with `schedule_invert`, an `hs20` block, `filter_id`, `snmp.*`. Whether the
+  controller accepts a negative `fw_caps` everywhere it reads one (the DTO path argues it
+  must) is settled by the first inform after the claim: the device stays Connected and
+  the site offers Virtual Network Override. On hardware: a client landing on its override
+  VLAN, a scheduled SSID going down and up without the radio's other WLANs bouncing, a
+  Hotspot 2.0 BSS answering ANQP, roam records showing "triggered by Roaming Assistant".
 - **PoE self-reporting** could be reopened if the validation environment ever gains a real
   switch container, or if a non-Parent-Device UI surface for those fields is found.
 

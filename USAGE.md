@@ -7,7 +7,7 @@ The `openuf` package depends on everything openUF cannot work without: `lua`,
 `nftables`, `kmod-nft-bridge`, `hostapd-utils` and `ip-bridge`. The rest each enable one
 controller feature and are left to you, because they cost flash a small board may not
 have: `usteer`, `tc-tiny`, `kmod-sched-act-police`, `luasec`, `kmod-leds-gpio`,
-`coreutils-stat`.
+`coreutils-stat`, `snmpd-ssl`.
 
 One more is **required but not a package dependency**: a full `wpad` build. Stock images
 ship `wpad-basic-*`, and no dependency can name "any full build" (every variant provides
@@ -38,6 +38,7 @@ Without it the service refuses to start (§ troubleshooting).
 | `tc-tiny` | `tc` — WiFi Speed Limit (`shaper.lua`). Busybox has no `tc`; without it the limit is recorded in UCI and never enforced |
 | `kmod-sched-act-police` | The **upload** half of WiFi Speed Limit only. `police` is a tc *action*, a separate module from the ingress qdisc and absent from a stock filogic image. Without it the download cap applies and the upload cap does not — openUF logs which interface `tc` rejected and names this package rather than reporting the whole limit as applied |
 | `coreutils-stat` | `stat` — only if your build has no `stat` applet (some do not). `inform.lua` uses `stat -c %Y` to notice an out-of-process `state.json` write, i.e. an SSH `set-adopt` or a manual `reset-inform`; without it those are ignored until restart. Enabling busybox's own `stat` applet is smaller |
+| `snmpd-ssl` | SNMP Monitoring (Settings → System → SNMP): net-snmp's agent, configured by openUF from the controller's community and v3 user (`openwrt/snmp.lua`). 43 KiB plus `libnetsnmp-ssl` (~1.1 MiB). `snmpd-nossl` works for v1/v2c only: v3 needs AES privacy, so openUF claims `fw_caps` `0x4000` (SNMPv3) only with the ssl build. Without either, an SNMP push is logged once and ignored |
 | `usteer` | Band Steering (Behavior Controls) — ubus-based client-steering daemon, driven by `usteer.lua`. Roaming Assistant needs it too, for its view of which AP hears a client how loudly |
 | `wpad-mbedtls` (or `wpad-openssl`, `wpad-wolfssl`, `wpad`, `wpad-mesh-*`, `hostapd-*`) | Full hostapd build — **required, not optional.** The controller sends `aaa.<n>.bss_transition` with every WLAN, so openUF always writes `bss_transition`, and `wpad-basic-*` stops at "unknown configuration item 'bss_transition'" with the radio down. The init script checks the hostapd binary itself (`wnm_sleep_mode` is compiled in only with 802.11v; a grep for `bss_transition` is no test, since a basic binary carries `bss_transition_*` event names), so any full build counts, and it refuses to start on a basic one |
 
@@ -552,6 +553,11 @@ Settings carried through from the controller:
 | Multicast Enhancement | `multicast_to_unicast` |
 | Minimum Data Rate | per-**radio** `basic_rate` / `supported_rates` / `legacy_rates` / `beacon_rate` |
 | Multicast and Broadcast Blocker | nftables rules, not a hostapd option. `openuf_bcfilt`/`openuf_bcfilt_macs` on the section are the persisted record: the ruleset dies with a reboot, so openUF rebuilds it from those two options on every start |
+| Multicast Suppressor (Conservative / Aggressive) | nftables, in the blocker's `bridge openuf_bcfilt` table. **Aggressive** arrives as the blocker (`bcfilt.*`, its allowlist filled by the controller with the site's device MACs) plus `bcfilt.bypass_types=ARP\|NSNA\|DHCPV4\|DHCPV6`: openUF accepts those (ARP, IPv6 neighbour solicitation/advertisement, UDP 67/68, UDP 546/547) ahead of the drop. **Conservative** arrives as `wireless.<n>.multicast.suppressor=enabled` alone: openUF reads it as storm control and drops group-addressed frames to the VAP beyond 200 per second (burst 400). ⚠️ That threshold is openUF's choice: the controller sends none. Recorded as `openuf_mcast_suppressor`/`openuf_bcfilt_bypass` for the startup rebuild. Needs `wifi_caps2` `0x400000`, always claimed, and `kmod-nft-bridge` |
+| MAC-based VLANs (a client's Virtual Network Override, "VLAN Magic") | `aaa.<n>.accept_mac.<m>.mac`/`.vlanid` → `/etc/openuf/macvlan-<section>.list` (`<mac> <vid>` per line), named by `list hostapd_bss_options 'accept_mac_file=…'`, plus `dynamic_vlan=1` and one `wifi-vlan` per VLAN (`openuf_<vap>_vlan<vid>`, as for Private Pre-Shared Keys; VLAN 1 is the untagged network). hostapd accepts a listed client onto its VLAN and everyone else as before. Left out: a MAC the WLAN's deny filter or Lock to Access Point refuses, a MAC not on an allow filter, the WLAN's own VLAN, every entry on a WLAN with RADIUS MAC authentication (an accept-list hit would skip RADIUS), and open/OWE WLANs (OpenWrt sets up hostapd's VLAN bridging only for PSK, SAE and Enterprise). The list is on flash because hostapd reads it at boot, before openUF runs; it is rewritten only when it changes and removed when the override goes. Needs `fw_caps` `0x80000000`, claimed where hostapd has VLAN support (the PPSK probe) |
+| WLAN Schedule | `openuf_schedule` on the section (the schedule, encoded) and `disabled=1` + `openuf_sched_off=1` while the schedule has the WLAN off. Checked once a minute on the device's local time (the controller's timezone, `system_timezone`); a change is one `wifi reload`, which on 25.12 adds or removes just that BSS. A WLAN the controller disabled is never brought up by its schedule. See below |
+| Hotspot 2.0 / Passpoint | Raw hostapd lines in `list hostapd_bss_options` on the Enterprise section (`interworking=1`, `hs20=1`, `access_network_type`, `internet`, `venue_group`/`venue_type`, `venue_name`, `venue_url`, `hessid`, `domain_name`, `nai_realm`, `roaming_consortium`, `anqp_3gpp_cell_net`, `hs20_oper_friendly_name`, `hs20_conn_capab`, `hs20_wan_metrics`, `qos_map_set`, `ipaddr_type_availability`, `network_auth_type`, `disable_dgaf`, `anqp_domain_id`, GAS limits, Terms and Conditions filename/timestamp), from `aaa.<n>.hs20.*`. Not OpenWrt's `hs20`/`iw_*` options: 25.12's `ap.uc` overwrites `domain_name` with the 3GPP list and joins list options onto one line. Online sign-up (OSU providers, icons) is not carried; an OSEN WLAN is skipped. Needs `fw_caps` `0x800000`, claimed where `hostapd -vhs20` passes (the full `wpad-*` builds) |
+| RADIUS Filter-Id | `list radius_auth_req_attr '11:s:<uid-wifi\|wpa-eap>'` on the Enterprise section, from `aaa.<n>.filter_id` (sent only while the gateway runs the RADIUS server). Every Access-Request then names the service, which the gateway's RADIUS accounts are scoped to. Needs `fw_caps` `0x20000000`, always claimed |
 | Proxy ARP | `proxy_arp` — **needs a full `wpad` build** |
 | Client Isolation | `isolate` (hostapd `ap_isolate`) |
 | Group Key Update Period | `wpa_group_rekey` (seconds; `0` = never), from `aaa.<n>.wpa.group_rekey`. The controller sends `3600` unless the WLAN says otherwise; hostapd's own default is 86400 |
@@ -1006,6 +1012,15 @@ which openUF claims, so the AP also takes part in the controller's 03:00 sweep (
 AI is off) and Radio AI's prescans (see PROTOCOL-VALIDATION.md, *Quick scan*). The pending scan
 is held in memory: a daemon restart in between drops it, and the controller marks it done.
 
+Radio AI's **neighbour isolation** (per band) needs every AP on the band to claim
+`wifi_caps2` `0x200` ("neighbour in scan"). A claiming AP gets no `scan_band` command during
+a Radio AI run: the controller builds its isolation matrix from the sibling sightings every
+inform's `scan_radio_table` already carries (`is_unifi` entries, kept an hour). openUF's come
+from the sibling scans and idle sweeps above, so it claims the bit while
+`sibling_scan_interval` or `idle_scan_interval` is above 0. Only openUF siblings are tagged
+as UniFi neighbours; a genuine UniFi AP nearby shows as a third-party BSS, and the matrix
+lacks that pair.
+
 The **Multicast and Broadcast Blocker** has no hostapd or OpenWrt equivalent — hostapd
 can suppress group-addressed frames wholesale but has no notion of an allow-list — so
 openUF enforces it with nftables, in its own `bridge openuf_bcfilt` table (separate
@@ -1027,6 +1042,67 @@ kmod-nft-bridge` when this happens.
 > this control, so openUF reproduces it faithfully rather than adding DHCP/ARP
 > exemptions of its own — a silent exemption would be harder to debug than the
 > documented breakage. Inspect the live rules with `nft list table bridge openuf_bcfilt`.
+
+The **Multicast Suppressor** (WiFi → Advanced → Multicast Suppression, 10.6) lives in the
+same table. Aggressive is the blocker with the controller's exemptions: ARP, IPv6
+neighbour discovery and DHCPv4/v6 are accepted ahead of the drop, and the controller adds
+every device of the site to the allowlist ("Aggressive blocks all except DHCP and ARP,
+unless a device is allowlisted"). Conservative ("prevents storms") arrives with no
+parameters at all, so openUF rate-limits group-addressed frames to each such VAP at 200
+per second, burst 400 (`bcfilter.lua` `STORM_PPS`/`STORM_BURST`); traffic below that passes
+untouched. Checked in a container against real `nft` and real bridged traffic: UDP
+broadcasts to port 67 pass under Aggressive and to other ports are dropped, and a
+2000-frame burst under Conservative delivers about 400.
+
+### WLAN Schedule
+
+The controller's schedule (WiFi → Advanced → WiFi Blackout Schedule) reaches the AP as
+`wireless.<n>.schedule_<day>.<i>=HHMM-HHMM` blocks. openUF claims `fw_caps` `0x1000` (every
+block of a day, not just the last) and `0x400000` (the blackout blocks as they are, with
+`schedule_invert=enabled`; without it the controller sends their complement, the times the
+WLAN is on). Both readings are implemented (`unifi/schedule.lua`).
+
+- The section carries the schedule (`openuf_schedule`, e.g. `inv|mon=2200-2359|tue=0000-0700`),
+  so nothing else is kept and a restart resumes it.
+- The inform loop checks it once a minute. Off: `disabled=1` and `openuf_sched_off=1`. On:
+  back to `disabled=0`, but only where that mark says the schedule took it down, so a WLAN
+  the controller itself disabled stays down. One `wifi reload` covers every change; on
+  25.12 hostapd removes or adds just that BSS and leaves the radio and its other WLANs up.
+  The WLAN's speed limit (tc) is rebuilt once it is back.
+- Times are the device's local time, which is the controller's timezone when
+  `system_timezone` is on (`date` on the AP shows it). A device whose clock is not set
+  (no NTP yet) follows whatever time it has.
+- Removing the schedule rebuilds the section without it: the SSID comes back.
+
+### SNMP Monitoring
+
+Settings → System → SNMP sends `snmp.status=enabled`, `snmp.version` (`1_2c`, `3` or
+`all`), `snmp.community`, `snmp.location`/`snmp.contact` and, for v3, `snmp.user.1.name`/
+`password`, in every full push; SNMP off is the absence of the block. With `snmpd` installed
+(`apk add snmpd-ssl`), openUF keeps the device's `/etc/config/snmpd` once in
+`/etc/openuf/snmpd.orig` and rewrites it from the push: one read-only community
+(`com2sec`/`com2sec6`, v1 and v2c groups, a read-all view), one v3 user (`config v3`: SHA
+authentication and AES privacy, the password for both, as UniFi gateways are configured),
+`sysLocation`/`sysContact`, and `snmp_version` for the init script. No community or user
+the controller does not know about is left answering. snmpd restarts only when the push
+changes (`snmp_applied` in `state.json`). Turning SNMP off restores the kept file and
+restarts snmpd on it. Checked against 25.12's real `snmpd-ssl` in a container: the
+controller's community answers, `public` does not, and v3 authPriv SHA/AES answers.
+
+v1/v2c needs no capability bit; v3 is sent only to a device claiming `fw_caps` `0x4000`,
+which openUF claims when `snmpd-ssl` is installed. The agent listens on UDP 161 on every
+interface; an AP in the usual bridged setup has no firewall in front of it.
+
+### Hotspot 2.0 / Passpoint
+
+A Hotspot 2.0 WLAN is an Enterprise WLAN with `aaa.<n>.hs20.*` on top; the controller
+drops it from the push unless the device claims `fw_caps` `0x800000`, which openUF claims
+where hostapd is built with Hotspot 2.0 (`hostapd -vhs20`). openUF writes the whole block
+as raw hostapd lines (table above); hostapd itself refuses Hotspot 2.0 on anything but
+WPA2-Enterprise with CCMP/GCMP. The site's "Passpoint" feature additionally needs RadSec
+(`fw2_caps` `0x80000`), which openUF does not claim: OpenWrt 25.12 has no RadSec client
+(no `radsecproxy` package, and hostapd speaks RADIUS over UDP only), so Passpoint setups
+that need RADIUS over TLS stay unavailable even though the WLANs are no longer dropped.
 
 **Minimum Data Rate** is set per WLAN in the controller but OpenWrt's rate options
 (`basic_rate`, `supported_rates`, `legacy_rates`, `beacon_rate`) are `wifi-device`
@@ -1282,6 +1358,16 @@ sends up to eight events after each successful inform. A client that joins is an
 `association` (with its RSSI, which the roaming detector needs) and a `success`; one that
 leaves is a `sta_leave`, with `last_seen` in device uptime. Events queue while the
 controller is unreachable (200 at most). `sta_events = false` turns them off.
+
+Every departure carries `assoc_status`, the cause bits the controller's roaming detector
+reads: `16` when openUF's Minimum RSSI kicked the client, `8192` when its Roaming Assistant
+moved it (a BSS Transition request, or the forced disassociation after one), within the
+last two minutes. They show in the roam records as triggered by Minimum RSSI or by Roaming
+Assistant. A client that left on a BSS Transition request, before any forced
+disassociation, is also reported as `sta_roam` just before its `sta_leave`; the controller
+counts a roam whose left half is a `sta_roam` as seamless. openUF claims `wifi_caps2`
+`0x2000` (roam topology stats) while events are on: the controller then reads `sta_roam`
+and joins roams from `association` events, which carry `auth_rssi`, instead of `success`.
 
 The `success` carries the connection's timing, which is what fills the WiFi Connectivity
 view (Association, Authentication, DHCP, DNS and their latencies). The controller takes
@@ -1542,7 +1628,10 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 | Roaming Assistant never moves a weak client | Expected when no other AP hears it clearly better. Check `ubus call usteer get_client_info '{"address":"<mac>"}'`: another AP (`<ip>#hostapd.*`) on the same SSID and band needs a signal at or above the threshold and at least `roam_assist_diff_db` stronger. No remote entries at all means the usteer instances are not peering — both APs need usteer running on the same L2 network. `logread \| grep roamassist` shows every action. No `openuf_roam_assist` in `uci show wireless` at all means the controller never sent the setting |
 | Log says `device Band Steering mode "equal" is not supported` | The AP's own Band Steering is set to Balance. usteer can only balance by rejecting associations, so openUF does not map it. Use Prefer 5G or the per-WLAN toggle |
 | Clients are steered 2.4 → 5 GHz with Band Steering off | Check the AP's own Band Steering setting too: Prefer 5G turns it on whatever the WLANs say. usteer also runs for Roaming Assistant; with all three off openUF stops it, so something else started it. `ubus call usteer get_config` must show `band_steering_interval: 0`: any other value means usteer's default applies, and it steers. openUF writes the 0 on the next WiFi config push. Force Provision if it is missing |
-| A WLAN Schedule has no effect: the SSID stays up outside its schedule | Expected: WLAN Schedule is not implemented (README capability table). Turn the WLAN off in the controller instead |
+| A WLAN Schedule has no effect, or switches at the wrong hour | `uci show wireless \| grep openuf_sched` shows the schedule the section carries and whether the schedule has it off. `date` must show the site's local time: the schedule follows the device clock and its timezone (`system_timezone`, NTP). A WLAN the controller disabled is never brought up by its schedule. `logread -e "WLAN schedule"` lists each switch |
+| A client's Virtual Network Override has no effect | `cat /etc/openuf/macvlan-<section>.list` should list the client with its VLAN, and `grep accept_mac_file /var/run/hostapd-<phy>.conf` should name it. openUF logs an entry it left out: an open or OWE WLAN, RADIUS MAC authentication, a MAC filter that refuses the client, or a VLAN with no network on this AP. The site feature itself appears only when the gateway supports it and every AP and switch with clients claims `fw_caps` `0x80000000` |
+| SNMP does not answer | `apk info -e snmpd-ssl`; `logread -e snmp`. `cat /var/run/snmpd.conf` should hold the controller's community (`com2sec`) and, for v3, a `createUser` line; v3 needs `snmpd-ssl` (the nossl build has no privacy, and openUF does not configure the user there) |
+| A Hotspot 2.0 WLAN is missing | `hostapd -vhs20; echo $?` must print 0 (a full `wpad-*` build); otherwise openUF does not claim `fw_caps` `0x800000` and the controller drops the WLAN. An OSEN WLAN is skipped (logged) |
 | Airtime Fairness switch does nothing | `ls /sys/kernel/debug/ieee80211/phy*/airtime_flags` must list a file per radio. Without it openUF does not claim `wifi_caps` bit `0x20` and the controller sends no `atf.*` at all (debugfs not mounted, or a kernel without `CONFIG_MAC80211_DEBUGFS`). `cat` it after a push: two flag names for on, none for off. A driver that does not schedule through mac80211 TXQs ignores the flags |
 | A client shows poor WiFi Experience | The score is the worse of two terms, both read from `iw dev <ifname> station get <mac>`. **Downlink airtime**: Δ`tx duration` per Δ`tx packets` against the ideal: the client's own fixed cost per frame on a clean link (the median of its last 5 clean windows, floored at 110 µs on 2.4 GHz and 250 µs on 5/6 GHz; the floor until it has one) plus the payload at its ceiling rate. It is judged only in a window in which the driver re-sent at least 20 frames per 100 (Δ`tx retries` or Δ`tx failed`, whichever is larger): a weak or noisy link, or a power-saving client that dozes through them. A cleaner window counts as 100, because a clean link's airtime is mostly fixed per-frame cost, and mt76 can charge a station more `tx duration` than its radio transmitted. The 5 GHz floor covers an HE client's longer preamble and the RTS/CTS mt76 adds on wide channels; an HT/VHT client on 5 GHz without RTS/CTS really costs nearer 120–170 µs a frame, so for it the floor is lenient. The ceiling is the client's streams, width and top MCS from `hostapd_cli -i <ifname> all_sta`, capped by the AP's own, one MCS below the top. **Coverage**: `signal` minus the radio's noise (`iw dev <ifname> survey dump`, the `[in use]` entry, taken as at least −95 dBm): under 20 dB is below Excellent, under ~17 dB below Good. Retry and failure counters are not scored, since they mean different things per driver (see PROTOCOL-VALIDATION.md); they only decide whether a window's airtime is judged. Neither is `rx bitrate` (the uplink): it is the last frame's rate, and phones pick low uplink rates on clean links. Without `tx duration` the tx rate against the ceiling stands in, and a client with a legacy rate or no hostapd record is scored on SNR alone |
 | Clients on the same radio can't reach each other (a Cast/Google Home stereo pair or speaker group falls apart, AirPlay or printers vanish) while other clients are fine | The WLAN has Proxy ARP or Multicast Enhancement on, so OpenWrt forces `ap_isolate=1`, and the radio's bridge port lost its hairpin flag in a reconfigure (§ Hairpin). `cat /sys/class/net/<ifname>/brport/hairpin_mode` must be `1` on every BSS whose `/var/run/hostapd-phy*.conf` block has `ap_isolate=1`. openUF restores it within a minute and logs `re-asserted hairpin_mode`. On an older openUF, run `echo 1 >` on that file and on `proxyarp_wifi` |

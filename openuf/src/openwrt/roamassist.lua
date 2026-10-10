@@ -178,6 +178,20 @@ end
 -- One pass. observations: one per associated station on a vap with Roaming
 -- Assistant on: {ifname, ssid, mac, signal, connected_sec, threshold}.
 -- opts.diff_db overrides DEFAULT_DIFF_DB. Returns the number of actions.
+-- What the Roaming Assistant did to a client that has just left, for its
+-- departure event (unifi/staevents.lua): "btm" when a BSS Transition request
+-- was still waiting out its grace -- the client left on the request, a roam
+-- -- "disassoc" when it was disassociated within `window` seconds, else nil.
+-- A client's state outlives its departure by FORGET, which covers the
+-- heartbeat that notices it gone.
+function M.departure_cause(mac, now, window)
+	local cs = M._state[mac]
+	if not cs then return nil end
+	if cs.pending and now - cs.pending.at <= M.GRACE + (window or 120) then return "btm" end
+	if cs.acted_at and now - cs.acted_at <= (window or 120) then return "disassoc" end
+	return nil
+end
+
 function M.tick(observations, now, opts)
 	local diff_db = tonumber(opts and opts.diff_db) or M.DEFAULT_DIFF_DB
 	local actions = 0

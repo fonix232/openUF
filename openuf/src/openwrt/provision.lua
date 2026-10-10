@@ -526,6 +526,12 @@ function M.handle(ctx, json_str, st, cfg)
 				for _, k in ipairs(vap.ppsk or {}) do
 					if k.vid then key_vids[k.vid] = true end
 				end
+				-- A MAC-based VLAN's network needs the same: an interface on
+				-- the filtering bridge for its wifi-vlan to join. VLAN 1 is
+				-- the untagged network, which the plan has anyway.
+				for _, e in ipairs(vap.mac_vlans or {}) do
+					if e.vid and e.vid > 1 then key_vids[e.vid] = true end
+				end
 			end
 
 			-- The vlan_filtering backend (netmodel.lua): the controller's whole L2
@@ -764,6 +770,22 @@ function M.handle(ctx, json_str, st, cfg)
 				end)
 				if not ok_sc then
 					io.stderr:write("inform: system settings failed: " .. tostring(err_sc) .. "\n")
+					apply_ok = false
+				end
+			end
+
+			-- SNMP Monitoring (unifi/snmp.lua -> openwrt/snmp.lua). The block
+			-- is absent while SNMP is off, so every full system_cfg decides:
+			-- a device openUF configured (st.snmp_owned) gets its own snmpd
+			-- config back. Nothing happens without snmpd installed.
+			if ctx._snmp and ctx._snmp_parse then
+				local ok_sn, err_sn = pcall(function()
+					local intent = ctx._snmp_parse(sys_raw)
+					if ctx._ucihelper and ctx._ucihelper._uci then ctx._snmp._uci = ctx._ucihelper._uci end
+					if ctx._snmp.apply(intent, st) then ctx._state.save(st) end
+				end)
+				if not ok_sn then
+					io.stderr:write("inform: SNMP failed: " .. tostring(err_sn) .. "\n")
 					apply_ok = false
 				end
 			end

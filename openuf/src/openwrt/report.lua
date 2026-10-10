@@ -58,6 +58,61 @@ end
 -- cfg: device configuration (config.lua)
 -- ufhw: the UniFi identity (dev.identity)
 
+-- A capability mask as the controller stores it: a Java int. Bit 31 makes the
+-- value negative there, and the ingest DTO's setter takes an `int`
+-- (com.ubnt.i.b.l.XtugNwLHsUnnZrF setFirmwareCapabilities(int)), which Jackson
+-- refuses to fill from 2147483648 or more ("out of range of int"). So a mask
+-- with bit 31 goes out as its signed 32-bit value; every other ingest path
+-- (ZMUWuPFvCIO.getInt: Number.intValue()) reads that back bit for bit.
+function M.signed32(v)
+	if v >= 2147483648 then return v - 4294967296 end
+	return v
+end
+
+-- Whether a sibling-sighting scan runs at all (idlescan.lua): the source of
+-- the neighbour entries wifi_caps2 0x200 promises.
+function M.neighbour_scan_enabled(cfg)
+	local c = cfg and cfg.config or {}
+	return (tonumber(c.sibling_scan_interval) or 0) > 0 or (tonumber(c.idle_scan_interval) or 0) > 0
+end
+
+-- fw_caps: each bit gates one controller feature and is claimed only where
+-- this device carries it out (PROTOCOL-VALIDATION.md, Capability bitmasks).
+function M.fw_caps(ctx, cfg)
+	local si = ctx._sysinfo or {}
+	local function probe(fn)
+		if type(fn) ~= "function" then return false end
+		local ok, v = pcall(fn)
+		return ok and v == true
+	end
+	local caps = 0x100110
+		-- 0x1000 supportMultiBlockWlanSchedule + 0x400000 supportWlanScheduleInvert:
+		-- every block of a day as schedule_<day>.<i>, and the blackout blocks
+		-- as they are with schedule_invert. unifi/schedule.lua parses both,
+		-- openwrt/wlansched.lua takes the SSID down and up. (The schedule keys
+		-- themselves come regardless of these bits.)
+		+ 0x1000 + 0x400000
+		-- 0x20000000 supportsRadiusFilter: aaa.<n>.filter_id on an Enterprise
+		-- WLAN while the gateway runs the RADIUS server; ucihelper puts it in
+		-- every Access-Request as Filter-Id (radius_auth_req_attr 11).
+		+ 0x20000000
+	-- 0x800000 supportHotspot2: without it a Hotspot 2.0 (or OSEN) WLAN is
+	-- dropped from the push. Only where hostapd has CONFIG_HS20.
+	if probe(si.hs20_supported) then caps = caps + 0x800000 end
+	-- 0x4000 supportsSNMPv3: snmp.user.1.* is sent only with it. Only where
+	-- the ssl build of snmpd is installed (openwrt/snmp.lua); v1/v2c needs no
+	-- bit and is applied wherever snmpd is.
+	local snmp = ctx._snmp
+	if snmp and probe(snmp.v3_capable) then caps = caps + 0x4000 end
+	-- 0x80000000 supportsMacBasedVlans: aaa.<n>.accept_mac.* (per-client
+	-- network override; the site feature needs every AP and switch with
+	-- clients to claim it). hostapd's accept_mac_file VLAN ids land on
+	-- wifi-vlan sections: the same VLAN machinery Private Pre-Shared Keys
+	-- need, so the same probe.
+	if probe(si.ppsk_supported) then caps = caps + 0x80000000 end
+	return M.signed32(caps)
+end
+
 function M.build(ctx, st, cfg, ufhw)
 	local function loadavg()
 		local ok, la = pcall(ctx._sysinfo.loadavg)
@@ -764,6 +819,9 @@ function M.build(ctx, st, cfg, ufhw)
 					-- counters only
 				elseif minrssi_threshold and sta.signal and sta.signal < minrssi_threshold then
 					pcall(ufuci.kick_station, ifname, sta.mac)
+					-- For the departure event's assoc_status (staevents.lua).
+					ctx._minrssi_kicks = ctx._minrssi_kicks or {}
+					ctx._minrssi_kicks[sta.mac] = now
 				elseif vap.roam_assist_rssi and sta.signal then
 					roam_obs[#roam_obs + 1] = {
 						ifname = ifname, ssid = vap.essid, mac = sta.mac,
@@ -1352,7 +1410,8 @@ function M.build(ctx, st, cfg, ufhw)
 		-- + 0x100000: the controller sends RADIUS Dynamic Authorization
 		-- (aaa.radius.dad.*, aaa.<n>.radius.das.*) only to a device with it
 		-- (10.6.106 VAZShipWTNxlo); openwrt/das.lua is the dispatcher.
-		fw_caps          = 0x100110,
+		-- The rest are M.fw_caps' own comments.
+		fw_caps          = M.fw_caps(ctx, cfg),
 		-- wifi_caps: each bit gates one WiFi feature in the controller's config
 		-- generator (decompiled from 10.6.101, PROTOCOL-VALIDATION.md,
 		-- Capability bitmasks) and is claimed only where this device can
@@ -1377,6 +1436,11 @@ function M.build(ctx, st, cfg, ufhw)
 			-- will be skipped"); claimed where hostapd can put each key on its
 			-- own VLAN (sysinfo.ppsk_supported).
 			+ ((ctx._sysinfo.ppsk_supported and ctx._sysinfo.ppsk_supported()) and 0x100000 or 0)
+			-- 0x1000: supportRadiusMacAuth(). No 10.6.106 config generator reads
+			-- it: aaa.<n>.radius.macacl.* goes out whatever the bit, and
+			-- unifi/wlan.lua + ucihelper apply it (macaddr_acl=2). Claimed so
+			-- the device reports what it does.
+			+ 0x1000
 			-- 0x1000000: supportLockAp(). The site offers a client's "Lock to
 			-- Access Point" only while every wireless device claims it (10.6.106
 			-- site feature LOCK_AP). The lock itself reaches every OTHER AP as
@@ -1425,7 +1489,27 @@ function M.build(ctx, st, cfg, ufhw)
 			-- prescans); provision.lua runs it and quickscan_scanning reports
 			-- its progress. Claiming it enrols the AP in those sweeps, each
 			-- taking every radio of a band off-channel. Decompiled from 10.6.106.
-			+ 0x80,
+			+ 0x80
+			-- 0x400000: supportsMulticastSuppressor(). Without it no WLAN's
+			-- wireless.<n>.multicast.suppressor (Conservative or Aggressive)
+			-- is sent; bcfilter.lua enforces both. Decompiled from 10.6.106.
+			+ 0x400000
+			-- 0x200: supportNeighbourInScan(). Radio AI's neighbour isolation
+			-- (site features RADIO_AI_NEIGHBOR_ISOLATION_NG/NA/6E) needs every
+			-- AP on a band to claim it; an AP without it gets a `scan_band`
+			-- command during a Radio AI run instead. The isolation matrix is
+			-- built from the controller's peer-scan cache, which every inform's
+			-- scan_radio_table fills from is_unifi entries (aS.qikih, kept an
+			-- hour): openUF's sibling sightings (idlescan.lua's sweeps and
+			-- sibling scans, every 30 min by default). Claimed only while one
+			-- of those scans is configured. Decompiled from 10.6.106.
+			+ (M.neighbour_scan_enabled(cfg) and 0x200 or 0)
+			-- 0x2000: supportsRoamTopologyStats(). The controller then feeds
+			-- `sta_roam` departures to its roaming detector and stops feeding
+			-- it `success`, joining roams from `association` (auth_rssi)
+			-- alone; staevents.lua sends both, with assoc_status. Only while
+			-- connection events are on (sta_events). Decompiled from 10.6.106.
+			+ ((cfg and cfg.config and cfg.config.sta_events == false) and 0 or 0x2000),
 		-- Device-level (not per-radio -- see radio_table_stats above)
 		-- Device-level Experience: the mean of every connected client's own
 		-- satisfaction, across all VAPs. Same reasoning as the per-VAP copy

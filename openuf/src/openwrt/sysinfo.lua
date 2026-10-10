@@ -815,6 +815,20 @@ function M.owe_supported()
 	return found
 end
 
+M._hs20_supported_cache = nil
+
+-- Can this hostapd run Hotspot 2.0? Claimed as fw_caps 0x800000 (report.lua);
+-- without it the controller drops a Hotspot 2.0 WLAN from the push. hostapd's
+-- own probe: `hostapd -vhs20` exits 0 only on a CONFIG_HS20 build (the full
+-- wpad variants of 25.12; wpad-basic exits 1). openwrt/hotspot2.lua writes
+-- raw BSS lines, so no generator support is needed beyond hostapd_bss_options.
+function M.hs20_supported()
+	if M._hs20_supported_cache ~= nil then return M._hs20_supported_cache end
+	M._hs20_supported_cache = (M._run_cmd("/usr/sbin/hostapd -vhs20 >/dev/null 2>&1 && echo yes") or "")
+		:find("yes", 1, true) ~= nil
+	return M._hs20_supported_cache
+end
+
 M._ppsk_supported_cache = nil
 
 -- Can this device run Private Pre-Shared Keys: several passphrases on one

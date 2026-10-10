@@ -43,6 +43,9 @@ local provision = require("openwrt.provision")
 local idlescan  = require("openwrt.idlescan")
 local backhaul  = require("openwrt.backhaul")
 local recognized = require("unifi.recognized")
+local wlansched = require("openwrt.wlansched")
+local snmp_unifi = require("unifi.snmp")
+local snmp_owrt = require("openwrt.snmp")
 
 local M = {}
 
@@ -79,6 +82,10 @@ M._airtime    = airtime
 M._staevents  = staevents
 M._dnswatch   = dnswatch
 M._staphase   = staphase
+M._wlansched  = wlansched
+M._report     = report
+M._snmp_parse = snmp_unifi.parse
+M._snmp       = snmp_owrt
 
 -- In-memory only: 802.11k beacon-report neighbours, keyed by BSSID, plus the
 -- flat list build_json merges from. Clients report asynchronously and only
@@ -809,12 +816,61 @@ function M._idlescan_tick(cfg)
 		{sibling_interval = tonumber(conf.sibling_scan_interval), sibling_freqs = freqs})
 end
 
+-- WLAN Schedule (openwrt/wlansched.lua): at most once a minute, whatever the
+-- inform interval. The schedule lives on the wifi-iface sections, so a fresh
+-- start picks it up on its first heartbeat.
+M._wlansched_next = 0
+function M._wlansched_tick()
+	local now = M._time()
+	if now < M._wlansched_next then return 0 end
+	M._wlansched_next = now + 60
+	-- The same UCI binding (or test mock) the WiFi pass writes through.
+	if M._ucihelper and M._ucihelper._uci then M._wlansched._uci = M._ucihelper._uci end
+	local ok, n = pcall(M._wlansched.tick)
+	if not ok then
+		io.stderr:write("inform: WLAN schedule: " .. tostring(n) .. "\n")
+		return 0
+	end
+	-- A WLAN brought back up has a new netdev: its speed limit (tc) went with
+	-- the old one. Rebuilt the way a fresh start does.
+	if n > 0 and M._ucihelper and M._ucihelper.reapply_runtime_rules then
+		pcall(M._ucihelper.reapply_runtime_rules)
+	end
+	return n
+end
+
 -- One heartbeat of the wireless uplink's policy (openwrt/backhaul.lua):
 -- wired first, the WDS station only while the wired uplink has no link. A
 -- no-op on a device whose push carried no uplink station.
 function M._backhaul_tick(st, cfg)
 	if not (M._backhaul and M._backhaul.tick) then return nil end
 	return M._backhaul.tick(st, cfg, M._ucihelper, M._sysinfo, M._state)
+end
+
+-- What openUF itself did to a client that has just left, as the controller's
+-- assoc_status bits (unifi/staevents.lua) and whether it was a roam: a
+-- Minimum RSSI kick (16) or a Roaming Assistant action (8192) within
+-- M.STEER_WINDOW seconds; a client that left on a BSS Transition request is
+-- a roam.
+M.STEER_WINDOW = 120
+function M._departure_cause(mac, now)
+	local bits, roam = 0, false
+	local kicked = M._minrssi_kicks and M._minrssi_kicks[mac]
+	if kicked and now - kicked <= M.STEER_WINDOW then
+		bits = bits + M._staevents.KICKED_DUE_TO_MIN_RSSI
+	end
+	if M._minrssi_kicks then
+		for m, t in pairs(M._minrssi_kicks) do
+			if now - t > M.STEER_WINDOW then M._minrssi_kicks[m] = nil end
+		end
+	end
+	local ra = M._roamassist and M._roamassist.departure_cause
+		and M._roamassist.departure_cause(mac, now, M.STEER_WINDOW)
+	if ra then
+		bits = bits + M._staevents.MOVED_DUE_TO_ROAMING_ASSISTANT
+		roam = (ra == "btm")
+	end
+	return bits, roam
 end
 
 -- One heartbeat's Roaming Assistant pass (openwrt/roamassist.lua) over the
@@ -986,6 +1042,7 @@ function M._tick(st, cfg, ufhw, ctx)
 	pcall(M._rrm_tick, cfg)
 	pcall(M._idlescan_tick, cfg)
 	pcall(M._backhaul_tick, st, cfg)
+	pcall(M._wlansched_tick)
 
 	-- A quick-scan the controller has now seen in progress: queue its sweep.
 	-- One chunk of whatever sweep is queued then runs before this payload is
@@ -1042,7 +1099,8 @@ function M._tick(st, cfg, ufhw, ctx)
 			return M._staphase.collect(doc, M._dnswatch.firsts(), M._last_vap_by_ifname)
 		end)
 		pcall(M._staevents.observe, M._last_sta_snapshot or {}, now,
-			M._last_identity and M._last_identity.uptime, ok_ph and phases or nil)
+			M._last_identity and M._last_identity.uptime, ok_ph and phases or nil,
+			function(mac) return M._departure_cause(mac, now) end)
 	end
 
 	local ok_p, pkt = pcall(M.build_packet, json_str, st)  -- use_gcm read from st.use_gcm

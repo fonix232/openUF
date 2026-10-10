@@ -15,6 +15,21 @@
 	  failure       the same view: an attempt that failed, and at which phase
 	  sta_leave     the disconnect time (from last_seen, in device-uptime
 	                seconds) and the roaming detector's "left" half
+	  sta_roam      the roaming detector's "left" half for a client that
+	                roamed away, read only from a device claiming wifi_caps2
+	                0x2000 (supportsRoamTopologyStats); it does not reach the
+	                station manager, so a sta_leave still follows it
+
+	Each departure carries assoc_status, the cause bits the roaming detector
+	reads (10.6.106 devmgr.w.a.Cuhf, enum rFCHnXVpfjjP): 16 when openUF's
+	Minimum RSSI kicked the client, 8192 when its Roaming Assistant moved it.
+	They become the roam record's triggeredByMinRssi /
+	triggeredByRoamingAssistant. A departure the Roaming Assistant's BSS
+	Transition request caused (the client left inside the request's grace,
+	before any forced disassociation) is also sent as sta_roam, which the
+	controller counts as a seamless roam. With 0x2000 claimed, the
+	controller stops feeding `success` to the roaming detector and joins
+	the "joined" half from `association` alone, which carries auth_rssi.
 
 	A roam is the controller pairing one AP's sta_leave with another AP's
 	association for the same client, so nothing here has to know about the
@@ -59,6 +74,9 @@ M.MAX_DELTA = 60 * 1000000
 M.MATCH_WINDOW = 5
 -- Failed attempts of one client within this many seconds go out as one event.
 M.FAIL_WINDOW = 60
+-- The controller's assoc_status cause bits (devmgr.w.a.rFCHnXVpfjjP).
+M.KICKED_DUE_TO_MIN_RSSI         = 16
+M.MOVED_DUE_TO_ROAMING_ASSISTANT = 8192
 
 M._prev     = nil  -- {uptime = n, stas = {mac -> {vap, signal, uptime, idle}}}
 M._queue    = {}
@@ -153,7 +171,17 @@ local function left(mac, sta, prev_uptime, now)
 	local idle = tonumber(sta.idle) or 0
 	e.last_seen = math.max(0, (tonumber(prev_uptime) or 0) - idle)
 	e.avg_rssi  = tonumber(sta.signal)
+	e.assoc_status = 0
 	return e
+end
+
+-- The sta_roam twin of one sta_leave: the same fields under its own id.
+local function roamed(leave)
+	local r = {}
+	for k, v in pairs(leave) do r[k] = v end
+	r.event_type = "sta_roam"
+	r.event_id = event_id(leave.mac, "sta_roam", leave.auth_ts)
+	return r
 end
 
 -- Compare two station snapshots ({mac -> {vap, signal, uptime, idle}}) and
@@ -240,14 +268,23 @@ end
 -- Feed one heartbeat's snapshot; queues whatever changed since the last.
 -- phases: openwrt/staphase.collect()'s {connections, failures}; nil when the
 -- device cannot time connections, and then no success is claimed.
-function M.observe(stas, now, uptime, phases)
+-- cause: optional function(mac) -> assoc_status bits, roamed (bool), what
+-- openUF itself did to a departing client (inform.lua's _departure_cause).
+function M.observe(stas, now, uptime, phases, cause)
 	local conns = type(phases) == "table" and phases.connections or {}
 	local evs = M.diff(M._prev and M._prev.stas, stas, now, M._prev and M._prev.uptime)
 	for _, e in ipairs(evs) do
 		if e.event_type == "success" then
 			M._held[e.mac] = {ev = e, at = now}
 		else
-			if e.event_type == "sta_leave" then M._held[e.mac] = nil end
+			if e.event_type == "sta_leave" then
+				M._held[e.mac] = nil
+				if type(cause) == "function" then
+					local ok, bits, was_roam = pcall(cause, e.mac)
+					if ok and tonumber(bits) then e.assoc_status = math.floor(tonumber(bits)) end
+					if ok and was_roam then enqueue(roamed(e)) end
+				end
+			end
 			enqueue(e)
 		end
 	end

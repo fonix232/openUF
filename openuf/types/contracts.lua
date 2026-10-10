@@ -138,6 +138,66 @@
 ---@field rrm_enabled boolean?     aaa.<n>.11k.status (802.11k)
 ---@field uapsd boolean?           wireless.<n>.uapsd
 ---@field sae_groups string[]?     aaa.<n>.sae.groups.<i>.group, in wire order
+---@field mac_vlans MacVlan[]?     aaa.<n>.accept_mac.* (MAC-based VLANs), sorted by MAC
+---@field mcast_suppressor string? "conservative" | "aggressive"; nil: off
+---@field bcfilt_bypass string[]?  wireless.<n>.bcfilt.bypass_types ("ARP", "NSNA", "DHCPV4", "DHCPV6")
+---@field schedule WlanSchedule?   WLAN Schedule (unifi/schedule.lua)
+---@field hs20 Hs20Intent?         Hotspot 2.0 (unifi/wlan.lua parse_hs20), Enterprise only
+---@field dgaf_disable boolean?    wireless.<n>.dgaf_disable
+---@field filter_id string?        aaa.<n>.filter_id, RADIUS Filter-Id ("uid-wifi" | "wpa-eap")
+
+---@class MacVlan          one per-client network override
+---@field mac string        lowercase
+---@field vid integer       1 = the untagged network
+
+---@class ScheduleBlock
+---@field s integer         minutes since midnight
+---@field e integer         end, exclusive; 1440 = the end of the day
+
+---@class WlanSchedule
+---@field invert boolean    true: blocks are OFF times (days without blocks on); false: ON times
+---@field days table<string, ScheduleBlock[]>  "sun".."sat"
+
+---@class Hs20Intent       aaa.<n>.hs20.*, each value shape-checked
+---@field access_network_type integer?
+---@field internet boolean?
+---@field asra boolean?
+---@field esr boolean?
+---@field uesa boolean?
+---@field venue_group integer?
+---@field venue_type integer?
+---@field disable_dgaf boolean?
+---@field deauth_req_timeout integer?
+---@field gas_comeback_delay integer?
+---@field gas_frag_limit integer?
+---@field network_availability integer?  (ipv4 << 2) + ipv6
+---@field network_auth_type integer?
+---@field network_auth_url string?
+---@field anqp_domain_id integer?
+---@field hessid string?
+---@field domain_names string?   comma-separated
+---@field t_c_filename string?
+---@field t_c_timestamp integer?
+---@field venue_names {lang: string, name: string}[]
+---@field venue_urls {idx: integer, url: string}[]
+---@field nai_realms {encoding: integer, name: string, eap: string?}[]
+---@field roaming_consortiums string[]
+---@field cell_nets string[]     "mcc,mnc"
+---@field friendly_names {lang: string, text: string}[]
+---@field conn_capabs {proto: integer, port: integer, status: integer}[]
+---@field qos_map_set string?
+---@field wan_metrics string?
+---@field osu_dropped boolean?
+
+---@class SnmpIntent       unifi/snmp.lua's parse()
+---@field enabled boolean   false: the block is absent (SNMP off)
+---@field v1v2c boolean?
+---@field v3 boolean?
+---@field community string?
+---@field location string?
+---@field contact string?
+---@field user string?
+---@field password string?
 
 ---@class RadiusServer
 ---@field ip string

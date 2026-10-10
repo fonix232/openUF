@@ -76,11 +76,43 @@ local function is_mac(s)
 	return type(s) == "string" and s:match("^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$") ~= nil
 end
 
--- Rebuild the filter to exactly match rules, a list of
--- {ifname = "wlan0", macs = {"aa:bb:..", ...}} entries -- one per VAP that has
--- the control enabled. A VAP with an empty allow-list still belongs here: that
--- is "block all group-addressed traffic to this SSID", which is a meaningful
--- (if aggressive) setting rather than a no-op.
+-- Multicast Suppressor (wlanconf multicast_suppressor_mode), on top of the
+-- blocker's table:
+--
+--   Aggressive arrives as the blocker itself plus bcfilt.bypass_types
+--   ("ARP|NSNA|DHCPV4|DHCPV6", 10.6.106 ubntconf.EYFcHmSpOqr) and an allowlist
+--   the controller fills with the site's device MACs. The UI's own words:
+--   "Aggressive blocks all except DHCP and ARP, unless a device is
+--   allowlisted". So each bypass type gets an accept ahead of the drop.
+--
+--   Conservative arrives as wireless.<n>.multicast.suppressor=enabled and
+--   nothing else ("Conservative prevents storms"). The decompiled controller
+--   says no more than that, and UniFi firmware's threshold is not on the
+--   wire, so openUF's reading is storm control: group-addressed frames to
+--   the VAP beyond STORM_PPS per second (burst STORM_BURST) are dropped, and
+--   everything under it passes. A best-effort reading, not a replica.
+M.STORM_PPS   = 200
+M.STORM_BURST = 400
+
+-- The frames each bypass type lets through, as nft matches. In the bridge
+-- family the kernel sets the network header for IPv4/IPv6 frames
+-- (nft_do_chain_bridge), so udp/icmpv6 matches work after `meta pkttype`.
+M.BYPASS = {
+	ARP    = "ether type arp",
+	NSNA   = "icmpv6 type '{ nd-neighbor-solicit, nd-neighbor-advert }'",
+	DHCPV4 = "udp dport '{ 67, 68 }'",
+	DHCPV6 = "udp dport '{ 546, 547 }'",
+}
+
+-- Rebuild the filter to exactly match rules, a list of per-VAP entries:
+--   {ifname = "wlan0", macs = {"aa:bb:..", ...}}       the blocker
+--   + bypass = {"ARP", "NSNA", ...}                    Aggressive's exemptions
+--   + block = false                                    no blocker (Conservative
+--                                                      alone)
+--   + storm = true                                     Conservative's limiter
+-- A VAP with an empty allow-list still belongs here: that is "block all
+-- group-addressed traffic to this SSID", which is a meaningful (if
+-- aggressive) setting rather than a no-op.
 --
 -- Safe with an empty/nil list (leaves an empty table in place, blocking
 -- nothing) and safe to call repeatedly.
@@ -93,21 +125,8 @@ function M.reconcile(rules)
 
 	for _, rule in ipairs(rules or {}) do
 		if rule.ifname then
-			-- One set per interface, so each SSID keeps its own allow-list.
-			local set = "allow_" .. rule.ifname:gsub("[^%w]", "_")
-			M._exec("nft add set " .. NFT_TABLE .. " " .. set ..
-				" '{ type ether_addr; }'")
-			for _, mac in ipairs(rule.macs or {}) do
-				if is_mac(mac) then
-					M._exec("nft add element " .. NFT_TABLE .. " " .. set ..
-						" '{ " .. mac .. " }' 2>/dev/null")
-				else
-					io.stderr:write(("bcfilter: ignoring malformed MAC %q\n")
-						:format(tostring(mac)))
-				end
-			end
 			-- Matches frames leaving via this VAP (the LAN->WLAN direction)
-			-- that are group-addressed and not from an allow-listed sender.
+			-- that are group-addressed.
 			--
 			-- oifname, not oif: `oif` resolves the interface to an index when
 			-- the rule is added and so fails outright if it does not exist
@@ -121,20 +140,47 @@ function M.reconcile(rules)
 			-- earlier draft used `ether daddr type multicast`, which is not
 			-- valid nft syntax at all (it parses as far as `type` and stops).
 			--
-			-- This is the one rule in openUF that needs kmod-nft-bridge (see
-			-- the header): when that module is missing the add fails while
-			-- the set above still exists, leaving a table that looks built
-			-- and filters nothing. Say so, with the package name.
-			if not exec_ok(M._exec("nft add rule " .. NFT_TABLE ..
-				" bcfilt oifname '\"" .. rule.ifname ..
-				"\"' meta pkttype '{ broadcast, multicast }'" ..
-				" ether saddr != @" .. set .. " drop")) then
+			-- `meta pkttype` is the expression that needs kmod-nft-bridge (see
+			-- the header): when that module is missing every rule add fails
+			-- while the table and set still exist, leaving a table that looks
+			-- built and filters nothing. Say so, with the package name.
+			local match = "nft add rule " .. NFT_TABLE .. " bcfilt oifname '\"" .. rule.ifname ..
+				"\"' meta pkttype '{ broadcast, multicast }'"
+			local function add(expr, what)
+				if exec_ok(M._exec(match .. " " .. expr)) then return true end
 				ok = false
 				io.stderr:write(string.format(
-					"openuf: Multicast/Broadcast Blocker: nft rejected the drop rule " ..
-					"for %s -- install kmod-nft-bridge\n" ..
+					"openuf: %s: nft rejected the rule for %s -- install kmod-nft-bridge\n" ..
 					"openuf: (nft_meta_bridge); without it this WLAN is filtering nothing.\n",
-					tostring(rule.ifname)))
+					what, tostring(rule.ifname)))
+				return false
+			end
+			-- Storm control first, so a storm of allow-listed or exempt
+			-- frames is cut too.
+			if rule.storm then
+				add(("limit rate over %d/second burst %d packets drop")
+					:format(M.STORM_PPS, M.STORM_BURST), "Multicast Suppressor")
+			end
+			if rule.block ~= false then
+				-- One set per interface, so each SSID keeps its own allow-list.
+				local set = "allow_" .. rule.ifname:gsub("[^%w]", "_")
+				M._exec("nft add set " .. NFT_TABLE .. " " .. set ..
+					" '{ type ether_addr; }'")
+				for _, mac in ipairs(rule.macs or {}) do
+					if is_mac(mac) then
+						M._exec("nft add element " .. NFT_TABLE .. " " .. set ..
+							" '{ " .. mac .. " }' 2>/dev/null")
+					else
+						io.stderr:write(("bcfilter: ignoring malformed MAC %q\n")
+							:format(tostring(mac)))
+					end
+				end
+				for _, t in ipairs(rule.bypass or {}) do
+					if M.BYPASS[t] then
+						add(M.BYPASS[t] .. " accept", "Multicast Suppressor")
+					end
+				end
+				add("ether saddr != @" .. set .. " drop", "Multicast/Broadcast Blocker")
 			end
 		end
 	end

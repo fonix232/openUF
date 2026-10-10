@@ -78,6 +78,14 @@ M.RECOGNIZED_SYSTEM_CFG = {
 	"^ipset%.%d+%.name$",
 	"^ipset%.%d+%.type$",
 	"^ipset%.%d+%.entry%.%d+%.value$",
+	-- SNMP Monitoring (unifi/snmp.lua -> openwrt/snmp.lua).
+	"^snmp%.status$",
+	"^snmp%.version$",
+	"^snmp%.community$",
+	"^snmp%.location$",
+	"^snmp%.contact$",
+	"^snmp%.user%.1%.name$",
+	"^snmp%.user%.1%.password$",
 }
 
 M.RECOGNIZED_MGMT_CFG = {

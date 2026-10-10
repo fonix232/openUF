@@ -8,6 +8,7 @@
 local wire = require("unifi.wire")
 local country = require("unifi.country")
 local mesh = require("unifi.mesh")
+local schedule = require("unifi.schedule")
 
 local M = {}
 
@@ -473,7 +474,13 @@ function M.parse(sys_raw, caps)
 		local is_enterprise = akm:find("EAP", 1, true) ~= nil
 		local radius = M.parse_radius(a)
 		local skip_why
-		if is_enterprise and not radius then
+		-- OSEN (Hotspot 2.0's OSU Server-only authenticated layer-2
+		-- Encryption Network, mgmt "OSEN"): sent only to a device claiming
+		-- fw_caps 0x800000. OpenWrt has no encryption mode for it, and
+		-- without this the block would fall through to a keyless WPA2 BSS.
+		if akm:find("OSEN", 1, true) then
+			skip_why = "OSEN (Hotspot 2.0 online sign-up) has no OpenWrt encryption mode"
+		elseif is_enterprise and not radius then
 			skip_why = ("WPA-Enterprise (%s) with no usable RADIUS server on the wire")
 				:format((akm:gsub("^%s+", "")))
 		end
@@ -700,6 +707,93 @@ function M.parse(sys_raw, caps)
 							:format(w.ssid, g))
 					end
 				end
+			end
+
+			-- MAC-based VLANs ("Virtual Network Override", the site feature
+			-- VISUAL_PROGRAMMING): a client pinned to a network wherever it
+			-- joins. Decompiled from 10.6.106 (ubntconf.fdwW, called from the
+			-- WLAN generator VAZShipWTNxlo), not yet seen on the wire. Emitted
+			-- for every aaa.<n> of a device claiming fw_caps 0x80000000, once
+			-- the site's gateway supports it and every AP/switch with clients
+			-- claims it:
+			--   aaa.<n>.accept_mac.status=enabled          (with the first entry)
+			--   aaa.<n>.accept_mac.<m>.mac=<client MAC>
+			--   aaa.<n>.accept_mac.<m>.vlanid=<VLAN of the override network>
+			-- vlanid is the network's getVlan(): its tag, or 1 for the
+			-- untagged LAN. Absent means no client of the site is overridden.
+			local mac_vlans
+			if a["accept_mac.status"] == "enabled" then
+				local seen = {}
+				for k, val in pairs(a) do
+					local m = k:match("^accept_mac%.(%d+)%.mac$")
+					if m then
+						local vid = tonumber(a["accept_mac." .. m .. ".vlanid"])
+						if wire.is_mac(val) and vid and vid == math.floor(vid)
+								and vid >= 1 and vid <= 4094 then
+							local mac = val:lower()
+							if not seen[mac] then
+								seen[mac] = true
+								mac_vlans = mac_vlans or {}
+								mac_vlans[#mac_vlans + 1] = {mac = mac, vid = vid}
+							end
+						else
+							io.stderr:write(("inform: WLAN %q: ignoring MAC-based VLAN entry "
+								.. "%s (%s / %s)\n"):format(w.ssid, m, tostring(val),
+								tostring(a["accept_mac." .. m .. ".vlanid"])))
+						end
+					end
+				end
+				if mac_vlans then
+					table.sort(mac_vlans, function(x, y) return x.mac < y.mac end)
+				end
+			end
+
+			-- Multicast Suppressor (wlanconf multicast_suppressor_mode off|
+			-- conservative|aggressive). Decompiled from 10.6.106, not yet seen
+			-- on the wire: VAZShipWTNxlo sends
+			--   wireless.<n>.multicast.suppressor=enabled
+			-- for either mode, on a non-service WLAN of a device claiming
+			-- wifi_caps2 0x400000; Aggressive also goes through the blocker's
+			-- generator (ubntconf.EYFcHmSpOqr), which adds
+			--   wireless.<n>.bcfilt.status=enabled
+			--   wireless.<n>.bcfilt.bypass_types=ARP|NSNA|DHCPV4|DHCPV6
+			--   wireless.<n>.bcfilt.<k>.mac=...   (allowlist + site device MACs)
+			-- So bypass_types is the only thing that tells the two modes apart.
+			local mcast_suppressor, bcfilt_bypass
+			if wire.bool(w["multicast.suppressor"]) then
+				mcast_suppressor = w["bcfilt.bypass_types"] and "aggressive" or "conservative"
+			end
+			if w["bcfilt.bypass_types"] then
+				local known = {ARP = true, NSNA = true, DHCPV4 = true, DHCPV6 = true}
+				for t in w["bcfilt.bypass_types"]:gmatch("[^|]+") do
+					if known[t] then
+						bcfilt_bypass = bcfilt_bypass or {}
+						bcfilt_bypass[#bcfilt_bypass + 1] = t
+					else
+						io.stderr:write(("inform: WLAN %q: unknown bcfilt bypass type %q\n")
+							:format(w.ssid, t))
+					end
+				end
+			end
+
+			-- WLAN Schedule (unifi/schedule.lua for the wire shape).
+			local sched, sched_bad = schedule.parse(w)
+			for _, b in ipairs(sched_bad or {}) do
+				io.stderr:write(("inform: WLAN %q: ignoring schedule block %s\n")
+					:format(w.ssid, b))
+			end
+
+			-- RADIUS Filter-Id: aaa.<n>.filter_id=uid-wifi|wpa-eap on an
+			-- Enterprise WLAN of a device claiming fw_caps 0x20000000, only
+			-- while the site's gateway runs the RADIUS server (decompiled from
+			-- 10.6.106, VAZShipWTNxlo). The gateway's RADIUS accounts list the
+			-- services they may use (radiusaccount filter_ids: mac-acl, uid-vpn,
+			-- uid-wifi, wpa-eap, vpn), and the AP names its service in the
+			-- Access-Request's Filter-Id.
+			local filter_id
+			if is_enterprise and type(a.filter_id) == "string"
+					and a.filter_id:match("^[%w%-]+$") and #a.filter_id <= 32 then
+				filter_id = a.filter_id
 			end
 
 			vap_table[#vap_table + 1] = {
@@ -981,6 +1075,19 @@ function M.parse(sys_raw, caps)
 					rrm_enabled           = wire.bool(a["11k.status"]),
 					uapsd                 = wire.bool(w.uapsd),
 					sae_groups            = sae_groups,
+					-- MAC-based VLANs: {mac=, vid=} sorted by MAC, nil when none.
+					mac_vlans             = mac_vlans,
+					-- "conservative" | "aggressive" | nil (off), and the
+					-- traffic Aggressive lets through ({"ARP", "NSNA", ...}).
+					mcast_suppressor      = mcast_suppressor,
+					bcfilt_bypass         = bcfilt_bypass,
+					-- WLAN Schedule: {invert=, days={sun={{s=,e=}..}..}} or nil.
+					schedule              = sched,
+					-- Hotspot 2.0 (M.parse_hs20), Enterprise WLANs only.
+					hs20                  = is_enterprise and M.parse_hs20(a, w.ssid) or nil,
+					-- wireless.<n>.dgaf_disable, sent with a Hotspot 2.0 WLAN.
+					dgaf_disable          = wire.bool(w.dgaf_disable),
+					filter_id             = filter_id,
 			}
 		end
 	end
@@ -1036,8 +1143,8 @@ end
 --
 -- A server whose ip or secret is empty is skipped by the controller with its
 -- index left unused, so <k> can have gaps. Ports default to 1812/1813 there.
--- The DAS (CoA) keys need fw_caps 0x100000, which openUF does not claim, so
--- they are not read.
+-- The DAS (CoA) keys come only to a device claiming fw_caps 0x100000, which
+-- openwrt/report.lua does; they are read below for openwrt/das.lua.
 --
 -- Values end up in hostapd's config file, so only what looks like an address,
 -- a port and a printable secret passes. Returns nil when the block names no
@@ -1115,6 +1222,217 @@ function M.parse_radius(a)
 		auth_cache    = auth_cache,
 		das           = das,
 	}
+end
+
+-- Hotspot 2.0 / Passpoint out of one aaa.<n> block (keys without the prefix).
+-- Decompiled from 10.6.106 (VAZShipWTNxlo's hs20 helpers), not yet seen on the
+-- wire. Sent only for an Enterprise WLAN, and only to a device claiming
+-- fw_caps 0x800000 -- without it such a WLAN is dropped from the push. Every
+-- Enterprise WLAN without Hotspot 2.0 carries aaa.<n>.hs20.status=disabled.
+-- With it:
+--
+--   hs20.status=enabled
+--   hs20.access_network_type=<0..15>  hs20.internet / asra / esr / uesa=enabled|disabled
+--   hs20.venue_group / venue_type=<n> hs20.disable_dgaf=enabled|disabled
+--   hs20.deauth_req_timeout=<s>       hs20.t_c_filename / t_c_timestamp
+--   hs20.gas_comeback_delay / gas_frag_limit (only with gas_advanced)
+--   hs20.network_availability=<(v4 << 2) + v6>
+--   hs20.network_auth_type=<n> + hs20.network_auth_url
+--   hs20.anqp_domain_id=<n>           hs20.hessid=<MAC>
+--   hs20.venue_name.<k>.lang / .name / .url
+--   hs20.hs20_domain_name_list=<a,b,...>
+--   hs20.nai_realm.<k>.status / .encoding / .name / .eap_method
+--   hs20.nai_realm.<k>.eap_method.auth.<j>.id / .val
+--   hs20.<k>.roaming_consortium=<OI hex>
+--   hs20.3gpp.<k>.mcc / .mnc
+--   hs20.friendly_name.<k>.language / .text
+--   hs20.capab.<k>.protocol / .port / .status   (protocol as an IP number)
+--   hs20.qos.status=enabled + hs20.qos.exception.<k>.dcsp/.up + hs20.qos.map.<k>.low/.high
+--   hs20.metrics.status=enabled + .info / .downlink_speed / .uplink_speed /
+--     .downlink_load / .uplink_load / .measurement
+--   hs20.icon.<k>.*, osu.<k>.*, hs20.osu_ssid   (online sign-up: not carried)
+--
+-- Everything ends up on a hostapd config line (openwrt/hotspot2.lua), so each
+-- value is checked for its shape here and a bad one is dropped with a log line.
+-- Returns nil unless hs20.status=enabled.
+---@param a table<string,string>
+---@param ssid string?
+---@return Hs20Intent?
+function M.parse_hs20(a, ssid)
+	if type(a) ~= "table" or a["hs20.status"] ~= "enabled" then return nil end
+	local function warn(what)
+		io.stderr:write(("inform: WLAN %q: Hotspot 2.0 %s ignored\n"):format(tostring(ssid), what))
+	end
+	local function int(k, lo, hi)
+		local raw = a["hs20." .. k]
+		local v = tonumber(raw)
+		if v and v == math.floor(v) and v >= lo and v <= hi then return v end
+		if raw ~= nil and raw ~= "" then warn(k) end
+		return nil
+	end
+	local function txt(v, max)
+		return type(v) == "string" and #v >= 1 and #v <= (max or 252)
+			and v:match("^[%w%p ]+$") ~= nil
+	end
+	local function url_ok(v)
+		return type(v) == "string" and #v <= 250 and v:match("^https?://[%w%p]+$") ~= nil
+	end
+	local function sorted_idx(pattern)
+		local out = {}
+		for k in pairs(a) do
+			local i = k:match(pattern)
+			if i then out[#out + 1] = tonumber(i) end
+		end
+		table.sort(out)
+		return out
+	end
+	local h = {
+		access_network_type  = int("access_network_type", 0, 15),
+		internet             = wire.bool(a["hs20.internet"]),
+		asra                 = wire.bool(a["hs20.asra"]),
+		esr                  = wire.bool(a["hs20.esr"]),
+		uesa                 = wire.bool(a["hs20.uesa"]),
+		venue_group          = int("venue_group", 0, 255),
+		venue_type           = int("venue_type", 0, 255),
+		disable_dgaf         = wire.bool(a["hs20.disable_dgaf"]),
+		deauth_req_timeout   = int("deauth_req_timeout", 0, 65535),
+		gas_comeback_delay   = int("gas_comeback_delay", 1, 65535),
+		gas_frag_limit       = int("gas_frag_limit", 1, 65535),
+		network_availability = int("network_availability", 0, 255),
+		network_auth_type    = int("network_auth_type", 0, 3),
+		anqp_domain_id       = int("anqp_domain_id", 0, 65535),
+	}
+	local nurl = a["hs20.network_auth_url"]
+	if h.network_auth_type and nurl and nurl ~= "" then
+		if url_ok(nurl) then h.network_auth_url = nurl else warn("network_auth_url") end
+	end
+	local tcf, tct = a["hs20.t_c_filename"], a["hs20.t_c_timestamp"]
+	if tcf and tcf ~= "" then
+		if tcf:match("^[%w%._%-]+$") and #tcf <= 255 then h.t_c_filename = tcf
+		else warn("t_c_filename") end
+	end
+	if tct and tct ~= "" then
+		if tct:match("^%d+$") and #tct <= 10 then h.t_c_timestamp = tonumber(tct)
+		else warn("t_c_timestamp") end
+	end
+	local hessid = a["hs20.hessid"]
+	if hessid and hessid ~= "" then
+		if wire.is_mac(hessid) then h.hessid = hessid:lower() else warn("hessid") end
+	end
+	local dl = a["hs20.hs20_domain_name_list"]
+	if dl and dl ~= "" then
+		if dl:match("^[%w%.%-,]+$") and #dl <= 255 then h.domain_names = dl
+		else warn("domain name list") end
+	end
+	h.venue_names, h.venue_urls = {}, {}
+	for _, k in ipairs(sorted_idx("^hs20%.venue_name%.(%d+)%.name$")) do
+		local p = "hs20.venue_name." .. k .. "."
+		local lang, name, vurl = a[p .. "lang"] or "eng", a[p .. "name"], a[p .. "url"]
+		if lang:match("^%a%a%a?$") and txt(name, 252) then
+			h.venue_names[#h.venue_names + 1] = {lang = lang, name = name}
+			if vurl and vurl ~= "" then
+				if url_ok(vurl) then
+					h.venue_urls[#h.venue_urls + 1] = {idx = #h.venue_names, url = vurl}
+				else warn("venue URL " .. k) end
+			end
+		else warn("venue name " .. k) end
+	end
+	h.nai_realms = {}
+	for _, k in ipairs(sorted_idx("^hs20%.nai_realm%.(%d+)%.name$")) do
+		local p = "hs20.nai_realm." .. k .. "."
+		if a[p .. "status"] ~= "disabled" then
+			local enc, name, eap = a[p .. "encoding"] or "0", a[p .. "name"], a[p .. "eap_method"]
+			local ok = (enc == "0" or enc == "1") and type(name) == "string"
+				and name:match("^[%w%.%-;]+$") ~= nil and #name <= 200
+			local method
+			if ok and eap and eap ~= "" then
+				ok = eap:match("^%d%d?%d?$") ~= nil
+				method = eap
+				for _, j in ipairs(sorted_idx("^hs20%.nai_realm%." .. k .. "%.eap_method%.auth%.(%d+)%.id$")) do
+					local id = a[p .. "eap_method.auth." .. j .. ".id"]
+					local val = a[p .. "eap_method.auth." .. j .. ".val"]
+					if id and val and id:match("^%d%d?%d?$") and val:match("^%d%d?%d?$") then
+						method = method .. "[" .. id .. ":" .. val .. "]"
+					else ok = false end
+				end
+			end
+			if ok then
+				h.nai_realms[#h.nai_realms + 1] = {encoding = tonumber(enc), name = name, eap = method}
+			else warn("NAI realm " .. k) end
+		end
+	end
+	h.roaming_consortiums = {}
+	for _, k in ipairs(sorted_idx("^hs20%.(%d+)%.roaming_consortium$")) do
+		local oi = a["hs20." .. k .. ".roaming_consortium"]
+		-- An OI is 3 to 15 octets, written as hex.
+		if oi and oi:match("^%x+$") and #oi % 2 == 0 and #oi >= 6 and #oi <= 30 then
+			h.roaming_consortiums[#h.roaming_consortiums + 1] = oi:lower()
+		else warn("roaming consortium " .. k) end
+	end
+	h.cell_nets = {}
+	for _, k in ipairs(sorted_idx("^hs20%.3gpp%.(%d+)%.mcc$")) do
+		local mcc, mnc = a["hs20.3gpp." .. k .. ".mcc"], a["hs20.3gpp." .. k .. ".mnc"]
+		if mcc and mnc and mcc:match("^%d%d%d$") and mnc:match("^%d%d%d?$") then
+			h.cell_nets[#h.cell_nets + 1] = mcc .. "," .. mnc
+		else warn("3GPP network " .. k) end
+	end
+	h.friendly_names = {}
+	for _, k in ipairs(sorted_idx("^hs20%.friendly_name%.(%d+)%.text$")) do
+		local lang = a["hs20.friendly_name." .. k .. ".language"] or "eng"
+		local t = a["hs20.friendly_name." .. k .. ".text"]
+		if lang:match("^%a%a%a?$") and txt(t, 252) then
+			h.friendly_names[#h.friendly_names + 1] = {lang = lang, text = t}
+		else warn("operator friendly name " .. k) end
+	end
+	h.conn_capabs = {}
+	local cstatus = {closed = 0, open = 1, unknown = 2}
+	for _, k in ipairs(sorted_idx("^hs20%.capab%.(%d+)%.protocol$")) do
+		local p = "hs20.capab." .. k .. "."
+		local proto, port = tonumber(a[p .. "protocol"]), tonumber(a[p .. "port"])
+		local st = cstatus[a[p .. "status"] or ""] or tonumber(a[p .. "status"])
+		if proto and proto >= 0 and proto <= 255 and port and port >= 0 and port <= 65535
+				and st and st >= 0 and st <= 2 then
+			h.conn_capabs[#h.conn_capabs + 1] = {proto = proto, port = port, status = st}
+		else warn("connection capability " .. k) end
+	end
+	if wire.bool(a["hs20.qos.status"]) then
+		local ex, ranges = {}, {}
+		for _, k in ipairs(sorted_idx("^hs20%.qos%.exception%.(%d+)%.dcsp$")) do
+			local d = tonumber(a["hs20.qos.exception." .. k .. ".dcsp"])
+			local u = tonumber(a["hs20.qos.exception." .. k .. ".up"])
+			if d and u then ex[#ex + 1] = d .. "," .. u end
+		end
+		for _, k in ipairs(sorted_idx("^hs20%.qos%.map%.(%d+)%.low$")) do
+			local lo = tonumber(a["hs20.qos.map." .. k .. ".low"])
+			local hi = tonumber(a["hs20.qos.map." .. k .. ".high"])
+			if lo and hi then ranges[#ranges + 1] = lo .. "," .. hi end
+		end
+		-- hostapd takes up to 21 exceptions and exactly eight ranges (UP 0..7).
+		if #ranges == 8 and #ex <= 21 then
+			local all = {}
+			for _, e in ipairs(ex) do all[#all + 1] = e end
+			for _, r in ipairs(ranges) do all[#all + 1] = r end
+			h.qos_map_set = table.concat(all, ",")
+		else
+			warn(("QoS map (%d ranges, %d exceptions)"):format(#ranges, #ex))
+		end
+	end
+	if wire.bool(a["hs20.metrics.status"]) then
+		local info = int("metrics.info", 0, 15)
+		local ds = int("metrics.downlink_speed", 0, 4294967295)
+		local us = int("metrics.uplink_speed", 0, 4294967295)
+		local dload, uload = int("metrics.downlink_load", 0, 255), int("metrics.uplink_load", 0, 255)
+		local lmd = int("metrics.measurement", 0, 65535)
+		if info and ds and us and dload and uload and lmd then
+			-- %.0f, not %d: a kbps speed can exceed a 32-bit C long on MIPS.
+			h.wan_metrics = string.format("%02x:%.0f:%.0f:%d:%d:%d", info, ds, us, dload, uload, lmd)
+		end
+	end
+	for k in pairs(a) do
+		if k:match("^hs20%.icon%.") or k:match("^osu%.") then h.osu_dropped = true end
+	end
+	if h.osu_dropped then warn("online sign-up (OSU providers, icons)") end
+	return h
 end
 
 return M

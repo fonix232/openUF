@@ -42,6 +42,8 @@ local function inject_sysinfo(with_clients, with_wired, with_scan, with_radio_ca
 	-- test that wants a bit claimed says so.
 	inform._airtime._supported_cache = false
 	inform._sysinfo._ppsk_supported_cache = false
+	inform._sysinfo._hs20_supported_cache = false
+	inform._snmp._read_file = function() return nil end
 	inform._sysinfo._read_file = function(path)
 		if path:find("uptime")  then return fixture("proc_uptime.txt")  end
 		if path:find("meminfo") then return fixture("proc_meminfo.txt") end
@@ -365,7 +367,7 @@ return {
 			assert_eq(d.wifi_caps2, plain.wifi_caps2, "unset masks keep their shipped value")
 			assert_eq(d.uplink.type, "wireless", "extra field merged")
 			assert_true(plain.wifi_caps ~= 0x10, "the override replaces the shipped wifi_caps")
-			assert_eq(plain.wifi_caps, 0x100000C, "only what the device can do without the override")
+			assert_eq(plain.wifi_caps, 0x100100C, "only what the device can do without the override")
 			local said = ""
 			local real = io.stderr
 			io.stderr = {write = function(_, m) said = said .. m end}
@@ -2499,8 +2501,46 @@ return {
 			-- api.err.VlanTaggingUnsupportedByDevice -- see PROTOCOL-VALIDATION.md
 			-- section 18).
 			local d = build()
-			assert_eq(d.fw_caps, 0x100110,
-				"fw_caps bits 0x10 | 0x100, and 0x100000 (RADIUS DAS)")
+			assert_eq(d.fw_caps, 0x100110 + 0x1000 + 0x400000 + 0x20000000,
+				"fw_caps bits 0x10 | 0x100, 0x100000 (RADIUS DAS), the WLAN Schedule "
+				.. "pair 0x1000 | 0x400000 and 0x20000000 (RADIUS Filter-Id)")
+		end
+	},
+	{
+		name = "inform json: fw_caps claims Hotspot 2.0, SNMPv3 and MAC-based VLANs only where the device has them",
+		fn = function()
+			local base = 0x100110 + 0x1000 + 0x400000 + 0x20000000
+			inject_sysinfo()
+			inform._sysinfo._hs20_supported_cache = true
+			local caps = inform._report.fw_caps(inform, nil)
+			assert_eq(caps, base + 0x800000, "0x800000 with hostapd -vhs20")
+			inform._sysinfo._hs20_supported_cache = false
+			inform._snmp._read_file = function(path)
+				if path == "/etc/init.d/snmpd" then return "#!/bin/sh /etc/rc.common\n" end
+				if path == "/lib/apk/db/installed" then return "P:libnetsnmp-ssl\nV:5.9.4-r6\n\nP:snmpd-ssl\n" end
+			end
+			assert_eq(inform._report.fw_caps(inform, nil), base + 0x4000, "0x4000 with snmpd-ssl")
+			inform._snmp._read_file = function(path)
+				if path == "/etc/init.d/snmpd" then return "x" end
+				if path == "/lib/apk/db/installed" then return "P:snmpd-nossl\n" end
+			end
+			assert_eq(inform._report.fw_caps(inform, nil), base, "no 0x4000 with snmpd-nossl (no privacy)")
+			inform._snmp._read_file = function() return nil end
+			inform._sysinfo._ppsk_supported_cache = true
+			local signed = inform._report.fw_caps(inform, nil)
+			assert_eq(signed, base + 0x80000000 - 4294967296,
+				"bit 31 goes out as the Java int's negative value")
+			assert_true(signed < 0, "negative on the wire")
+			-- The JSON the controller parses carries it as a plain integer.
+			local d = build()
+			inform._sysinfo._ppsk_supported_cache = true
+			local d2 = cjson.decode(inform.build_json({authkey = state.DEFAULT_KEY, adopted = false,
+				cfgversion = "", inform_url = "http://192.0.2.1:8080/inform", mac = "00:00:5e:00:53:0f",
+				ip = "192.0.2.100", hostname = "t"}, nil, ufhw))
+			assert_eq(d2.fw_caps, signed, "build_json sends the signed value")
+			assert_eq(d.fw_caps, base, "and nothing of it without the VLAN probe")
+			assert_eq(inform._report.signed32(0x7fffffff), 0x7fffffff, "bit 31 clear: unchanged")
+			inform._sysinfo._ppsk_supported_cache = false
 		end
 	},
 	{
@@ -2522,11 +2562,26 @@ return {
 				0x10,
 				-- supportQuickScan() = hasWifiCapability2(128): `quick-scan`
 				0x80,
+				-- supportsMulticastSuppressor() = hasWifiCapability2(0x400000):
+				-- wireless.<n>.multicast.suppressor
+				0x400000,
+				-- supportsRoamTopologyStats() = hasWifiCapability2(8192):
+				-- sta_roam fed to the roaming detector, `success` no longer
+				0x2000,
 			}
 			local want = 0
 			for _, bit in ipairs(claimed) do want = want + bit end
 			local d = build()
 			assert_eq(d.wifi_caps2, want, "wifi_caps2 is exactly the claimed bits")
+			-- supportNeighbourInScan() = hasWifiCapability2(512): only while a
+			-- sibling-sighting scan is configured.
+			local s = build({cfg = {config = {sibling_scan_interval = 1800}}})
+			assert_eq(s.wifi_caps2, want + 0x200, "0x200 with sibling scans on")
+			local i = build({cfg = {config = {idle_scan_interval = 1800, sibling_scan_interval = 0}}})
+			assert_eq(i.wifi_caps2, want + 0x200, "0x200 with idle sweeps on")
+			-- No connection events, no roam topology.
+			local n = build({cfg = {config = {sta_events = false}}})
+			assert_eq(n.wifi_caps2, want - 0x2000, "0x2000 off with sta_events off")
 		end
 	},
 	{

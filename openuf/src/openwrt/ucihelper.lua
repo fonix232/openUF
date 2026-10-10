@@ -8,6 +8,9 @@
 	Requires: uci (Lua UCI bindings, standard on OpenWrt)
 ]]--
 
+local schedule_mod = require("unifi.schedule")
+local hotspot2 = require("openwrt.hotspot2")
+
 local M = {}
 
 -- Injectable seams for tests
@@ -45,6 +48,17 @@ M._write_file = function(path, content)
 	f:write(content)
 	f:close()
 	return true
+end
+M._remove_file = function(path) return os.remove(path) end
+-- Local time, for a WLAN Schedule's state at the moment of a push.
+M._date = function() return os.date("*t") end
+
+-- Where the MAC-based VLAN lists hostapd reads (accept_mac_file) live: on
+-- flash, because hostapd reads them at boot, before openUF runs, and a
+-- missing accept_mac_file fails the whole BSS.
+M.MACVLAN_DIR = "/etc/openuf"
+function M.macvlan_path(section)
+	return M.MACVLAN_DIR .. "/macvlan-" .. section .. ".list"
 end
 
 -- Static radio capability defaults, used when UCI/driver introspection can't
@@ -549,6 +563,70 @@ function M.ppsk_add(iface, keys, networks)
 	cursor:commit("wireless")
 end
 
+-- MAC-based VLANs ("Virtual Network Override") for one vap_table entry: what
+-- goes into its accept_mac_file, and the VLAN networks it needs.
+--
+-- hostapd reads an accept_mac_file line as "<MAC> <VLAN id>"
+-- (hostapd_config_read_maclist), and several accept_mac_file lines add up.
+-- hostapd_check_acl consults the accept list FIRST, before the deny list and
+-- macaddr_acl, and returns the line's VLAN with the accept; the VLAN must be
+-- in the BSS's vlan_file (hostapd_vlan_valid), which OpenWrt builds from the
+-- wifi-vlan sections. So with no MAC filter (macaddr_acl 0) a listed client
+-- is accepted onto its VLAN and every other client as before. Because the
+-- accept list wins, it must never carry a MAC the AP is meant to refuse:
+--   * a deny filter (the user's, or Lock to Access Point's lock2ap entries):
+--     a denied MAC is left out, so it stays refused;
+--   * an allow filter (macaddr_acl 1): only allow-listed MACs keep their
+--     VLAN, so the list cannot widen the allowlist;
+--   * RADIUS MAC authentication (macaddr_acl 2): left out entirely, as an
+--     accept-list hit would skip the RADIUS check.
+-- An entry on the VAP's own VLAN changes nothing and is left out. Open and
+-- OWE WLANs are left out too: ap.uc only writes dynamic_vlan/vlan_no_bridge
+-- (vlan_possible) for PSK, SAE, EAP and an allow filter, and without
+-- vlan_no_bridge hostapd would try to bridge the VLAN netdev itself.
+--
+-- resolve(vid) -> UCI network section for that VLAN (vid 1 = untagged), or
+-- nil. Returns nil when nothing remains, else {content = "<file>",
+-- networks = {vid -> network}, macs = n}.
+function M.macvlan_plan(vap, resolve)
+	if type(vap) ~= "table" or not vap.mac_vlans or #vap.mac_vlans == 0 then return nil end
+	local sec = vap.security or "open"
+	if sec == "open" or sec == "owe" then
+		io.stderr:write(("ucihelper: %s: MAC-based VLANs not applied on an %s WLAN\n")
+			:format(tostring(vap.ssid), sec))
+		return nil
+	end
+	if vap.radius_mac_auth then
+		io.stderr:write(("ucihelper: %s: MAC-based VLANs not applied with RADIUS MAC "
+			.. "authentication (an accept-list hit would skip it)\n"):format(tostring(vap.ssid)))
+		return nil
+	end
+	local listed = {}
+	for _, m in ipairs(vap.mac_filter_list or {}) do listed[m:lower()] = true end
+	local policy = vap.mac_filter_policy
+	local own = (vap.vlan_enabled and tonumber(vap.vlan)) or 1
+	local lines, networks, n = {}, {}, 0
+	for _, e in ipairs(vap.mac_vlans) do
+		local mac = e.mac:lower()
+		local keep = e.vid ~= own
+		if policy == "deny" and listed[mac] then keep = false end
+		if policy == "allow" and not listed[mac] then keep = false end
+		if keep then
+			local net = networks[e.vid] or resolve(e.vid)
+			if net then
+				networks[e.vid] = net
+				lines[#lines + 1] = mac .. " " .. e.vid
+				n = n + 1
+			else
+				io.stderr:write(("ucihelper: %s: MAC-based VLAN %d for %s left out, "
+					.. "no network for it\n"):format(tostring(vap.ssid), e.vid, mac))
+			end
+		end
+	end
+	if n == 0 then return nil end
+	return {content = table.concat(lines, "\n") .. "\n", networks = networks, macs = n}
+end
+
 -- RADIUS-assigned VLANs (dynamic_vlan) for the Enterprise VAP in wifi-iface
 -- section `iface`: one wifi-vlan per VLAN this AP already carries, the same
 -- sections ppsk_add writes for a key's VLAN, so hostapd's vlan_file maps each
@@ -730,43 +808,7 @@ end
 function M.wlan_add(radio, ssid, security, password, extra, network, wlanconf_id)
 	local uci = get_uci()
 	local cursor = uci.cursor()
-	-- Section name includes the radio, not just the SSID: broadcasting the
-	-- same SSID on both radios simultaneously is the default, common case
-	-- (the controller UI's "Radio Band: 2.4 GHz + 5 GHz" checkboxes) and
-	-- produces one wlan_add() call per radio with an identical ssid. Keying
-	-- purely by SSID collapsed both calls into the same UCI section, so the
-	-- second call's "device" silently overwrote the first -- confirmed live
-	-- against a real controller: only the last-processed radio's VAP
-	-- survived. The radio is sanitized the same way the ssid is, though UCI
-	-- radio names ("radio0"/"radio1") never need it.
-	--
-	-- The character class must NOT keep "-". A UCI section name may contain
-	-- only [A-Za-z0-9_], and libuci enforces that in the most unhelpful way
-	-- available: cursor:set() returns true, cursor:commit() returns true, and
-	-- the section is silently discarded -- it never reaches /etc/config and
-	-- never appears in `uci show`. So an SSID with a hyphen produced a
-	-- wlan_add that reported success at every step and left no WLAN behind,
-	-- with nothing in any log to say so. Confirmed live: creating
-	-- "openuf-verify" in the controller pushed correctly, parsed correctly
-	-- into vap_table, and simply never provisioned. Hyphens are common in
-	-- SSIDs, so this was a wide hole.
-	--
-	-- Sanitizing is lossy, and that loss used to collapse WLANs: "Guest WiFi",
-	-- "Guest-WiFi" and "Guest_WiFi" all became openuf_radio0_Guest_WiFi, so
-	-- two of them on one radio shared a section and the second silently
-	-- overwrote the first -- the same failure the per-radio keying above
-	-- exists to prevent, one level down. When the name had to be ALTERED at
-	-- all, a short hash of the original keeps them apart; a name that needed
-	-- no alteration keeps the section name it has always had, so nothing
-	-- already deployed is renamed. (apply_config wlan_clear()s every openuf_
-	-- section before rebuilding them, so a name that does change leaves
-	-- nothing stale behind either.)
-	local safe_ssid = ssid:gsub("[^%w_]", "_")
-	if safe_ssid ~= ssid then
-		safe_ssid = safe_ssid .. "_" .. M.derive_mobility_domain(ssid)
-	end
-	local section_name = OPENUF_PREFIX .. tostring(radio):gsub("[^%w_]", "_")
-		.. "_" .. safe_ssid
+	local section_name = M.section_name(radio, ssid)
 	local enc
 	if type(security) == "table" then
 		enc = M.encryption_for(security.security, security.pairwise)
@@ -808,6 +850,48 @@ function M.wlan_add(radio, ssid, security, password, extra, network, wlanconf_id
 		end
 	end
 	cursor:commit("wireless")
+	return section_name
+end
+
+-- The wifi-iface section name wlan_add uses for an SSID on a radio.
+function M.section_name(radio, ssid)
+	-- Section name includes the radio, not just the SSID: broadcasting the
+	-- same SSID on both radios simultaneously is the default, common case
+	-- (the controller UI's "Radio Band: 2.4 GHz + 5 GHz" checkboxes) and
+	-- produces one wlan_add() call per radio with an identical ssid. Keying
+	-- purely by SSID collapsed both calls into the same UCI section, so the
+	-- second call's "device" silently overwrote the first -- confirmed live
+	-- against a real controller: only the last-processed radio's VAP
+	-- survived. The radio is sanitized the same way the ssid is, though UCI
+	-- radio names ("radio0"/"radio1") never need it.
+	--
+	-- The character class must NOT keep "-". A UCI section name may contain
+	-- only [A-Za-z0-9_], and libuci enforces that in the most unhelpful way
+	-- available: cursor:set() returns true, cursor:commit() returns true, and
+	-- the section is silently discarded -- it never reaches /etc/config and
+	-- never appears in `uci show`. So an SSID with a hyphen produced a
+	-- wlan_add that reported success at every step and left no WLAN behind,
+	-- with nothing in any log to say so. Confirmed live: creating
+	-- "openuf-verify" in the controller pushed correctly, parsed correctly
+	-- into vap_table, and simply never provisioned. Hyphens are common in
+	-- SSIDs, so this was a wide hole.
+	--
+	-- Sanitizing is lossy, and that loss used to collapse WLANs: "Guest WiFi",
+	-- "Guest-WiFi" and "Guest_WiFi" all became openuf_radio0_Guest_WiFi, so
+	-- two of them on one radio shared a section and the second silently
+	-- overwrote the first -- the same failure the per-radio keying above
+	-- exists to prevent, one level down. When the name had to be ALTERED at
+	-- all, a short hash of the original keeps them apart; a name that needed
+	-- no alteration keeps the section name it has always had, so nothing
+	-- already deployed is renamed. (apply_config wlan_clear()s every openuf_
+	-- section before rebuilding them, so a name that does change leaves
+	-- nothing stale behind either.)
+	local safe_ssid = ssid:gsub("[^%w_]", "_")
+	if safe_ssid ~= ssid then
+		safe_ssid = safe_ssid .. "_" .. M.derive_mobility_domain(ssid)
+	end
+	local section_name = OPENUF_PREFIX .. tostring(radio):gsub("[^%w_]", "_")
+		.. "_" .. safe_ssid
 	return section_name
 end
 
@@ -1657,8 +1741,14 @@ local function reconcile_runtime(entries)
 	if bcfilter then
 		local rules = {}
 		for _, e in ipairs(entries) do
-			if e.bcfilt_enabled then
-				rules[#rules + 1] = {ifname = e.ifname, macs = e.bcfilt_macs or {}}
+			-- The blocker, with Aggressive's exemptions when the Multicast
+			-- Suppressor sent bypass types; Conservative is the storm limiter,
+			-- alone or next to a blocker the WLAN also has on.
+			local storm = e.mcast_suppressor == "conservative"
+			if e.bcfilt_enabled or storm then
+				rules[#rules + 1] = {ifname = e.ifname, macs = e.bcfilt_macs or {},
+					block = e.bcfilt_enabled == true, bypass = e.bcfilt_bypass,
+					storm = storm or nil}
 			end
 		end
 		bcfilter.reconcile(rules)
@@ -1765,6 +1855,8 @@ function M.apply_config(resp, cfg, opts)
 	-- Every VLAN this push still wants an L2 for; anything else gets pruned
 	-- after the loop.
 	local wanted_vlans = {}
+	-- The MAC-based VLAN lists this push writes; any other is removed after.
+	local macvlan_files = {}
 	for _, vap in ipairs(vap_table) do
 		if vap.ssid and vap.radio then
 			local extra = {}
@@ -1956,6 +2048,29 @@ function M.apply_config(resp, cfg, opts)
 					extra.openuf_bcfilt_macs = table.concat(vap.bcfilt_macs, " ")
 				end
 			end
+			-- Multicast Suppressor, the same way: a record on the section, the
+			-- nftables rules after the reload (bcfilter.lua), and the startup
+			-- rebuild reads it back (reapply_runtime_rules).
+			if vap.mcast_suppressor then
+				extra.openuf_mcast_suppressor = vap.mcast_suppressor
+			end
+			if vap.bcfilt_bypass and #vap.bcfilt_bypass > 0 then
+				extra.openuf_bcfilt_bypass = table.concat(vap.bcfilt_bypass, " ")
+			end
+			-- WLAN Schedule (openwrt/wlansched.lua). The schedule rides on the
+			-- section itself, so the once-a-minute check needs nothing else
+			-- and a restart resumes it; the section starts in the state the
+			-- schedule has right now. A WLAN the controller disabled stays
+			-- disabled whatever the schedule says.
+			if vap.schedule then
+				extra.openuf_schedule = schedule_mod.encode(vap.schedule)
+				local t = M._date()
+				if vap.disabled ~= true
+						and not schedule_mod.is_on(vap.schedule, t.wday, t.hour * 60 + t.min) then
+					extra.disabled = "1"
+					extra.openuf_sched_off = "1"
+				end
+			end
 			if vap.l2_isolation ~= nil then
 				-- "Client Isolation": drop station-to-station frames inside the
 				-- BSS. OpenWrt's wifi-iface option is spelled "isolate" (it maps
@@ -2144,7 +2259,22 @@ function M.apply_config(resp, cfg, opts)
 			if vap.radius_mac_auth and radius then
 				raw[#raw + 1] = "macaddr_acl=2"
 			end
-			extra.hostapd_bss_options = (#raw > 0) and raw or M.DELETE
+			-- RADIUS Filter-Id (attribute 11) in every Access-Request: the
+			-- service the gateway's RADIUS server checks the account against
+			-- (uid-wifi / wpa-eap). radius_auth_req_attr is in the 25.12 schema
+			-- and ap.uc writes it with the authentication servers of an
+			-- Enterprise BSS; one element, since ap.uc joins a list onto one
+			-- line.
+			if is_eap and radius and vap.filter_id then
+				extra.radius_auth_req_attr = {"11:s:" .. vap.filter_id}
+			end
+			-- Hotspot 2.0 (openwrt/hotspot2.lua): raw lines, Enterprise only
+			-- (hostapd refuses HS 2.0 on anything but WPA2-Enterprise/CCMP).
+			if is_eap and vap.hs20 then
+				for _, l in ipairs(hotspot2.lines(vap.hs20, vap.dgaf_disable)) do
+					raw[#raw + 1] = l
+				end
+			end
 			-- VLAN comes off the vap itself: the controller derives it from
 			-- aaa.<n>.br.devname ("br0.20"), not from a linked network object.
 			local vlan_enabled = vap.vlan_enabled
@@ -2224,6 +2354,38 @@ function M.apply_config(resp, cfg, opts)
 				end
 			end
 
+			-- MAC-based VLANs (M.macvlan_plan): hostapd's accept_mac_file with
+			-- a VLAN id per MAC, one wifi-vlan per VLAN for its vlan_file.
+			local sname = M.section_name(vap.radio, vap.ssid)
+			local mv = M.macvlan_plan(vap, function(vid)
+				if netplan then
+					if vid == 1 then
+						local nb = netplan.net_for_bridge or {}
+						return nb["br0"] or nb["br-trunk"]
+					end
+					local n = (netplan.vlan_ifaces or {})[vid]
+					if not n and netplan.mgmt and netplan.bridge
+							and netplan.mgmt.device == netplan.bridge.name .. "." .. vid then
+						n = netplan.mgmt.iface
+					end
+					return n
+				elseif cpueth then
+					if vid == 1 then return (cfg and cfg.net and cfg.net.lan_name) or "lan" end
+					wanted_vlans[vid] = true
+					return M.ensure_vlan_network(cpueth, vid)
+				end
+			end)
+			if mv then
+				local path = M.macvlan_path(sname)
+				if M._read_file(path) ~= mv.content then M._write_file(path, mv.content) end
+				macvlan_files[path] = true
+				raw[#raw + 1] = "accept_mac_file=" .. path
+				extra.dynamic_vlan = extra.dynamic_vlan or "1"
+				radius_networks = radius_networks or {}
+				for vid, net in pairs(mv.networks) do radius_networks[vid] = radius_networks[vid] or net end
+			end
+			extra.hostapd_bss_options = (#raw > 0) and raw or M.DELETE
+
 			local section = M.wlan_add(vap.radio, vap.ssid,
 				{security = vap.security, pairwise = vap.pairwise},
 				password, extra, network, vap.wlanconf_id)
@@ -2233,6 +2395,15 @@ function M.apply_config(resp, cfg, opts)
 			if radius_networks and section then
 				M.radius_vlans_add(section, radius_networks)
 			end
+		end
+	end
+	-- A list no WLAN references any more: nothing reads it, but it names
+	-- clients, so it does not stay on flash.
+	local listing = M._popen("ls " .. M.MACVLAN_DIR)
+	for f in listing:gmatch("[^\n]+") do
+		local path = M.MACVLAN_DIR .. "/" .. f
+		if f:match("^macvlan%-openuf_[%w_]+%.list$") and not macvlan_files[path] then
+			M._remove_file(path)
 		end
 	end
 
@@ -2320,6 +2491,8 @@ function M.apply_config(resp, cfg, opts)
 					ifname         = ifname,
 					bcfilt_enabled = vap.bcfilt_enabled,
 					bcfilt_macs    = vap.bcfilt_macs,
+					bcfilt_bypass  = vap.bcfilt_bypass,
+					mcast_suppressor = vap.mcast_suppressor,
 					down_kbps      = vap.ratelimit_down_kbps,
 					up_kbps        = vap.ratelimit_up_kbps,
 				}
@@ -2368,11 +2541,18 @@ function M.reapply_runtime_rules()
 		for mac in (s.openuf_bcfilt_macs or ""):gmatch("%S+") do
 			macs[#macs + 1] = mac
 		end
+		local bypass
+		for t in (s.openuf_bcfilt_bypass or ""):gmatch("%S+") do
+			bypass = bypass or {}
+			bypass[#bypass + 1] = t
+		end
 		for _, ifname in ipairs(ifnames) do
 			entries[#entries + 1] = {
 				ifname         = ifname,
 				bcfilt_enabled = (s.openuf_bcfilt == "1"),
 				bcfilt_macs    = macs,
+				bcfilt_bypass  = bypass,
+				mcast_suppressor = s.openuf_mcast_suppressor,
 				down_kbps      = tonumber(s.openuf_ratelimit_down),
 				up_kbps        = tonumber(s.openuf_ratelimit_up),
 			}
