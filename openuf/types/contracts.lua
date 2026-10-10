@@ -84,6 +84,8 @@
 ---@field max_sta integer|false  "Max Clients" for the whole radio; false: no limit
 ---@field acs_exclude integer[]? channels Auto must not pick (blklst), sorted; nil: none
 ---@field acs_dfs boolean?   Auto may pick DFS channels (acsdfs); nil: the push did not say
+---@field min_rssi_enabled boolean  stamgr.<n>.minrssi.status; absent block = false, never nil
+---@field min_rssi integer?  stamgr.<n>.minrssi.rssi, the wire value (dBm + 95), only while enabled
 
 ---@class VapIntent
 ---@field ssid string
@@ -211,6 +213,12 @@
 ---@field nas_id string?
 ---@field dynamic_vlan integer  0 off, 1 optional, 2 required (RADIUS-assigned VLAN)
 ---@field auth_cache boolean?   PMKSA/opportunistic key caching (Enterprise only)
+---@field das DasIntent?    RADIUS CoA/Disconnect (radius.das.*); nil: off or no usable client
+
+---@class DasIntent        parse_radius(): the WLAN's Dynamic Authorization Server
+---@field port integer      1024-65535
+---@field secret string
+---@field clients {cidr: string}[]  at least one: radius.dad.client.<i>.cidr, else radius.das.client/32
 
 ---@class PpskKey          one private pre-shared key (aaa.<n>.wpa.psk_file.<k>.*)
 ---@field key string        8-63 printable characters, or 64 hex digits
