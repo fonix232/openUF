@@ -132,12 +132,30 @@ end
 -- other, for eleven days, while every other BSS on both APs was fine.
 -- Nothing in OpenWrt re-checks the flags, so this does.
 
-M._list_hostapd_confs = function()
-	local p = io.popen("ls /var/run/hostapd-phy*.conf 2>/dev/null")
+-- hostapd's config is /var/run/hostapd-<phy>.conf, named after the radio's
+-- phy, which is phy0/phy1 only by default: a board whose wifi-device sets
+-- `phy` names (the E8450's wl0/wl1) gets hostapd-wl0.conf. Beside it sit
+-- per-BSS hostapd-<ifname>.psk/.sae/.vlan files and a .conf.prev, which the
+-- pattern leaves out.
+function M.is_hostapd_conf(name)
+	return type(name) == "string" and name:match("^hostapd%-[%w_%-]+%.conf$") ~= nil
+end
+
+M._ls_run = function()
+	local p = io.popen("ls /var/run 2>/dev/null")
 	if not p then return {} end
 	local out = {}
 	for line in p:lines() do out[#out + 1] = line end
 	p:close()
+	return out
+end
+
+M._list_hostapd_confs = function()
+	local out = {}
+	for _, name in ipairs(M._ls_run()) do
+		if M.is_hostapd_conf(name) then out[#out + 1] = "/var/run/" .. name end
+	end
+	table.sort(out)
 	return out
 end
 

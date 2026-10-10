@@ -267,4 +267,23 @@ return {
 			assert_contains(out, "could not set hairpin_mode on phy0-ap0", "and is reported")
 		end
 	},
+	{
+		name = "l2guard: hostapd's configs are found whatever the radio's phy is named",
+		fn = function()
+			-- On the E8450 the wifi-devices name their phys wl0/wl1, so the
+			-- configs are hostapd-wl0.conf: a hostapd-phy*.conf glob found
+			-- none, and the hairpin check never ran there.
+			local orig = l2guard._ls_run
+			l2guard._ls_run = function()
+				return {"hostapd", "hostapd-wl0-ap0.psk", "hostapd-wl0-ap0.sae", "hostapd-wl0-ap0.vlan",
+					"hostapd-wl0.conf", "hostapd-wl0.conf.prev", "hostapd-wl1.conf",
+					"hostapd-phy0.conf", "openuf-status"}
+			end
+			local got = l2guard._list_hostapd_confs()
+			l2guard._ls_run = orig
+			assert_eq(table.concat(got, " "),
+				"/var/run/hostapd-phy0.conf /var/run/hostapd-wl0.conf /var/run/hostapd-wl1.conf",
+				"every radio's config, none of the per-BSS files or the .prev")
+		end
+	},
 }
