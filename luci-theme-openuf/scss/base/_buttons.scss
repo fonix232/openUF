@@ -1,0 +1,114 @@
+@use '../abstracts' as *;
+
+// A white label on a solid fill.
+@mixin solid($fill) {
+	@include btn(var(--uf-on-accent), $fill, $fill);
+}
+
+.btn, .cbi-button, button, input[type="button"], input[type="reset"], input[type="submit"] {
+	@include btn(var(--uf-text-1), var(--uf-surface), var(--uf-border-strong));
+	--on-color: var(--uf-btn-fg);
+	@include row(6px, center, inline-flex);
+	width: auto;
+	height: var(--uf-control-h);
+	min-width: 0;
+	padding: 0 14px;
+	background: var(--uf-btn-bg);
+	color: var(--uf-btn-fg);
+	border: 1px solid var(--uf-btn-line);
+	border-radius: var(--uf-radius-sm);
+	font-size: 13px;
+	font-weight: 500;
+	line-height: 1;
+	white-space: nowrap;
+	text-decoration: none;
+	vertical-align: middle;
+	cursor: pointer;
+	transition: background-color .15s, border-color .15s, color .15s;
+	&:hover {
+		--uf-btn-bg: var(--uf-hover);
+		color: var(--uf-btn-fg);
+		text-decoration: none;
+	}
+}
+
+.btn, .cbi-button {
+	&:focus-visible { @include focus-ring; }
+	&:active { transform: translateY(.5px); }
+}
+
+.btn.disabled, .btn[disabled], .cbi-button[disabled] {
+	opacity: var(--uf-disabled-opacity);
+	cursor: default;
+}
+
+// Secondary actions: UniFi's outlined blue ("Port Manager").
+.btn.primary, .cbi-button-action, .cbi-button-apply, .cbi-button-reload, .cbi-button-edit,
+.cbi-button-positive, .cbi-button-fieldadd, .cbi-button-add, .cbi-button-save {
+	@include btn(var(--uf-blue), $line: var(--uf-blue-line));
+	&:hover { @include btn($bg: var(--uf-blue-soft), $line: var(--uf-blue)); }
+}
+
+.cbi-button-neutral, .cbi-button-download, .cbi-button-find, .cbi-button-link, .cbi-button-up, .cbi-button-down {
+	@include btn(var(--uf-text-1), $line: var(--uf-border-strong));
+}
+
+.cbi-button-negative, .cbi-section-remove .cbi-button, .cbi-button-reset, .cbi-button-remove {
+	@include btn(var(--uf-red-text), $line: rgba(var(--uf-red-rgb), .45));
+	&:hover { @include btn($bg: rgba(var(--uf-red-rgb), .08), $line: var(--uf-red)); }
+}
+
+// Primary actions: solid UniFi blue, one per view or dialog. Row actions
+// in a table ("Edit" on every zone) stay outlined, or a long table turns
+// into a column of blue.
+.btn.primary, .btn.info, .cbi-button-action.important, .cbi-button-positive.important,
+.cbi-page-actions .cbi-button-apply {
+	@include solid(var(--uf-blue-fill));
+	&:hover { @include solid(var(--uf-blue-fill-hover)); }
+}
+
+// Destructive and confirmed: solid red ("Apply unchecked", "Erase").
+.cbi-button-negative.important, .btn.danger, .btn.error {
+	@include solid(var(--uf-red-fill));
+	// Darken rather than lighten, so the white label keeps its contrast.
+	&:hover {
+		@include solid(var(--uf-red-fill));
+		background-image: linear-gradient(rgba(0, 0, 0, .12), rgba(0, 0, 0, .12));
+	}
+}
+
+.btn.success {
+	@include btn(var(--uf-green-text), $line: rgba(var(--uf-green-rgb), .5));
+	&:hover { @include btn($bg: rgba(var(--uf-green-rgb), .1), $line: var(--uf-green)); }
+}
+
+// LuCI's row grip ("☰") in sortable tables: a quiet handle, not a button.
+.cbi-button.drag-handle {
+	@include btn(var(--uf-text-3), transparent, transparent);
+	width: 28px;
+	padding: 0;
+	font-size: 15px;
+	cursor: move;
+	&:hover { @include btn(var(--uf-text-1), var(--uf-hover)); }
+}
+
+// "Save" beside "Save & Apply" is the secondary of the pair.
+.cbi-page-actions .cbi-button-apply + .cbi-button-save,
+.cbi-page-actions .cbi-button-negative + .cbi-button-save {
+	@include btn(var(--uf-blue), var(--uf-surface), var(--uf-blue-line));
+}
+
+.btn.large { height: 40px; padding: 0 20px; font-size: 14px; }
+.btn.small { height: 26px; padding: 0 10px; font-size: 12px; }
+
+.close {
+	float: right;
+	color: var(--uf-text-3);
+	font-size: 20px;
+	font-weight: 400;
+	line-height: 14px;
+	opacity: .8;
+	&:hover { color: var(--uf-text-1); text-decoration: none; }
+}
+
+.btn .close, .alert-message .close { font-family: var(--uf-font); line-height: 18px; }

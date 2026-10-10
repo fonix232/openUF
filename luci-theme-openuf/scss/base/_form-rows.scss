@@ -1,0 +1,106 @@
+@use '../abstracts' as *;
+
+.cbi-value {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	padding: 7px 0;
+	& + .cbi-value { border-top: 1px solid var(--uf-divider); }
+	&.hidden { display: none; }
+	label.cbi-value-title {
+		flex: 0 0 220px;
+		padding: 7px 16px 0 0;
+		@include text(13px, 18px, var(--uf-text-1));
+		font-weight: 500;
+		overflow-wrap: anywhere;
+	}
+}
+
+.cbi-value-field { flex: 1 1 280px; min-width: 0; }
+.cbi-value > .cbi-section, .cbi-value > .cbi-tblsection { width: 100%; }
+
+.cbi-value-description {
+	position: relative;
+	margin: 6px 0 2px;
+	padding-left: 22px;
+	@include text(12px, 17px, var(--uf-text-3));
+	&:empty { display: none; }
+	&::before {
+		content: "";
+		position: absolute;
+		top: 0;
+		left: 0;
+		@include icon(var(--uf-i-info), 16px, var(--uf-blue));
+	}
+}
+
+.cbi-value-title-ref, .cbi-title-ref { color: var(--uf-blue); }
+.cbi-title-ref::after { content: " \2192"; }
+div.cbi-value var, .td.cbi-value-field var { font-style: normal; color: var(--uf-blue); }
+
+div.cbi-value var[data-tooltip], .td.cbi-value-field var[data-tooltip],
+div.cbi-value var.cbi-tooltip-container, .td.cbi-value-field var.cbi-tooltip-container {
+	cursor: help;
+	border-bottom: 1px dotted var(--uf-blue);
+}
+
+div.cbi-value var.cbi-tooltip-container { color: var(--uf-text-1); }
+
+// The tip keeps its own colours, dark in either scheme; values quoted in
+// it are part of its text, not blue on the dark.
+div.cbi-value var.cbi-tooltip-container, .td.cbi-value-field var.cbi-tooltip-container .cbi-tooltip {
+	white-space: normal;
+}
+
+div.cbi-value, .td.cbi-value-field {
+	.cbi-tooltip var { color: inherit; }
+}
+
+.cbi-optionals, .cbi-section-create { padding: 12px 0 0; }
+
+.cbi-section-create {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+	> * { flex: 1 1 auto; }
+	> * > input { width: 100%; }
+}
+
+.cbi-page-actions, .actions {
+	position: sticky;
+	bottom: 0;
+	z-index: 50;
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	align-items: center;
+	gap: 8px;
+	margin: 4px 0 16px;
+	padding: 12px 20px;
+	@include panel($shadow: 0 -6px 16px -12px rgba(0, 0, 0, .25));
+}
+
+.cbi-page-actions {
+	> * { vertical-align: middle; }
+	> :not([method="post"]):not(.cbi-button-apply):not(.cbi-button-negative):not(.cbi-button-save):not(.cbi-button-reset) {
+		margin-right: auto;
+	}
+	> form { display: inline; margin: 0; }
+}
+
+.actions .secondary-action, .cbi-page-actions .secondary-action { margin-right: auto; }
+
+// An action bar inside a card or a tab pane (Flash's Configuration,
+// Startup's Local Startup) is that card's last row, not a second card
+// floating within it.
+.cbi-section .cbi-page-actions, [data-tab] .cbi-page-actions {
+	position: static;
+	margin: 0;
+	padding: 16px 0 0;
+	background: none;
+	border: 0;
+	border-radius: 0;
+	box-shadow: none;
+}
