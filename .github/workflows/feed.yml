@@ -1,0 +1,177 @@
+name: Package feed
+
+# Builds openUF's packages (apk; OpenWrt 25.12 and later) with the official
+# OpenWrt SDK image, tests the built theme in a stock OpenWrt container and, on
+# main, publishes them as a signed feed on GitHub Pages:
+#
+#   https://fonix232.github.io/openUF/apk/packages.adb
+#
+# Only the packages that changed are built (.github/scripts/feed-plan.sh).
+# gh-pages mirrors main commit by commit (.github/scripts/publish.sh): each of
+# its commits is the whole feed as of one main commit, which its body names
+# ("Source: main@<sha>"); a package that did not change is carried over as it
+# was published. When main is rewritten, gh-pages goes back to the last commit
+# both histories still share. The feed keeps the last few builds of each
+# package, so an earlier one can be reinstalled with `apk add openuf=<version>`.
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Build every package, changed or not
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# One run at a time per ref, in order: two publishes would race on gh-pages.
+concurrency:
+  group: feed-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.plan.outputs.packages }}
+      base: ${{ steps.plan.outputs.base }}
+      tip: ${{ steps.plan.outputs.tip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # ancestry checks against what gh-pages was built from
+
+      - name: Choose the packages to build
+        id: plan
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          REBUILD: ${{ inputs.rebuild }}
+        run: sh .github/scripts/feed-plan.sh "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build
+    needs: plan
+    if: needs.plan.outputs.packages != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # a package's release is the date of its last change
+
+      - name: Build ${{ needs.plan.outputs.packages }}
+        env:
+          PACKAGES: ${{ needs.plan.outputs.packages }}
+        run: |
+          mkdir -p out && chmod 777 out
+          # shellcheck disable=SC2086 # the package list, one argument each
+          docker run --rm -v "$PWD:/feed:ro" -v "$PWD/out:/out" openwrt/sdk:x86-64-openwrt-25.12 \
+            sh /feed/.github/scripts/sdk-build.sh /feed /out $PACKAGES
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: out/
+
+  # The theme as the feed ships it: the built .apk, installed with apk into the
+  # stock OpenWrt image (which carries LuCI), then every menu page in light,
+  # dark and phone layouts, failing on script errors, broken assets or
+  # sideways overflow (luci-theme-openuf/test/run.sh).
+  theme:
+    name: Test luci-theme-openuf (${{ matrix.target }})
+    needs: [plan, build]
+    if: contains(needs.plan.outputs.packages, 'luci-theme-openuf')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The release the feed is built for. No switch ports: on GitHub's
+          # runners this image's netifd stops answering once add-ports.sh
+          # reloads the network, and every page's network calls time out.
+          - target: "25.12"
+            image: openwrt/rootfs:x86-64-25.12.5
+            luci: openwrt-25.12
+            ports: "0"
+          # SNAPSHOT ships without LuCI: run.sh installs it from the
+          # snapshot feed, and the extras come from LuCI master.
+          - target: SNAPSHOT
+            image: openwrt/rootfs:x86-64
+            luci: master
+            ports: "1"
+          # luci-mod-dashboard before its rework (LuCI of 8 September
+          # 2026), as 24.10 and older 25.12 feeds still ship it.
+          - target: classic dashboard
+            image: openwrt/rootfs:x86-64-25.12.5
+            luci: a8c110bed82375b69eb3881b2e54e617520e8c7d
+            ports: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: out
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Playwright and Chromium
+        run: |
+          npm install --no-save --prefix "$RUNNER_TEMP/pw" playwright
+          npx --prefix "$RUNNER_TEMP/pw" playwright install --with-deps chromium
+
+      - name: Boot OpenWrt, install the package, walk every page
+        env:
+          OPENWRT_IMAGE: ${{ matrix.image }}
+          LUCI_BRANCH: ${{ matrix.luci }}
+          UF_PORTS: ${{ matrix.ports }}
+        run: |
+          UF_APK=$(ls out/luci-theme-openuf-*.apk | head -n 1) \
+          NODE_PATH="$RUNNER_TEMP/pw/node_modules" sh luci-theme-openuf/test/run.sh
+
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-theme-openuf-screenshots-${{ matrix.target }}
+          path: luci-theme-openuf/test/out/
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish to GitHub Pages
+    needs: [plan, build, theme]
+    # Also when nothing was built: every main commit gets its gh-pages commit.
+    # Not when a theme test failed.
+    if: >-
+      !failure() && !cancelled()
+      && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        if: needs.plan.outputs.packages != ''
+        with:
+          name: packages
+          path: ${{ runner.temp }}/new
+
+      - name: Publish main@${{ github.sha }}
+        env:
+          APK_SIGN_KEY: ${{ secrets.APK_SIGN_KEY }}
+          BASE: ${{ needs.plan.outputs.base }}
+          TIP: ${{ needs.plan.outputs.tip }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          git fetch --quiet origin "+refs/heads/gh-pages:refs/remotes/origin/gh-pages" 2>/dev/null || true
+          sh .github/scripts/publish.sh "$GITHUB_SHA" "$RUNNER_TEMP/new"
