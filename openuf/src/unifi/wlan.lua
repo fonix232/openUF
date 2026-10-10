@@ -333,11 +333,15 @@ function M.parse(sys_raw, caps)
 	-- Like bcfilt, <k> is 1-based and carries no meaning beyond grouping, so
 	-- the list is sorted for a stable, comparable result. Entries are taken
 	-- only when both the block and the entry are enabled; type is "user" for
-	-- hand-entered MACs (the only kind this UI produces).
+	-- hand-entered MACs and "lock2ap" for a client locked to ANOTHER AP
+	-- ("Lock to Access Point", 10.6.106 macAclService; PROTOCOL-VALIDATION.md
+	-- #lock-to-access-point-lock2ap). Both are enforced alike; the lock2ap
+	-- ones are also kept apart, so the AP the client is locked to can be
+	-- told through the sibling exchange (openwrt/siblings.lua).
 	local mac_filter_by_dev = {}
 	for _, e in pairs(macacl) do
 		if e.devname and e.status == "enabled" and e["acl.status"] == "enabled" then
-			local macs = {}
+			local macs, locks = {}, {}
 			for k, val in pairs(e) do
 				local ki = k:match("^acl%.(%d+)%.mac$")
 				if ki and e["acl." .. ki .. ".status"] == "enabled" then
@@ -347,6 +351,9 @@ function M.parse(sys_raw, caps)
 					-- safe reading.
 					if wire.is_mac(val) then
 						macs[#macs + 1] = val
+						if e["acl." .. ki .. ".type"] == "lock2ap" then
+							locks[#locks + 1] = val:lower()
+						end
 					else
 						io.stderr:write(("inform: macacl: ignoring malformed MAC %q\n")
 							:format(tostring(val)))
@@ -354,9 +361,11 @@ function M.parse(sys_raw, caps)
 				end
 			end
 			table.sort(macs)
+			table.sort(locks)
 			mac_filter_by_dev[e.devname] = {
 				policy = e["acl.policy"],
 				macs   = macs,
+				locks  = locks,
 			}
 		end
 	end
@@ -915,6 +924,9 @@ function M.parse(sys_raw, caps)
 					-- the consumer turns into macfilter=disable.
 					mac_filter_policy     = (mac_filter_by_dev[w.devname] or {}).policy,
 					mac_filter_list       = (mac_filter_by_dev[w.devname] or {}).macs,
+					-- The subset of mac_filter_list that is Lock to Access
+					-- Point (type lock2ap): clients locked to another AP.
+					mac_filter_lock2ap    = (mac_filter_by_dev[w.devname] or {}).locks,
 					-- "WiFi Speed Limit", in kbps, nil when unlimited.
 					ratelimit_down_kbps   = (ratelimit_by_dev[w.devname] or {}).down,
 					ratelimit_up_kbps     = (ratelimit_by_dev[w.devname] or {}).up,

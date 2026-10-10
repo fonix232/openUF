@@ -33,6 +33,15 @@ local function new_mock_uci()
 		if s then s[option] = nil end
 	end
 
+	function cursor:foreach(config, stype, fn)
+		local names = {}
+		for name, sec in pairs(db[config] or {}) do
+			if sec[".type"] == stype then names[#names + 1] = name end
+		end
+		table.sort(names)
+		for _, name in ipairs(names) do fn(db[config][name]) end
+	end
+
 	-- Recorded, not applied -- the counter lets tests catch a dropped commit.
 	local commits = {}
 	function cursor:commit(config)
@@ -239,6 +248,44 @@ return {
 				assert_true(usteer.filter_wanted(), "running for Roaming Assistant")
 				usteer.set_enabled(false, nil, false)
 				assert_false(usteer.filter_wanted(), "stopped")
+			end)
+		end
+	},
+	{
+		name = "usteer: set_locked exempts the clients locked here from steering, keeping the device's own entries",
+		fn = function()
+			with_usteer(function(db, cmds, commits)
+				usteer.set_enabled(false, nil, true)   -- running, for Roaming Assistant
+				local n0, c0 = #cmds, commits.usteer
+				-- The device's own usteer section, before openUF's: its list
+				-- would otherwise be masked by local's.
+				db.usteer.cfg01 = {[".name"] = "cfg01", [".type"] = "usteer",
+					aggressiveness_mac_list = {"00:00:5e:00:53:30,2", "00:00:5e:00:53:21,4"}}
+				assert_true(usteer.set_locked({"00:00:5E:00:53:21"}), "changed")
+				assert_eq(table.concat(db.usteer["local"].aggressiveness_mac_list, " "),
+					"00:00:5e:00:53:30,2 00:00:5e:00:53:21,0",
+					"the device's entry kept, the locked client's replaced by 0")
+				assert_eq(commits.usteer, c0 + 1, "committed")
+				assert_true(#cmds == n0 + 1 and cmds_contain({cmds[#cmds]}, "usteer restart"),
+					"restarted: usteer reads a station's override only when it first sees it")
+				assert_false(usteer.set_locked({"00:00:5e:00:53:21"}), "unchanged: nothing done")
+				assert_eq(#cmds, n0 + 1, "no second restart")
+				usteer.set_locked({})
+				assert_eq(table.concat(db.usteer["local"].aggressiveness_mac_list, " "),
+					"00:00:5e:00:53:30,2 00:00:5e:00:53:21,4",
+					"unlocked: the device's own entries, the client's own back")
+			end)
+		end
+	},
+	{
+		name = "usteer: set_locked writes nothing while openUF does not run usteerd",
+		fn = function()
+			with_usteer(function(db, cmds)
+				usteer.set_enabled(false, nil, false)
+				local n0 = #cmds
+				usteer.set_locked({"00:00:5e:00:53:21"})
+				assert_nil(db.usteer["local"].aggressiveness_mac_list, "no list")
+				assert_eq(#cmds, n0, "the daemon is not started for it")
 			end)
 		end
 	},

@@ -274,7 +274,7 @@ commands, so a stale one corrects itself after one upgrade round.
 | `l2guard` | `1` | The controller's `ebtables.*` hardening as an nftables bridge table on the VAPs |
 | `guest_isolation` | `1` | The controller's guest-WLAN restrictions as an nftables bridge table on the guest VAPs (§ 6). The captive portal is not implemented |
 | `rrm_enrichment`, `rrm_request_interval` | `1`, `600` | Ask 802.11k-capable clients for beacon reports (the neighbour list). A client with active/passive measurement is asked to look; a beacon-**table**-only client (most phones seen) is asked for its scan cache (mode 2) |
-| `sibling_exchange` | `1` | Broadcast this AP's BSSIDs to other openUF APs on UDP 10011 and keep theirs (`/tmp/openuf-siblings.json`, 5 min), so a sibling a client reports over 802.11k is tagged as a UniFi neighbour. Runs in the `announce` process, which now starts when this or `l2_announce` is on |
+| `sibling_exchange` | `1` | Broadcast this AP's BSSIDs to other openUF APs on UDP 10011 and keep theirs (`/tmp/openuf-siblings.json`, 5 min), so a sibling a client reports over 802.11k is tagged as a UniFi neighbour. It also carries the clients this AP denies for Lock to Access Point, which is how the AP a client is locked to learns of the lock (§ Lock to Access Point). Runs in the `announce` process, which now starts when this or `l2_announce` is on |
 | `sibling_scan_interval` | `1800` | Seconds between short scans of only the channels siblings announced (same band, not the radio's own): `iw scan freq <f>… ap-force`, a fraction of a second, **with clients associated**. `0` = never. A full idle sweep counts as one |
 | `idle_scan_interval` | `1800` | Seconds between off-channel sweeps (`iw scan ap-force`, in the background) of a radio with **no associated client** on any of its interfaces; `0` = never. A radio with clients is looked at again a minute later. The sweep is what lets an AP hear siblings on other channels |
 | `roam_assist_diff_db` | `8` | Roaming Assistant: how many dB louder another AP must hear a weak client before it is moved there (§ 6) |
@@ -534,7 +534,7 @@ Settings carried through from the controller:
 | SSID, passphrase, security | `wifi-iface` ssid/key/encryption |
 | Hide WiFi Name | `hidden` (hostapd `ignore_broadcast_ssid`) |
 | MAC Address Filter | `macfilter` (`disable`/`allow`/`deny`) + `maclist` |
-| Lock to Access Point (a client setting) | The same `macfilter=deny` + `maclist`, on every AP except the one the client is locked to: the controller sends the lock as `type=lock2ap` entries of each WLAN's MAC filter, merged into a user deny list or taken out of a user allow list. The AP the client is locked to gets nothing for it. Needs `wifi_caps` `0x1000000`, which openUF always claims |
+| Lock to Access Point (a client setting) | The same `macfilter=deny` + `maclist`, on every AP except the one the client is locked to: the controller sends the lock as `type=lock2ap` entries of each WLAN's MAC filter, merged into a user deny list or taken out of a user allow list. The AP the client is locked to gets nothing for it. Needs `wifi_caps` `0x1000000`, which openUF always claims. On the AP the client is locked to, openUF stops steering it away (below) |
 | WiFi Speed Limit | `tc` shaping per VAP, not a hostapd option. `openuf_ratelimit_down`/`openuf_ratelimit_up` on the section are the persisted record: `tc` state dies with a reboot, so openUF rebuilds the qdiscs from those two options on every start |
 | WPA2 / WPA3 / WPA2-WPA3 mixed | `encryption=psk2`/`sae`/`sae-mixed`, from the pushed AKM set **plus** `wpa3.transition` — SAE replaces WPA-PSK on the wire, so the AKM alone cannot tell mixed from WPA3-only. Depends on openUF advertising `radio_caps2` bit `0x1` |
 | Enhanced Open (OWE) | `encryption=owe` (bare, no cipher suffix), from `wpa.key.1.mgmt=OWE` with no `aaa.<n>.wpa`. **Transition mode** arrives as two VAPs per radio with the same SSID (open + hidden OWE, linked by `owe_devname`). openUF writes them as one section with `owe_transition=1`, and OpenWrt 25.12's ucode generator builds both BSSes from it, naming the hidden one `<ssid>OWE`. It does so only for `encryption` exactly `owe`, which is why no cipher is appended. Depends on openUF advertising `radio_caps2` bit `0x8`, which it does when `hostapd -vowe` passes |
@@ -1116,6 +1116,30 @@ without any log line.
 flag back only when it has gone missing. Each correction is logged as
 `l2guard: re-asserted hairpin_mode on <ifname>`. That line means the race happened. It is
 not an openUF fault.
+
+### Lock to Access Point
+
+The controller enforces a client's lock with the MAC filter of every **other** AP (table
+above). The AP the client is locked to receives nothing. Its usteer would still send the
+client BSS Transition requests toward APs that refuse it, and kick it, and Roaming Assistant
+would do the same, so the client would bounce. So each openUF AP keeps the push's lock
+entries in `state.json` (`lock2ap`) and announces them to the other openUF APs
+(`sibling_exchange`). Once a minute, a client that a sibling denies and this AP does not is
+treated as locked here:
+
+- **usteer:** `usteer.local.aggressiveness_mac_list` gets `<mac>,0` for it. Entries from the
+  device's own usteer sections are carried over, because usteerd keeps only the last
+  section's list, which is openUF's `local`. usteer reads a client's entry only when it first
+  sees the client, so a changed list restarts usteer. Aggressiveness 0 stops the roam trigger
+  (`roam_trigger_snr`) and band steering for that client. It does not stop `min_snr` kicks,
+  load kicks or `assoc_steering`, so leave those off.
+- **Roaming Assistant:** skips it.
+- **Minimum RSSI:** still kicks it, as on a UniFi AP.
+
+The log says `openuf: locked to this AP: <macs>` when the list changes. Check it with
+`uci get usteer.local.aggressiveness_mac_list`, and on another AP with `uci show wireless |
+grep maclist`. This only works between openUF APs: an openUF AP whose locked client's other
+APs are real UniFi ones never hears of the lock.
 
 ### usteer's AP-to-AP sync stays off the air
 

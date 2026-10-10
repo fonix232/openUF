@@ -70,6 +70,10 @@ M.FIELDS = {
 	upgrade_requested_version = "string",
 	upgrade_requested_url     = "string",
 	blocked_stas              = "table",
+	-- Lock to Access Point: the clients the controller denies here because
+	-- they are locked to another AP (sorted, lowercase; the macacl lock2ap
+	-- entries of the last WiFi push). The sibling exchange announces it.
+	lock2ap                   = "table",
 	-- Identity, re-derived at startup by inform's _populate_net_info. Kept
 	-- here so the PREVIOUS run's values are still readable at that moment:
 	-- M.run compares the loaded mac against the live one to catch a layout

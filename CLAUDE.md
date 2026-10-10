@@ -20,7 +20,7 @@ The daemon's source is `openuf/src/`, in two sides with one rule between them
   `report.lua` (device → payload) with `sysinfo.lua` (iw/proc/bridge reads), `board.lua`
   (the board from `board.json`), `netmodel.lua` and `switchvlan.lua` (bridge, DSA
   per-port VLAN), `sysconf.lua`, `rrmscan.lua` (802.11k beacon reports),
-  `siblings.lua` (openUF APs exchanging BSSIDs + frequencies on UDP 10011),
+  `siblings.lua` (openUF APs exchanging BSSIDs, frequencies and Lock-to-AP lists on UDP 10011),
   `idlescan.lua` (off-channel sweeps of idle radios, sibling-channel scans),
   `das.lua` (RADIUS CoA/Disconnect dispatcher on UDP 3799)
 - enforcement modules with their own nft tables / tc: `firewall.lua` (`bridge openuf`),

@@ -181,6 +181,17 @@ end
 function M.tick(observations, now, opts)
 	local diff_db = tonumber(opts and opts.diff_db) or M.DEFAULT_DIFF_DB
 	local actions = 0
+	-- A client locked to this AP ("Lock to Access Point", opts.locked, a set
+	-- of lowercase MACs) is left alone: every other AP refuses it, so moving
+	-- it would only disconnect it.
+	local locked = opts and opts.locked
+	if locked and next(locked) then
+		local kept = {}
+		for _, o in ipairs(observations or {}) do
+			if not locked[tostring(o.mac):lower()] then kept[#kept + 1] = o end
+		end
+		observations = kept
+	end
 	local nodes = nil  -- fetched lazily: most heartbeats need no ubus at all
 
 	for _, o in ipairs(observations or {}) do

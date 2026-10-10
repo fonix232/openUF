@@ -2396,6 +2396,75 @@ return {
 		end
 	},
 	{
+		name = "inform packet: lock2ap entries are kept apart from the user's, and recorded in st.lock2ap",
+		fn = function()
+			local provision = require("openwrt.provision")
+			local sys_cfg = table.concat({
+				"aaa.1.ssid=open-a", "aaa.1.wpa=2",
+				"wireless.1.ssid=open-a", "wireless.1.parent=radio0", "wireless.1.devname=ath0",
+				"aaa.2.ssid=open-b", "aaa.2.wpa=2",
+				"wireless.2.ssid=open-b", "wireless.2.parent=radio0", "wireless.2.devname=ath1",
+				"macacl.status=enabled",
+				"macacl.1.devname=ath0", "macacl.1.status=enabled",
+				"macacl.1.acl.status=enabled", "macacl.1.acl.policy=deny",
+				"macacl.1.acl.1.status=enabled", "macacl.1.acl.1.mac=00:00:5E:00:53:21",
+				"macacl.1.acl.1.type=lock2ap",
+				"macacl.1.acl.2.status=enabled", "macacl.1.acl.2.mac=00:00:5e:00:53:30",
+				"macacl.1.acl.2.type=user",
+				"macacl.2.devname=ath1", "macacl.2.status=enabled",
+				"macacl.2.acl.status=enabled", "macacl.2.acl.policy=deny",
+				"macacl.2.acl.1.status=enabled", "macacl.2.acl.1.mac=00:00:5e:00:53:22",
+				"macacl.2.acl.1.type=lock2ap",
+			}, "\n") .. "\n"
+			local _, vt = inform._parse_wifi_system_cfg(sys_cfg)
+			assert_eq(#vt[1].mac_filter_list, 2, "both entries enforced")
+			assert_eq(table.concat(vt[1].mac_filter_lock2ap, " "), "00:00:5e:00:53:21",
+				"only the lock2ap one is a lock, lowercase")
+			local st = {}
+			assert_true(provision.record_lock2ap(st, vt), "first push records")
+			assert_eq(table.concat(st.lock2ap, " "), "00:00:5e:00:53:21 00:00:5e:00:53:22",
+				"the union over the VAPs, sorted")
+			assert_false(provision.record_lock2ap(st, vt), "the same push changes nothing")
+			assert_true(provision.record_lock2ap(st, {}), "no locks left")
+			assert_nil(st.lock2ap, "cleared, not an empty table")
+		end
+	},
+	{
+		name = "inform packet: _lock_resync exempts the clients locked here, once a minute and on change",
+		fn = function()
+			local sib = require("openwrt.siblings")
+			local orig = {time = inform._time, read = inform._sysinfo._read_file,
+				u = inform._usteer, stderr = io.stderr}
+			io.stderr = {write = function() end}
+			local now = 50000
+			inform._time = function() return now end
+			local store = {}
+			sib.record(store, sib.build("00:00:5e:00:53:02", {{bssid = "00:00:5e:00:53:1c"}}, nil,
+				{"00:00:5e:00:53:21", "00:00:5e:00:53:23"}), "00:00:5e:00:53:01", now)
+			local text = cjson.encode(store)
+			inform._sysinfo._read_file = function(path) return path == sib.FILE and text or nil end
+			local calls = {}
+			inform._usteer = {set_locked = function(m) calls[#calls + 1] = table.concat(m, " ") end}
+			inform._lock_next, inform._lock_built, inform._locked_here = 0, nil, {}
+			local st = {lock2ap = {"00:00:5e:00:53:23"}}
+			local first = inform._lock_resync(st)
+			local held = inform._locked_here["00:00:5e:00:53:21"]
+			now = now + 10
+			local soon = inform._lock_resync(st)
+			now = now + 60
+			local same = inform._lock_resync(st)
+			inform._time, inform._sysinfo._read_file, inform._usteer, io.stderr =
+				orig.time, orig.read, orig.u, orig.stderr
+			inform._lock_next, inform._lock_built, inform._locked_here = 0, nil, {}
+			assert_true(first, "rebuilt")
+			assert_eq(calls[1], "00:00:5e:00:53:21", "usteer told the client locked here, not :23")
+			assert_true(held, "and Roaming Assistant's set")
+			assert_false(soon, "rate-limited")
+			assert_false(same, "unchanged: usteer left alone")
+			assert_eq(#calls, 1, "one call")
+		end
+	},
+	{
 		name = "inform packet: _parse_wifi_system_cfg maps WPA-PSK akm to wpa2",
 		fn = function()
 			local sys_cfg = "aaa.1.ssid=openuf-test\naaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=WPA-PSK\n"

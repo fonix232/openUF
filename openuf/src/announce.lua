@@ -355,6 +355,16 @@ function M.adopted(state_file)
 	return nil
 end
 
+-- The clients this AP denies for Lock to Access Point (st.lock2ap), which the
+-- sibling exchange announces; {} when there are none or no state is readable.
+function M.own_locks(state_file)
+	local sm = state_module()
+	if not sm then return {} end
+	if state_file then sm._state_file = state_file end
+	local ok, s = pcall(sm.load)
+	return (ok and type(s) == "table" and type(s.lock2ap) == "table") and s.lock2ap or {}
+end
+
 -- Re-read, before each broadcast, the facts that change while the broadcaster
 -- runs. The packet used to be built from startup values for the life of the
 -- process:
@@ -521,7 +531,7 @@ function M.run(cfg)
 		end
 	end
 
-	local sib, sib_sock, sib_store, own = nil, nil, {}, {}
+	local sib, sib_sock, sib_store, own, own_locks = nil, nil, {}, {}, {}
 	if cfg.siblings then
 		sib = require("openwrt.siblings")
 		sib_sock = open_bound(socket, sib.PORT, "siblings")
@@ -572,8 +582,9 @@ function M.run(cfg)
 			-- The BSSIDs change only when the controller re-provisions WLANs;
 			-- once a minute is plenty.
 			if counter % 6 == 1 then own = sib.own_bssids(M._popen("iw dev")) end
+			own_locks = M.own_locks(cfg.state_file)
 			local pkt = sib.build(cfg.identity_mac, own,
-				{model = cfg.model, model_display = cfg.model_display})
+				{model = cfg.model, model_display = cfg.model_display}, own_locks)
 			if pkt then sib_sock:sendto(pkt, M.BROADCAST_ADDR, sib.PORT) end
 			pcall(sib.save, sib.expire(sib_store, os.time()), sib.FILE,
 				require("cjson"))

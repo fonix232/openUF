@@ -1196,6 +1196,18 @@ openUF claims the bit unconditionally, since the parser already takes every enab
 lock2ap-only block through `_parse_wifi_system_cfg` + `apply_config` to `macfilter=deny`
 with the client in `maclist`, and its absence back to no filter. Hardware tier not yet run.
 
+**The locked AP itself.** Nothing on the wire tells it, so openUF APs exchange their lock
+entries over the sibling exchange (packet v4, `openwrt/siblings.lua`). A client that a
+sibling denies and this AP does not is locked here, and openUF exempts it from steering.
+usteer's override `aggressiveness_mac_list` (`"<mac>,<n>"`, read in `sta.c`
+`usteer_sta_update_aggressiveness`, usteer 7532e12, 2026-05-19) with `n = 0` makes
+`usteer_policy_can_perform_roam()` return false. That function gates both the roam trigger
+state machine (`policy.c`) and band steering (`band_steering.c`). `min_snr` kicks, load kicks
+and `assoc_steering` don't check it. The override is evaluated only when usteer creates a
+station's entry for a node, so `set_config` alone leaves an associated client's old value,
+and openUF restarts usteerd on a change. Roaming Assistant skips the same clients. Unit-tested
+only.
+
 ### `qos.*` — WiFi Speed Limit
 
 Another **top-level section keyed by devname**. Confirmed live 2026-07-18 by creating a

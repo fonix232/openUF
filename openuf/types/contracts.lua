@@ -123,6 +123,7 @@
 ---@field roam_assist_rssi integer?    its threshold, plain dBm
 ---@field mac_filter_policy string?
 ---@field mac_filter_list string[]?
+---@field mac_filter_lock2ap string[]? the lock2ap subset: clients locked to another AP, lowercase
 ---@field bcfilt_enabled boolean?
 ---@field bcfilt_macs string[]?
 ---@field minrate_data integer?

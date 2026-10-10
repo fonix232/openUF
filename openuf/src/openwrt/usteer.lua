@@ -116,6 +116,81 @@ function M.set_enabled(enabled, cfg, roam_assist)
 	return true
 end
 
+-- ─── Lock to Access Point: never steer a client away from its AP ────────────
+--
+-- The controller enforces a lock by denying the client on every other AP
+-- (macacl lock2ap). usteer, running here, does not know that: its roam
+-- trigger (roam_trigger_snr) and band steering would still send the client
+-- BSS Transition requests toward an AP that refuses it, and kick it after
+-- roam_kick_delay, so it bounces. usteer's per-station override,
+-- aggressiveness_mac_list ("<mac>,<0-4>", lowercase), set to 0 makes
+-- usteer_policy_can_perform_roam() false for that client, which gates both
+-- (usteer policy.c, band_steering.c). It does not cover min_snr kicks, load
+-- kicks or assoc_steering, which openUF leaves at usteer's off defaults.
+--
+-- usteer reads a station's override only when it first creates the station
+-- (sta.c usteer_sta_info_get), so a changed list needs a restart, not a
+-- reload; set_locked restarts only on a change.
+--
+-- The init script turns every usteer section's list into the same JSON key,
+-- and usteerd keeps the last one: openUF's `local` section, even when it
+-- holds none. So the entries of the other sections (the device's own usteer
+-- settings) are carried into `local`'s list, a locked client's own entry
+-- replaced by the lock's.
+
+local function other_entries(cursor)
+	local out = {}
+	if not cursor.foreach then return out end
+	cursor:foreach("usteer", "usteer", function(s)
+		if s[".name"] ~= "local" then
+			local v = s.aggressiveness_mac_list
+			if type(v) == "string" then v = {v} end
+			for _, e in ipairs(type(v) == "table" and v or {}) do out[#out + 1] = e end
+		end
+	end)
+	return out
+end
+
+-- macs: the clients locked to this AP (lowercase). Writes usteer.local's
+-- aggressiveness_mac_list while openUF runs usteerd, removes it otherwise.
+-- Returns true when it changed the list (and restarted the daemon).
+function M.set_locked(macs)
+	local cursor = get_uci().cursor()
+	local active = cursor:get("usteer", "local", "openuf_active") == "1"
+	local want = {}
+	if active then
+		local locked = {}
+		for _, m in ipairs(macs or {}) do
+			if type(m) == "string" and m:match("^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$") then
+				locked[m:lower()] = true
+			end
+		end
+		for _, e in ipairs(other_entries(cursor)) do
+			if not locked[tostring(e):sub(1, 17):lower()] then want[#want + 1] = e end
+		end
+		local mine = {}
+		for m in pairs(locked) do mine[#mine + 1] = m .. ",0" end
+		table.sort(mine)
+		for _, e in ipairs(mine) do want[#want + 1] = e end
+	end
+	local have = cursor:get("usteer", "local", "aggressiveness_mac_list")
+	if type(have) == "string" then have = {have} end
+	have = type(have) == "table" and have or {}
+	if #have == #want then
+		local same = true
+		for i = 1, #want do if have[i] ~= want[i] then same = false end end
+		if same then return false end
+	end
+	if #want > 0 then
+		cursor:set("usteer", "local", "aggressiveness_mac_list", want)
+	else
+		cursor:delete("usteer", "local", "aggressiveness_mac_list")
+	end
+	cursor:commit("usteer")
+	if active then M._run_cmd("/etc/init.d/usteer restart 2>/dev/null") end
+	return true
+end
+
 -- ─── Keep usteer's AP-to-AP sync off the air ────────────────────────────────
 --
 -- usteerd tells the other APs what it sees by broadcasting its whole station

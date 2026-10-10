@@ -826,7 +826,8 @@ function M._roamassist_tick(cfg)
 	M._roam_obs = nil
 	if not (M._roamassist and obs and #obs > 0) then return 0 end
 	return M._roamassist.tick(obs, M._time(),
-		{diff_db = cfg and cfg.config and cfg.config.roam_assist_diff_db})
+		{diff_db = cfg and cfg.config and cfg.config.roam_assist_diff_db,
+			locked = M._locked_here})
 end
 
 -- One heartbeat: build, send, dispatch. Returns the number of seconds the
@@ -954,6 +955,7 @@ function M._tick(st, cfg, ufhw, ctx)
 	pcall(M._guest_resync, st, cfg)
 	pcall(M._hairpin_resync)
 	pcall(M._usteer_filter_resync)
+	pcall(M._lock_resync, st)
 	-- With the LED switch off, whatever relights an LED (LuCI saving the LED
 	-- page restarts OpenWrt's led service) is undone within a minute. Sysfs
 	-- reads only, no fork.
@@ -1316,6 +1318,37 @@ function M._usteer_filter_resync()
 	if key == M._usteer_filter_built then return false end
 	u.reconcile_filter(names)
 	M._usteer_filter_built = key
+	return true
+end
+
+-- Once a minute, and right after a push changed st.lock2ap: the clients
+-- locked to this AP ("Lock to Access Point": denied by a sibling openUF AP,
+-- not here; siblings.locked_here) are exempted from usteer's steering
+-- (usteer.set_locked) and from Roaming Assistant (M._locked_here, read by
+-- _roamassist_tick). Rebuilds only when that list changed. Returns true when
+-- it did.
+M.LOCK_INTERVAL = 60
+M._lock_next = 0
+M._lock_built = nil
+M._locked_here = {}
+function M._lock_resync(st)
+	local now = M._time()
+	if now < M._lock_next then return false end
+	M._lock_next = now + M.LOCK_INTERVAL
+	local sib = require("openwrt.siblings")
+	local here = sib.locked_here(sib.decode_locks(M._sysinfo._read_file(sib.FILE),
+		now, require("cjson")), st and st.lock2ap)
+	local key = table.concat(here, " ")
+	if key == M._lock_built then return false end
+	local set = {}
+	for _, m in ipairs(here) do set[m] = true end
+	M._locked_here = set
+	if M._usteer and M._usteer.set_locked then M._usteer.set_locked(here) end
+	if #here > 0 or M._lock_built then
+		io.stderr:write("openuf: locked to this AP: "
+			.. (#here > 0 and key or "none") .. "\n")
+	end
+	M._lock_built = key
 	return true
 end
 

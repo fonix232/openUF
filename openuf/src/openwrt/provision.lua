@@ -57,6 +57,33 @@ end
 -- clients between APs, and probe_steering is compiled in but not
 -- configurable. It is reported once, not faked.
 M._warned_bandsteering_mode = false
+
+-- Lock to Access Point: keep the push's lock2ap MACs (the clients locked to
+-- some other AP, denied here by the MAC filter) in st.lock2ap, for the sibling
+-- exchange to announce. Every VAP carries the same set, but a WLAN with its
+-- own allow filter carries none, so it is the union. nil when there are none.
+-- Returns true when st.lock2ap changed.
+---@param st table
+---@param vap_table VapIntent[]
+---@return boolean
+function M.record_lock2ap(st, vap_table)
+	local set, list = {}, {}
+	for _, vap in ipairs(vap_table or {}) do
+		for _, mac in ipairs(vap.mac_filter_lock2ap or {}) do
+			if not set[mac] then set[mac] = true; list[#list + 1] = mac end
+		end
+	end
+	table.sort(list)
+	local new = #list > 0 and list or nil
+	local old = type(st.lock2ap) == "table" and st.lock2ap or {}
+	if #old == #list then
+		local same = true
+		for i = 1, #list do if old[i] ~= list[i] then same = false end end
+		if same then return false end
+	end
+	st.lock2ap = new
+	return true
+end
 ---@param bs BandSteeringIntent?
 ---@return boolean
 function M.device_band_steering(bs)
@@ -665,6 +692,10 @@ function M.handle(ctx, json_str, st, cfg)
 					end
 					ctx._usteer.set_enabled(steering_active, cfg, roam_assist_active)
 					ctx._usteer_filter_next = 0   -- re-check the sync filter next tick
+					if st and M.record_lock2ap(st, vap_table) then
+						ctx._state.save(st)
+						ctx._lock_next = 0   -- re-check the usteer exemptions next tick
+					end
 					local ok_ac, err_ac = pcall(ufuci.apply_config,
 						{radio_table = radio_table, vap_table = vap_table, network_table = {}},
 						cfg, {band_steering_active = steering_active,

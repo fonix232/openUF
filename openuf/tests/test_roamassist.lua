@@ -284,4 +284,18 @@ return {
 			end)
 		end
 	},
+	{
+		name = "roamassist: a client locked to this AP is never moved",
+		fn = function()
+			-- Lock to Access Point: every other AP refuses the client.
+			with_ra(sticky(), function(cmds)
+				local locked = {[MAC] = true}
+				ra.tick({obs()}, 1000, {locked = locked})
+				local n = ra.tick({obs()}, 1000 + ra.BELOW_HOLD, {locked = locked})
+				assert_eq(n, 0, "no action")
+				assert_eq(#cmds, 0, "no BSS transition request, no disassociation")
+				assert_eq(run_until_decided(obs(), 5000), 1, "unlocked, the same client is moved")
+			end)
+		end
+	},
 }

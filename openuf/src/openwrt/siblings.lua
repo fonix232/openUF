@@ -26,23 +26,36 @@
 
 	PACKET
 
-	"oUFs" | 0x03 (version) | identity MAC (6) |
+	"oUFs" | 0x04 (version) | identity MAC (6) |
 	model length (1) | model | model_display length (1) | model_display |
-	count (1) | count x (BSSID (6) | frequency MHz (2, big-endian; 0 = unknown))
+	count (1) | count x (BSSID (6) | frequency MHz (2, big-endian; 0 = unknown)) |
+	lock count (1) | lock count x client MAC (6)
+
+	Version 3 is the same without the lock list, and is still accepted.
 
 	The model pair is the identity the sender presents (U6IW / U6-IW). The
 	controller copies `model` and `model_display` from the reporting AP's scan
 	entry into its AP-to-AP sighting (10.6.106 aS.LUdHVFmmB), which is where
 	WiFiman's neighbour list takes the name from; a real UniFi AP reads them
 	from its neighbour's Ubiquiti element.
+
+	The lock list is the sender's st.lock2ap: the clients the controller
+	denies on it because of "Lock to Access Point" (PROTOCOL-VALIDATION.md,
+	#lock-to-access-point-lock2ap). The controller sends a lock to every AP
+	except the client's own, so the AP a client is locked to never hears of
+	it from the controller. It reads it here instead: a MAC its siblings deny
+	and it does not is locked to it (locked_here), and openUF stops steering
+	that client away (usteer.set_locked, roamassist).
 ]]--
 
 local M = {}
 
 M.PORT      = 10011
 M.MAGIC     = "oUFs"
-M.VERSION   = 3
+M.VERSION   = 4
 M.MAX_BSSID = 32
+-- 32 BSSIDs and two 64-byte names leave ~1000 bytes of a 1500-byte frame.
+M.MAX_LOCKS = 150
 -- Where announce.lua leaves the table for the inform loop.
 M.FILE      = "/tmp/openuf-siblings.json"
 -- A sibling not heard for this long is forgotten. Thirty broadcasts.
@@ -72,7 +85,7 @@ local function short(s)
 end
 
 -- info: {model = "U6IW", model_display = "U6-IW"} (optional).
-function M.build(mac, bssids, info)
+function M.build(mac, bssids, info, locks)
 	local m = mac_bytes(mac and mac:lower())
 	if not m then return nil end
 	local model, display = short(info and info.model), short(info and info.model_display)
@@ -86,16 +99,23 @@ function M.build(mac, bssids, info)
 			list[#list + 1] = bb .. string.char(math.floor(f / 256), f % 256)
 		end
 	end
+	local lk = {}
+	for _, c in ipairs(locks or {}) do
+		local cb = mac_bytes(type(c) == "string" and c:lower() or nil)
+		if cb and #lk < M.MAX_LOCKS then lk[#lk + 1] = cb end
+	end
 	return M.MAGIC .. string.char(M.VERSION) .. m
 		.. string.char(#model) .. model .. string.char(#display) .. display
 		.. string.char(#list) .. table.concat(list)
+		.. string.char(#lk) .. table.concat(lk)
 end
 
 -- mac, {{bssid, freq}, ...}, {model, model_display} from a packet, or nil
 -- for anything else (another version included: every AP runs the same build).
 function M.parse(data)
 	if type(data) ~= "string" or #data < 14 then return nil end
-	if data:sub(1, 4) ~= M.MAGIC or data:byte(5) ~= M.VERSION then return nil end
+	local version = data:byte(5)
+	if data:sub(1, 4) ~= M.MAGIC or (version ~= 3 and version ~= 4) then return nil end
 	local p = 12
 	local ml = data:byte(p)
 	local model = data:sub(p + 1, p + ml)
@@ -106,7 +126,16 @@ function M.parse(data)
 	p = p + 1 + dl
 	if p > #data then return nil end
 	local n = data:byte(p)
-	if #data ~= p + 8 * n then return nil end
+	local locks = {}
+	if version == 3 then
+		if #data ~= p + 8 * n then return nil end
+	else
+		local q = p + 8 * n + 1
+		if q > #data then return nil end
+		local nl = data:byte(q)
+		if #data ~= q + 6 * nl then return nil end
+		for k = 0, nl - 1 do locks[#locks + 1] = mac_string(data, q + 1 + 6 * k) end
+	end
 	local bssids = {}
 	for k = 0, n - 1 do
 		local at = p + 1 + 8 * k
@@ -114,7 +143,8 @@ function M.parse(data)
 		bssids[#bssids + 1] = {bssid = mac_string(data, at), freq = f > 0 and f or nil}
 	end
 	return mac_string(data, 6), bssids,
-		{model = model ~= "" and model or nil, model_display = display ~= "" and display or nil}
+		{model = model ~= "" and model or nil, model_display = display ~= "" and display or nil},
+		locks
 end
 
 -- This device's AP interfaces from `iw dev` output:
@@ -145,11 +175,14 @@ end
 -- Fold one received packet into store ({bssid = {mac, seen}}). A packet
 -- from self_mac is our own broadcast coming back, and is ignored.
 function M.record(store, data, self_mac, now)
-	local mac, bssids, info = M.parse(data)
+	local mac, bssids, info, locks = M.parse(data)
 	if not mac or mac == (self_mac or ""):lower() then return false end
+	-- The lock list rides on each of the sender's BSSID entries, so it ages
+	-- out with them; nil rather than {} keeps the file's arrays unambiguous.
 	for _, b in ipairs(bssids) do
 		store[b.bssid] = {mac = mac, seen = now, freq = b.freq,
-			model = info.model, model_display = info.model_display}
+			model = info.model, model_display = info.model_display,
+			locks = #locks > 0 and locks or nil}
 	end
 	return true
 end
@@ -208,6 +241,35 @@ end
 
 -- Write store to path through a temporary file, so a reader never sees half
 -- of it.
+-- The clients some fresh sibling denies for Lock to Access Point, as a set.
+function M.decode_locks(text, now, cjson)
+	local ok, t = pcall(cjson.decode, text or "")
+	if not ok or type(t) ~= "table" then return {} end
+	local out = {}
+	for _, e in pairs(t) do
+		if type(e) == "table" and type(e.seen) == "number" and now - e.seen <= M.TTL
+			and type(e.locks) == "table" then
+			for _, c in ipairs(e.locks) do
+				if type(c) == "string" then out[c:lower()] = true end
+			end
+		end
+	end
+	return out
+end
+
+-- The clients locked to THIS AP: denied by a sibling (sibling_locks, from
+-- decode_locks) and not denied here (own, st.lock2ap). Sorted.
+function M.locked_here(sibling_locks, own)
+	local mine = {}
+	for _, c in ipairs(own or {}) do mine[c:lower()] = true end
+	local out = {}
+	for c in pairs(sibling_locks or {}) do
+		if not mine[c] then out[#out + 1] = c end
+	end
+	table.sort(out)
+	return out
+end
+
 function M.save(store, path, cjson)
 	path = path or M.FILE
 	local f = io.open(path .. ".tmp", "w")

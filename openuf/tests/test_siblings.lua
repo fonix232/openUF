@@ -59,9 +59,9 @@ return {
 				{bssid = "00:00:5e:00:53:1b", freq = 5580}, {bssid = "00:00:5e:00:53:1c"}},
 				{model = "U6IW", model_display = "U6-IW"})
 			assert_eq(pkt:sub(1, 4), "oUFs", "magic")
-			assert_eq(pkt:byte(5), 3, "version 3")
-			assert_eq(#pkt, 11 + (1 + 4) + (1 + 5) + 1 + 3 * 8,
-				"header, both model strings, count, three BSSID+frequency entries")
+			assert_eq(pkt:byte(5), 4, "version 4")
+			assert_eq(#pkt, 11 + (1 + 4) + (1 + 5) + 1 + 3 * 8 + 1,
+				"header, both model strings, count, three BSSID+frequency entries, no locks")
 			local mac, bssids, info = siblings.parse(pkt)
 			assert_eq(info.model, "U6IW", "model code")
 			assert_eq(info.model_display, "U6-IW", "model display")
@@ -205,6 +205,48 @@ return {
 			assert_eq(#idlescan.tick({}, 1000, 0), 0, "0 = off")
 			assert_eq(#idlescan.tick({}, 1000, nil), 0, "unset = off")
 			assert_eq(#spawned, 0, "no scan started")
+		end
+	},
+	{
+		name = "siblings: a v4 packet carries the sender's Lock to Access Point list; v3 still parses",
+		fn = function()
+			local pkt = siblings.build(SELF, {{bssid = "00:00:5e:00:53:0a", freq = 2437}},
+				{model = "U6IW"}, {"00:00:5E:00:53:21", "not-a-mac", "00:00:5e:00:53:22"})
+			assert_eq(pkt:byte(5), 4, "version 4")
+			local mac, bssids, info, locks = siblings.parse(pkt)
+			assert_eq(mac, SELF, "sender")
+			assert_eq(#bssids, 1, "its BSSID")
+			assert_eq(info.model, "U6IW", "its model")
+			assert_eq(table.concat(locks, " "), "00:00:5e:00:53:21 00:00:5e:00:53:22",
+				"the locks, lowercase, a malformed one dropped")
+			assert_nil(siblings.parse(pkt .. "x"), "length must agree with the lock count")
+			-- The same packet as a v3 sender built it: no lock list.
+			local v3 = "oUFs" .. string.char(3) .. pkt:sub(6, #pkt - 1 - 12)
+			local m3, b3, _, l3 = siblings.parse(v3)
+			assert_eq(m3, SELF, "a v3 sibling is still heard")
+			assert_eq(#b3, 1, "with its BSSID")
+			assert_eq(#l3, 0, "and no locks")
+		end
+	},
+	{
+		name = "siblings: the clients locked HERE are the ones siblings deny and this AP does not",
+		fn = function()
+			local store = {}
+			siblings.record(store, siblings.build(PEER, {{bssid = "00:00:5e:00:53:1c"}}, nil,
+				{"00:00:5e:00:53:21", "00:00:5e:00:53:23"}), SELF, 1000)
+			siblings.record(store, siblings.build("00:00:5e:00:53:03",
+				{{bssid = "00:00:5e:00:53:1d"}}, nil, {"00:00:5e:00:53:21"}), SELF, 1000)
+			local text = cjson.encode(store)
+			local locks = siblings.decode_locks(text, 1010, cjson)
+			assert_true(locks["00:00:5e:00:53:21"] and locks["00:00:5e:00:53:23"], "the union")
+			-- This AP denies :23 itself, so :23 is locked to some third AP;
+			-- :21 is denied by both siblings and not here: locked to this AP.
+			local here = siblings.locked_here(locks, {"00:00:5e:00:53:23"})
+			assert_eq(table.concat(here, " "), "00:00:5e:00:53:21", "locked to this AP")
+			assert_eq(#siblings.locked_here(siblings.decode_locks(text,
+				1000 + siblings.TTL + 1, cjson), {}), 0, "a silent sibling's locks age out")
+			assert_eq(#siblings.locked_here(siblings.decode_locks("garbage", 1010, cjson), nil), 0,
+				"an unreadable file: nothing locked")
 		end
 	},
 }
