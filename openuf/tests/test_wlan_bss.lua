@@ -303,4 +303,31 @@ return {
 			end)
 		end
 	},
+	{
+		name = "wlan bss: an '=' in an SSID or passphrase splits the line at the first '='",
+		fn = function()
+			-- Keys never contain '='; values may. A last-'=' split turned
+			-- "aaa.1.ssid=a=b" into key "ssid=a", value "b".
+			local sys = cfg()
+				:gsub("aaa%.1%.ssid=corp", "aaa.1.ssid=x=y==")
+				:gsub("wireless%.1%.ssid=corp", "wireless.1.ssid=x=y==")
+				:gsub("aaa%.1%.wpa%.psk=hunter2222", "aaa.1.wpa.psk=a=b==c")
+				:gsub("aaa%.2%.wpa%.psk=hunter2222", "aaa.2.wpa.psk=dGVzdHBhc3N3b3JkMQ==")
+			local _, vaps = inform._parse_wifi_system_cfg(sys)
+			assert_eq(#vaps, 2, "both WLANs parsed")
+			assert_eq(vaps[1].ssid, "x=y==", "ssid intact")
+			assert_eq(vaps[1].x_passphrase, "a=b==c", "psk with '=' and '==' intact")
+			assert_eq(vaps[2].x_passphrase, "dGVzdHBhc3N3b3JkMQ==", "base64-like psk intact")
+			with_uci(function(db)
+				apply(sys)
+				local by_ssid = {}
+				for _, s in pairs(db.wireless) do
+					if s[".type"] == "wifi-iface" and s.ssid then by_ssid[s.ssid] = s end
+				end
+				assert_true(by_ssid["x=y=="] ~= nil, "the '=' WLAN is provisioned")
+				assert_eq(by_ssid["x=y=="].key, "a=b==c", "psk reaches UCI intact")
+				assert_eq(by_ssid["iot"].key, "dGVzdHBhc3N3b3JkMQ==", "base64 psk reaches UCI intact")
+			end)
+		end
+	},
 }

@@ -689,6 +689,14 @@ shape `ucihelper.apply_config()` expects.
 Conventions used throughout: booleans are `"enabled"`/`"disabled"` (sometimes `"true"`/`"1"`);
 an **absent block means disabled** — there is generally no explicit `status=false`.
 
+A line splits at its **first** `=`: keys never contain one, values (an SSID, a passphrase,
+a base64-like PSK ending `==`) may. Until 2026-10-10 `wlan.lua`'s indexed patterns
+(`aaa`/`wireless`/`radio`/`stamgr`/`macacl`/`qos.vap`) split at the last `=`, so a WLAN
+whose SSID contained `=` was not provisioned and a passphrase with `=` was cut short
+(test: `test_wlan_bss.lua`, "an '=' in an SSID or passphrase"). The other parsers already
+split at the first `=`. ⚠️ No live capture yet of a controller pushing an SSID or PSK
+with `=`. The parser assumes the value arrives verbatim, not escaped.
+
 ### `aaa.<n>.*` — per-SSID security
 
 | Key | Meaning |
