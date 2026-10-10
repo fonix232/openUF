@@ -1377,6 +1377,13 @@ function M.build(ctx, st, cfg, ufhw)
 			-- will be skipped"); claimed where hostapd can put each key on its
 			-- own VLAN (sysinfo.ppsk_supported).
 			+ ((ctx._sysinfo.ppsk_supported and ctx._sysinfo.ppsk_supported()) and 0x100000 or 0)
+			-- 0x1000000: supportLockAp(). The site offers a client's "Lock to
+			-- Access Point" only while every wireless device claims it (10.6.106
+			-- site feature LOCK_AP). The lock itself reaches every OTHER AP as
+			-- macacl entries of type lock2ap under policy deny, which unifi/
+			-- wlan.lua parses like the user's MAC filter and hostapd enforces;
+			-- the AP the client is locked to receives nothing for it.
+			+ 0x1000000
 			-- 0x1 (VWIRE) + 0x800 (MESHV3): the wireless uplink. Without 0x1
 			-- the controller drops the device's mesh-connect flag; with both
 			-- its push carries the mesh block, the hidden WDS downlink and the

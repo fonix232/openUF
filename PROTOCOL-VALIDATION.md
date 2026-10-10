@@ -1149,6 +1149,53 @@ move when it was toggled — the same shape as `radio.<n>.bcmc_l2_filter.status`
 broadcast blocker. `aaa.<n>.radius.macacl.status` is the unrelated RADIUS MAC Authentication
 control. Do not re-investigate these.
 
+#### Lock to Access Point (`lock2ap`)
+
+Decompiled from 10.6.106 (`internal-dependencies.jar`, CFR 0.152), 2026-10-10. **Not yet
+seen on the wire.** The client doc carries `fixed_ap_enabled` + `fixed_ap_mac` (class
+`com.ubnt.data.tQQf`), with no per-band variant anywhere in the jar.
+
+- **Who gets what.** Bean `fixedApConfigService` (`com.ubnt.service.al.ctfbDsCjrxgkv`)
+  gives each AP the site's locked clients whose `fixed_ap_mac` is **not** that AP, and
+  only while the AP they are locked to is available (`fixed_ap_available`; otherwise it logs
+  "Cannot lock Client[{}] to Device[{}], device is unavailable"). The locked AP receives
+  nothing for its own clients.
+- **Wire shape.** Bean `macAclService` (`com.ubnt.service.al.RPnnqSiu`) turns each MAC into
+  a `macacl` entry of type `lock2ap` (enum `USER("user")`, `LOCK_2_AP("lock2ap")`), per VAP:
+  - With no user filter, the policy is `deny` and the entries are the locks. A WDS
+    downlink VAP gets none.
+  - Under a user `allow` filter, the locked MACs are removed from the allow list.
+  - Under a user `deny` filter, the lists are merged, and the `user` entry wins on a
+    duplicate MAC.
+  - A VAP's block is sent when `isMacFilterEnabled() || !locks.isEmpty()`. With neither,
+    the VAP has no block, and `macacl.status=disabled` when no VAP has one
+    (`com.ubnt.service.config.ubntconf.pASCn`). That absence is how an unlock arrives.
+
+  ```
+  macacl.status=enabled
+  macacl.1.status=enabled
+  macacl.1.devname=ath0
+  macacl.1.acl.status=enabled
+  macacl.1.acl.policy=deny
+  macacl.1.acl.1.status=enabled
+  macacl.1.acl.1.mac=00:00:5e:00:53:01
+  macacl.1.acl.1.type=lock2ap
+  ```
+- **When it is re-sent.** A change to a client's `fixed_ap_*` re-provisions the whole site.
+  So does a device carrying locked clients changing state ("there are some clients locked
+  to it, provisioning all Access Points"). The lock therefore fails open when the locked AP
+  goes away, and removing that AP clears `fixed_ap_enabled`.
+- **Gate.** `Device.supportLockAp()` = `hasWifiCapability(0x1000000)`. Its only use is the
+  site feature check (`com.ubnt.service.J.rGUtaVWZlySeOK`, `case LOCK_AP`): the feature is
+  on while every wireless device claims the bit, or while a client is already locked.
+  Otherwise the UI is told `NOT_ALL_DEVICES_SUPPORT_FEATURE` (minimum UAP firmware 5.76.0).
+  The `macacl` writer itself checks no bit.
+
+openUF claims the bit unconditionally, since the parser already takes every enabled
+`acl.<k>` entry whatever its `type`, and hostapd enforces the result. A unit test replays a
+lock2ap-only block through `_parse_wifi_system_cfg` + `apply_config` to `macfilter=deny`
+with the client in `maclist`, and its absence back to no filter. Hardware tier not yet run.
+
 ### `qos.*` — WiFi Speed Limit
 
 Another **top-level section keyed by devname**. Confirmed live 2026-07-18 by creating a
@@ -2100,6 +2147,7 @@ by the controller's own startup log: `firmware[U6IW] new version (6.8.2.15592) i
 | `wifi_caps` | `0x8` (8) | `Device.supportVapBasedBandsteering()` = `hasWifiCapability(8)` | One WLAN without a 2.4/5 GHz pair switches the device-level block to `disabled`. See below. |
 | `wifi_caps` | `0x20` (32) | `Device.supportATFConfig()` = `hasWifiCapability(32)` | The controller never emits `atf.*`, the AP's Airtime Fairness switch. Claimed only where mac80211's `airtime_flags` exists in debugfs — see below. |
 | `wifi_caps` | `0x100000` | `Device.supportWpaPpsk()` = `hasWifiCapability(0x100000)` | A WLAN with Private Pre-Shared Keys, or UID IoT, is **skipped** ("PPSK is not supported … will be skipped"). Claimed only where OpenWrt's generator writes per-station VLANs and hostapd has VLAN support — see below. |
+| `wifi_caps` | `0x1000000` | `Device.supportLockAp()` = `hasWifiCapability(0x1000000)` | The site greys out a client's "Lock to Access Point" (site feature `LOCK_AP`, all wireless devices must claim it). The lock itself travels as `macacl` `lock2ap` entries, which no bit gates. Claimed unconditionally: see [Lock to Access Point](#lock-to-access-point-lock2ap). |
 | `wifi_caps2` | `0x40` (64) | `Device.supportAdvertisingDeviceNameInBeacon()` = `hasWifiCapability2(64)` | The controller never emits `wireless.<n>.advertise_ap_name` at all, and doesn't even re-push config on the toggle. |
 | `wifi_caps2` | `0x20` (32) | `Device.supportsAssistedRoaming()` = `hasWifiCapability2(32)` | The controller never emits a WLAN's Roaming Assistant (`wireless.<n>.btm_disassoc.*`). Confirmed live in the lab: set, the keys appear on the 5 GHz entry. |
 | `wifi_caps` | `0x1` (VWIRE) | backend validator of `rest/device` (`mesh_sta_vap_enabled`); AP config generator | ⚠️ **Claimed only with `wireless_uplink`.** Without it the device's mesh-connect flag is silently dropped; with it the push gains the uplink station VAP and `connectivity.*`. Bisected live by yesrab/openUF on 10.6.106 — see [Wireless uplink](#wireless-uplink-mesh--ported-from-yesrabopenuf-2026-10-03) |
@@ -2310,8 +2358,11 @@ Gated, and not to be claimed:
   class that breaks casting. Low priority.
 - **No callers in the controller**, so a bit does nothing: `supportMinRateCtrl` (`wifi_caps`
   `0x200`), `supportMultiAclList` (`0x400`), `supportRadiusMacAuth` (`0x1000`),
-  `supportHideChWidth` (`0x10000`), `supportZeroHandoff` (`0x2`), `supportLockAp`
-  (`0x1000000`), `supportsRoamTopologyStats` (`wifi_caps2` `0x2000`).
+  `supportHideChWidth` (`0x10000`), `supportZeroHandoff` (`0x2`),
+  `supportsRoamTopologyStats` (`wifi_caps2` `0x2000`). ⚠️ This list came from the config
+  generators only. `supportLockAp` (`0x1000000`) was on it and is wrong: on 10.6.106 it
+  gates the site feature `LOCK_AP`, i.e. whether the UI offers the client setting at all.
+  openUF claims it since 2026-10-10 (see [Lock to Access Point](#lock-to-access-point-lock2ap)).
 
 **The per-port VLAN validator** (`com.ubnt.ace.api.e.VVyiC`, reachable only once
 `hasQCASwitch()` is true):

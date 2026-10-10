@@ -365,7 +365,7 @@ return {
 			assert_eq(d.wifi_caps2, plain.wifi_caps2, "unset masks keep their shipped value")
 			assert_eq(d.uplink.type, "wireless", "extra field merged")
 			assert_true(plain.wifi_caps ~= 0x10, "the override replaces the shipped wifi_caps")
-			assert_eq(plain.wifi_caps, 0xC, "only what the device can do without the override")
+			assert_eq(plain.wifi_caps, 0x100000C, "only what the device can do without the override")
 			local said = ""
 			local real = io.stderr
 			io.stderr = {write = function(_, m) said = said .. m end}
@@ -2541,6 +2541,16 @@ return {
 			assert_eq(type(d.wifi_caps), "number", "wifi_caps sent")
 			assert_eq(math.floor(d.wifi_caps / 0x4) % 2, 1, "bit 0x4 set")
 			assert_eq(math.floor(d.wifi_caps / 0x8) % 2, 1, "bit 0x8 set")
+		end
+	},
+	{
+		name = "inform json: wifi_caps claims Lock to Access Point (0x1000000)",
+		fn = function()
+			-- Device.supportLockAp() is hasWifiCapability(0x1000000); the site
+			-- offers the client setting only while every wireless device has
+			-- it. The lock arrives as macacl entries hostapd enforces.
+			local d = build()
+			assert_eq(math.floor(d.wifi_caps / 0x1000000) % 2, 1, "bit 0x1000000 set")
 		end
 	},
 	{

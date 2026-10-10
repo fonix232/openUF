@@ -2357,6 +2357,45 @@ return {
 		end
 	},
 	{
+		-- "Lock to Access Point" (10.6.106 macAclService): every AP but the
+		-- client's own gets the client as a lock2ap entry of each WLAN's
+		-- macacl block, under policy deny when the WLAN has no MAC filter of
+		-- its own; a WLAN with neither is left out of the block, which is how
+		-- an unlock arrives.
+		name = "inform packet: a Lock to Access Point push denies the client here, and its absence lifts it",
+		fn = function()
+			local ucihelper, db = new_apply_env()
+			local head = {
+				"aaa.1.ssid=openuf-test", "aaa.1.wpa=2",
+				"aaa.1.wpa.key.1.mgmt=WPA-PSK", "aaa.1.wpa.psk=hunter22",
+				"wireless.1.ssid=openuf-test", "wireless.1.parent=radio0",
+				"wireless.1.devname=ath0",
+				"radio.1.phyname=radio0", "radio.1.channel=6",
+			}
+			local function push(lines)
+				local all = {}
+				for _, l in ipairs(head) do all[#all + 1] = l end
+				for _, l in ipairs(lines) do all[#all + 1] = l end
+				local radio_table, vap_table = inform._parse_wifi_system_cfg(table.concat(all, "\n") .. "\n")
+				ucihelper.apply_config({radio_table = radio_table, vap_table = vap_table}, nil)
+				return db.wireless["openuf_radio0_openuf_test_" .. ucihelper.derive_mobility_domain("openuf-test")]
+			end
+			local s = push({
+				"macacl.status=enabled",
+				"macacl.1.status=enabled", "macacl.1.devname=ath0",
+				"macacl.1.acl.status=enabled", "macacl.1.acl.policy=deny",
+				"macacl.1.acl.1.status=enabled", "macacl.1.acl.1.mac=00:00:5e:00:53:01",
+				"macacl.1.acl.1.type=lock2ap",
+			})
+			assert_eq(s.macfilter, "deny", "a locked client is denied on this AP")
+			assert_eq(#s.maclist, 1, "just the one client")
+			assert_eq(s.maclist[1], "00:00:5e:00:53:01", "the locked client")
+			s = push({"macacl.status=disabled"})
+			assert_nil(s.macfilter, "unlocked: no filter left behind")
+			assert_nil(s.maclist, "and no list")
+		end
+	},
+	{
 		name = "inform packet: _parse_wifi_system_cfg maps WPA-PSK akm to wpa2",
 		fn = function()
 			local sys_cfg = "aaa.1.ssid=openuf-test\naaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=WPA-PSK\n"
