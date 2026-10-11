@@ -2,47 +2,67 @@
 
 openUF makes an OpenWrt AP present itself to a UniFi Network Application as a
 Ubiquiti AP (default identity U6-IW). Pure Lua, runs on the device as two procd
-instances (`announce`, `inform`) from `/opt/openuf/`.
+instances (`announce`, `inform`) from `/usr/share/openuf/`, shipped as apk packages
+from this repo's feed.
 
 ## Map
-- `openuf/inform.lua` — TNBU framing, inform loop, `_parse_wifi_system_cfg`
-  (controller → neutral vap/radio fields), `build_json` (device → controller)
-- `openuf/ucihelper.lua` — neutral fields → UCI (`apply_config`, `wlan_add`, `rf_config`)
+The daemon's source is `openuf/src/`, in two sides with one rule between them
+(README § "How the daemon is organised"):
+- `unifi/` — the controller's side, and nothing of the device: no `openwrt/` module,
+  no shell commands, no UCI or ubus (`openuf/tests/test_architecture.lua` enforces it).
+  `packet.lua`/`http.lua`/`crypto.lua`/`inflate.lua` (TNBU framing and transport),
+  `wlan.lua` (`system_cfg` → neutral vap/radio fields), `network.lua`, `ports.lua`,
+  `system.lua`, `hardening.lua` (the other pushes), `guest.lua` (guest-WLAN rules out of
+  the `ebtables.*` push), `payload.lua` (the payload's UniFi pieces), `identity.lua`
+  against `catalog.lua` (the presented UniFi identity)
+- `openwrt/` — the device's side: `provision.lua` (parsed pushes and commands → device),
+  `ucihelper.lua` (neutral fields → UCI: `apply_config`, `wlan_add`, `rf_config`),
+  `report.lua` (device → payload) with `sysinfo.lua` (iw/proc/bridge reads), `board.lua`
+  (the board from `board.json`), `netmodel.lua` and `switchvlan.lua` (bridge, DSA
+  per-port VLAN), `sysconf.lua`, `rrmscan.lua` (802.11k beacon reports),
+  `siblings.lua` (openUF APs exchanging BSSIDs, frequencies and Lock-to-AP lists on UDP 10011),
+  `idlescan.lua` (off-channel sweeps of idle radios, sibling-channel scans),
+  `das.lua` (RADIUS CoA/Disconnect dispatcher on UDP 3799)
 - enforcement modules with their own nft tables / tc: `firewall.lua` (`bridge openuf`),
-  `bcfilter.lua` (`bridge openuf_bcfilt`), `shaper.lua`, `l2guard.lua`
-- `switchvlan.lua` (swconfig + DSA per-port VLAN), `sysinfo.lua` (iw/proc/bridge reads),
-  `state.lua` (`/etc/openuf/state.json`, explicit `M.FIELDS` list), `crypto.lua`, `inflate.lua`
-- `util.lua`: shared helpers (file/command reads, `exec_ok`, `is_mac`, `valid_ifname`, the
-  bit shim, sysfs `master_of`/`driver_of`, `nft_apply`: rebuild an nft table in one
-  `nft -f` transaction, falling back per statement to name a rejected rule). Load it through `package.loaded["openuf.util"]`
-  or by path as the modules do, never with a bare `require "util"`. Point a module's
-  `M._read_file`-style seams at it rather than copying a helper.
-- `modelmap/` = board hardware profile, `ufmodel/` = presented UniFi identity
+  `bcfilter.lua` (`bridge openuf_bcfilt`), `shaper.lua`, `l2guard.lua`,
+  `guestguard.lua` (`bridge openuf_guest`)
+  Rebuild a table with `openwrt/util.lua`'s `nft_apply`: one `nft -f` transaction, falling
+  back per statement to name a rejected rule. Statements are nft syntax, not shell: no quotes.
+- `announce.lua` — the UDP side process: the Ubiquiti discovery broadcast (and, with
+  `discovery_replies`, probe answers), the sibling exchange, and the DAS dispatcher
+- `inform.lua` — the loop between them: heartbeat, rollback window, state, status file;
+  `state.lua` (`/etc/openuf/state.json`, explicit `M.FIELDS` list)
+- `openuf/types/contracts.lua` — the tables that cross between `unifi/` and `openwrt/`
+- `luci-app-openuf/`, `luci-theme-openuf/` — the LuCI packages. The theme's CSS is
+  compiled from `scss/` and committed; see its README.
 - `PROTOCOL-VALIDATION.md` — the evidence log for every wire-format claim. Read the
   relevant section before touching a protocol field; add to it when you establish one.
 
 ## Build & test
-    eval $(luarocks path --local) && lua tests/run_tests.lua
+    cd openuf && eval $(luarocks path --local) && lua tests/run_tests.lua
 - The `eval` prefix is mandatory: without it cjson fails to load and whole test FILES
   count as one failure each. If the total drops sharply, check the invocation first.
+- CI also runs, from `openuf/`: `sh tools/strip-tree.sh --verify` (the stripped tree that
+  ships passes too) and `sh tools/globals-check.sh` (no stray globals).
 - **Target is Lua 5.1; the dev box is 5.5; CI is 5.1.** Green locally proves nothing
   for CI. No `\xNN` escapes (5.1 silently emits `x07`; use `string.char`), no `//`,
   `goto`, `\z`, `\u{}`, `table.unpack`. OpenWrt's Lua carries the LNUM patch:
   `string.format("%d", x)` raises for |x| > 2^31 on the APs, but not on CI or in the lab.
   Format epochs in ms and other large values with `%.0f`. `os.execute` returns a number on 5.1: both
   0 and 1 are truthy, so normalise before branching.
-- Syntax-check on 5.1: `docker cp openuf/<m>.lua openuf-validation-ap:/tmp/c.lua &&
+- Syntax-check on 5.1: `docker cp openuf/src/<m>.lua openuf-validation-ap:/tmp/c.lua &&
   docker exec openuf-validation-ap luac -p /tmp/c.lua`
 - CI failure: `gh run list` + `gh run view <id> --log-failed`. Don't guess.
-- Run modules from the project root with `OPENUF_TEST_MODE = true` set; loading
-  `inform.lua` without it starts a real inform loop.
+- Modules load by name from `openuf/src/` (the tests put it on `package.path`). Set
+  `OPENUF_TEST_MODE = true` before loading one; loading `inform.lua` without it starts a
+  real inform loop.
 
 ## Verification: three tiers
 Put every verification step into a tier and name the tier:
 1. **Unit tests**: preferred. Write a test for untested code before auditing it by eye.
    Mutation-test a fix: break it and confirm a test goes red.
-2. **Docker lab** (`tools/validation/`): anything driving a full inform cycle or mutating
-   device state. Follow `tools/validation/README.md` § 1b (REST-only, no browser).
+2. **Docker lab** (`openuf/tools/validation/`): anything driving a full inform cycle or mutating
+   device state. Follow `openuf/tools/validation/README.md` § 1b (REST-only, no browser).
    - When state is ambiguous, reset fully: `docker compose down -v` + `up --build`.
      Never hand-edit UCI-mock JSON or `state.json` to fake a result.
    - The lab has no radios, no `uci` CLI, no procd/hostapd/swconfig. It proves the
@@ -53,17 +73,16 @@ Put every verification step into a tier and name the tier:
    - The lab has real `nft`/`tc`: execute generated commands against a dummy netdev
      (`ip link add openuf-test0 type dummy`) and check each rc. Also re-run for idempotency.
    - Local UI creds: `admin` / `openufopenuf` / `admin@openuf.local`.
-   - Installer / package-manager behaviour (install.sh, wpad swaps, conflicts):
-     `docker run --rm openwrt/rootfs:x86-64-25.12.0` (apk) and `:x86-64-24.10.8` (opkg)
-     have real feeds and real hostapd binaries. Run `mkdir -p /var/lock /var/run` and
-     `apk update` first; source install.sh with `OPENUF_INSTALL_SOURCE_ONLY=1` to call
-     its functions. No procd or radios, so they don't prove that hostapd runs.
+   - Package-manager behaviour (installing the apks, dependencies, wpad swaps, conflicts):
+     `docker run --rm openwrt/rootfs:x86-64-25.12.0` has a real apk feed and real hostapd
+     binaries. Run `mkdir -p /var/lock /var/run` and `apk update` first. No procd or
+     radios, so it doesn't prove that hostapd runs.
 3. **Real hardware**: only claims about radios, hostapd, regdomain, switch ASICs
    and DSA can be settled here. See `CLAUDE.local.md` if present.
 
 ## Engineering rules learned the hard way
 - **A command that ran isn't a command that succeeded.** Read state back with the
-  tool's own `show`/`list` (`swconfig ... show`, `nft list`, `/var/run/hostapd-*.conf`),
+  tool's own `show`/`list` (`bridge vlan show`, `nft list`, `/var/run/hostapd-*.conf`),
   not the UCI you wrote.
 - **A UCI option must exist in the consumer.** Check `/usr/share/schema/wireless.*.json`,
   `/usr/share/ucode/wifi/` (the live generator on 25.12) and `/lib/netifd/hostapd.sh`.
@@ -77,8 +96,8 @@ Put every verification step into a tier and name the tier:
   never a block's presence (decoys: `mac_acl.status`, `bcmc_l2_filter.status`, `qos.vap.*`).
 - Controller protocol questions: decompile the controller (CFR, not jadx, on
   `internal-dependencies.jar`) or call live frontend functions. Don't infer from
-  behaviour. For what the AP *does* with a key, read the firmware: current builds are
-  encrypted, but UAP BZ2 3.9.27 to 4.0.15 are plaintext (`/usr/etc/syswrapper.sh`,
+  behaviour. For what the AP *does* with a key, the firmware is a source too: current
+  builds are encrypted, but UAP BZ2 3.9.27 to 4.0.15 are plaintext (`/usr/etc/syswrapper.sh`,
   `/bin/mcad`). Label such claims "firmware-confirmed for 3.9.27 to 4.0.15".
 - Absence of a wire key is often a sentinel for "off/auto". Tear down via an explicit
   signal, or via a marker/ledger when absence is ambiguous (`openuf_*` stamps, `st.*` ledgers).
@@ -88,11 +107,7 @@ Put every verification step into a tier and name the tier:
   the win, then keep digging. The target is a pristine fix, not an accepted trade.
 
 ## Commits & docs
-- **Test on the APs before committing.** Deploy the uncommitted change to the real APs
-  (procedure in `CLAUDE.local.md`), confirm it works there, then commit. Unit tests and the
-  lab are prerequisites, not a substitute: they can't catch device-only failures.
-- **One commit per feature** (or per fixed finding). A fix found during hardware testing is
-  folded into that feature's commit, not stacked on top as a follow-up.
+- One commit per fixed finding.
 - Commit message: subject + body + `Co-Authored-By` trailer only. No session URL.
 - **Public repo: never commit real MACs or IPs.** Map to `192.0.2.N` (mgmt LAN),
   `198.51.100.N` (other VLANs), `00:00:5e:00:53:0X` (MACs), one placeholder per real

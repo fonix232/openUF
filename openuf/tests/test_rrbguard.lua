@@ -1,8 +1,8 @@
--- Tests for openuf/rrbguard.lua: spotting hostapd's stale 802.11r
+-- Tests for openwrt/rrbguard.lua: spotting hostapd's stale 802.11r
 -- key-exchange socket and repairing it at a cheap moment.
 -- Run from project root: lua tests/run_tests.lua
 
-local g = dofile("openuf/rrbguard.lua")
+local g = require("openwrt.rrbguard")
 
 -- /proc/net/packet as the office AP printed it (2026-10-11), with the
 -- 0x88b7 row's interface given.

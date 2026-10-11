@@ -1,8 +1,8 @@
--- Tests for openuf/minrssi.lua: Minimum RSSI's kick debounce and the
+-- Tests for openwrt/minrssi.lua: Minimum RSSI's kick debounce and the
 -- controller's threshold encoding.
 -- Run from project root: lua tests/run_tests.lua
 
-local mr = dofile("openuf/minrssi.lua")
+local mr = require("openwrt.minrssi")
 
 local function obs(mac, signal, threshold)
 	return {ifname = "wlan0", mac = mac, signal = signal, threshold = threshold or -80}

@@ -1,9 +1,9 @@
--- Tests for openuf/announce.lua (packet building and length-field fix).
+-- Tests for src/announce.lua (packet building and length-field fix).
 -- Run from project root: lua tests/run_tests.lua
 
 OPENUF_TEST_MODE = true				-- suppress main loop
-dofile("openuf/lib/lib.lua")		-- sets global ufpkt
-local announce = dofile("openuf/announce.lua")
+local announce = dofile("src/announce.lua")
+local tlv = announce._tlv
 
 -- Minimal config for packet building (fixed values for deterministic tests)
 local function sample_cfg(overrides)
@@ -49,21 +49,115 @@ local function find_tlv(pkt, want_type)
 	return nil
 end
 
--- /proc/net/dev of a swconfig board whose LAN trunk is eth0 (header as the
--- kernel prints it; eth0.1 in br-lan, eth0.10 in a VLAN bridge).
-local PROC_NET_DEV = table.concat({
-	"Inter-|   Receive                                                |  Transmit",
-	" face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed",
-	"    lo:  424520    2474    0    0    0     0          0         0   424520    2474    0    0    0     0       0          0",
-	"  eth0:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0",
-	"eth0.1:    1200      10    0    0    0     0          0         0     1300      11    0    0    0     0       0          0",
-	"br-lan:    1200      10    0    0    0     0          0         0     1300      11    0    0    0     0       0          0",
-	"eth0.10:      0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0",
-	"  eth00:      0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0",
-	"",
-}, "\n")
-
 return {
+	{
+		name = "announce tlv: gen4 converts 0x12345678 big-endian",
+		fn = function()
+			local t = tlv.gen4(0x12345678)
+			assert_eq(#t, 4, "table length")
+			assert_eq(t[1], 0x12, "byte 1 (MSB)")
+			assert_eq(t[2], 0x34, "byte 2")
+			assert_eq(t[3], 0x56, "byte 3")
+			assert_eq(t[4], 0x78, "byte 4 (LSB)")
+		end
+	},
+	{
+		name = "announce tlv: gen4 converts 256 (0x0100) correctly",
+		fn = function()
+			local t = tlv.gen4(256)
+			assert_eq(t[1], 0x00, "byte 1")
+			assert_eq(t[2], 0x00, "byte 2")
+			assert_eq(t[3], 0x01, "byte 3")
+			assert_eq(t[4], 0x00, "byte 4")
+		end
+	},
+	{
+		name = "announce tlv: gen4 converts 0 to all-zero bytes",
+		fn = function()
+			local t = tlv.gen4(0)
+			assert_eq(t[1], 0, "byte 1")
+			assert_eq(t[2], 0, "byte 2")
+			assert_eq(t[3], 0, "byte 3")
+			assert_eq(t[4], 0, "byte 4")
+		end
+	},
+	{
+		name = "announce tlv: gen4 converts 0xFFFFFFFF correctly",
+		fn = function()
+			local t = tlv.gen4(0xFFFFFFFF)
+			assert_eq(t[1], 0xFF, "byte 1")
+			assert_eq(t[2], 0xFF, "byte 2")
+			assert_eq(t[3], 0xFF, "byte 3")
+			assert_eq(t[4], 0xFF, "byte 4")
+		end
+	},
+	{
+		name = "announce tlv: init creates 3-byte TLV header with correct type",
+		fn = function()
+			local t = tlv.init(0x0b)
+			assert_eq(#t, 3, "table length")
+			assert_eq(t[1], 0x0b, "type byte")
+			assert_eq(t[2], 0x00, "length high byte (always 0)")
+			assert_eq(t[3], 0x00, "length low byte (before finish)")
+		end
+	},
+	{
+		name = "announce tlv: catstr appends string as individual bytes",
+		fn = function()
+			local t = {}
+			tlv.catstr(t, "AB")
+			assert_eq(#t, 2, "table length")
+			assert_eq(t[1], 65, "byte value of 'A'")
+			assert_eq(t[2], 66, "byte value of 'B'")
+		end
+	},
+	{
+		name = "announce tlv: catstr appends empty string without error",
+		fn = function()
+			local t = {1, 2}
+			tlv.catstr(t, "")
+			assert_eq(#t, 2, "table unchanged")
+		end
+	},
+	{
+		name = "announce tlv: cattbl appends source bytes to destination",
+		fn = function()
+			local dst = {0x01, 0x02}
+			local src = {0x03, 0x04, 0x05}
+			tlv.cattbl(dst, src)
+			assert_eq(#dst, 5, "table length after append")
+			assert_eq(dst[3], 0x03, "first appended byte")
+			assert_eq(dst[4], 0x04, "second appended byte")
+			assert_eq(dst[5], 0x05, "third appended byte")
+		end
+	},
+	{
+		name = "announce tlv: finish sets length byte and appends TLV to outer packet",
+		fn = function()
+			local outer = {0x02, 0x06, 0x00, 0x00}
+			local rec = tlv.init(0x0b)		-- hostname TLV
+			tlv.catstr(rec, "test")			-- 4 bytes of value
+			-- rec is now {0x0b, 0x00, 0x00, 116, 101, 115, 116} (7 elements)
+			tlv.finish(rec, outer)
+			-- finish sets rec[3] = 7 - 3 = 4, then appends all 7 bytes to outer
+			assert_eq(#outer, 4 + 7, "outer packet total length")
+			assert_eq(outer[5], 0x0b, "TLV type in outer")
+			assert_eq(outer[6], 0x00, "TLV length high byte")
+			assert_eq(outer[7], 0x04, "TLV length low byte = 4")
+			assert_eq(outer[8], 116, "first value byte 't'")
+		end
+	},
+	{
+		name = "announce tlv: finish correctly encodes 6-byte value length",
+		fn = function()
+			local outer = {}
+			local rec = tlv.init(0x01)	-- HW addr TLV
+			tlv.cattbl(rec, {0x11, 0x22, 0x33, 0x44, 0x55, 0x66})
+			tlv.finish(rec, outer)
+			-- value length should be 6
+			assert_eq(outer[3], 0x06, "value length = 6")
+		end
+	},
 	{
 		name = "announce: packet starts with 0x02 0x06 header",
 		fn = function()
@@ -294,7 +388,6 @@ return {
 	{
 		name = "announce: get_ip reads the address off the interface itself",
 		fn = function()
-			announce._holder = nil
 			local orig, seen = announce._popen, {}
 			announce._popen = function(cmd)
 				seen[#seen + 1] = cmd
@@ -311,29 +404,62 @@ return {
 		end
 	},
 	{
+		name = "announce: get_ip asks only the netdev that held the address, until it loses it or the TTL is up",
+		fn = function()
+			local orig, orig_now = announce._popen, announce._now
+			local cmds, bridge_ip = {}, "    inet 192.0.2.3/24 brd 192.0.2.255 scope global br-lan\n"
+			announce._popen = function(cmd)
+				cmds[#cmds + 1] = cmd
+				if cmd:match("readlink /sys/class/net/eth1/master") then
+					return "../../../../../virtual/net/br-lan\n"
+				end
+				if cmd:match("addr show dev br%-lan") then return bridge_ip end
+				return ""
+			end
+			local now = 1000
+			announce._now = function() return now end
+			announce._ip_holder = nil
+			local ok, err = pcall(function()
+				announce.get_ip("eth1")
+				cmds = {}
+				now = now + 10
+				assert_eq(table.concat(announce.get_ip("eth1"), "."), "192.0.2.3", "same address")
+				assert_eq(#cmds, 1, "one `ip` for the remembered netdev, no walk")
+				bridge_ip = ""
+				cmds = {}
+				assert_nil(announce.get_ip("eth1"), "gone: nil")
+				assert_true(#cmds > 1, "and the chain is walked again in the same call")
+				bridge_ip = "    inet 192.0.2.4/24 scope global br-lan\n"
+				announce.get_ip("eth1")
+				now = now + announce.IP_HOLDER_TTL
+				cmds = {}
+				announce.get_ip("eth1")
+				assert_true(#cmds > 1, "after the TTL the chain is walked again")
+			end)
+			announce._popen, announce._now, announce._ip_holder = orig, orig_now, nil
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "announce: get_ip falls back to the bridge when the port has no address",
 		fn = function()
-			announce._holder = nil
 			-- The real target layout: lan_cpueth names eth1, but eth1 is a
 			-- br-lan member and carries no address -- without the fallback,
 			-- announce broadcasts 192.168.1.1 and inform reports "0.0.0.0".
-			local orig, orig_read = announce._popen, announce._read_file
+			local orig = announce._popen
 			announce._popen = function(cmd)
 				if cmd:match("addr show dev eth1") then return "" end
+				if cmd:match("readlink /sys/class/net/eth1/master") then
+					return "../../../../../virtual/net/br-lan\n"
+				end
 				if cmd:match("addr show dev br%-lan") then
 					return "    inet 192.0.2.3/24 brd 192.0.2.255 scope global br-lan\n"
 				end
 				return ""
 			end
-			announce._read_file = function(path)
-				if path == "/sys/class/net/eth1/master/uevent" then
-					return "DEVTYPE=bridge\nINTERFACE=br-lan\nIFINDEX=5\n"
-				end
-				return nil
-			end
 			local ip = announce.get_ip("eth1")
-			announce._popen, announce._read_file = orig, orig_read
-			assert_not_nil(ip, "bridge address found via the port's master")
+			announce._popen = orig
+			assert_not_nil(ip, "bridge address found via master symlink")
 			assert_eq(table.concat(ip, "."), "192.0.2.3", "bridge octets parsed")
 		end
 	},
@@ -345,135 +471,43 @@ return {
 			-- VLAN 20 becomes eth0.20 and not eth0.1.20 -- so the trunk itself
 			-- is neither addressed nor bridged. Confirmed on a real
 			-- TL-WDR3500, where this reported ip 0.0.0.0 on every inform.
-			local orig, orig_read = announce._popen, announce._read_file
+			local orig = announce._popen
 			announce._popen = function(cmd)
 				if cmd:match("addr show dev eth0%.1") or cmd:match("addr show dev eth0 ") then
 					return ""   -- neither the trunk nor the tagged child is addressed
+				end
+				if cmd:match("readlink /sys/class/net/eth0/master") then return "" end
+				if cmd:match("ls %-d /sys/class/net/eth0%.") then
+					return "/sys/class/net/eth0.1\n"
+				end
+				if cmd:match("readlink /sys/class/net/eth0%.1/master") then
+					return "../../../../../virtual/net/br-lan\n"
 				end
 				if cmd:match("addr show dev br%-lan") then
 					return "    inet 192.0.2.2/24 brd 192.0.2.255 scope global br-lan\n"
 				end
 				return ""
 			end
-			-- eth0 has no master/ at all; only the tagged child is enslaved.
-			announce._read_file = function(path)
-				if path == "/sys/class/net/eth0.1/master/uevent" then
-					return "DEVTYPE=bridge\nINTERFACE=br-lan\nIFINDEX=5\n"
-				end
-				if path == "/proc/net/dev" then return PROC_NET_DEV end
-				return nil
-			end
-			announce._holder = nil
 			local ip = announce.get_ip("eth0")
-			announce._popen, announce._read_file = orig, orig_read
+			announce._popen = orig
 			assert_not_nil(ip, "address found two hops away")
 			assert_eq(table.concat(ip, "."), "192.0.2.2", "trunk -> tagged child -> bridge")
 		end
 	},
 	{
-		name = "announce: steady ticks ask one `ip` for the netdev that held the address",
-		fn = function()
-			-- The trunk layout costs four forks to walk (port, tagged child,
-			-- bridge, and the `ls` that found the child). announce asks every
-			-- 10 s, and the answer only moves on a reprovision.
-			local orig, orig_read, orig_now = announce._popen, announce._read_file, announce._now
-			local asked, reads, now = {}, 0, 1000
-			announce._popen = function(cmd)
-				asked[#asked + 1] = cmd
-				if cmd:match("addr show dev br%-lan") then
-					return "    inet 192.0.2.2/24 brd 192.0.2.255 scope global br-lan\n"
-				end
-				return ""
-			end
-			announce._read_file = function(path)
-				reads = reads + 1
-				if path == "/sys/class/net/eth0.1/master/uevent" then return "INTERFACE=br-lan\n" end
-				if path == "/proc/net/dev" then return PROC_NET_DEV end
-				return nil
-			end
-			announce._now = function() return now end
-			announce._holder = nil
-			announce.get_ip("eth0")
-			assert_eq(#asked, 3, "the first call walks eth0, eth0.1, br-lan")
-			asked, reads = {}, 0
-			for _ = 1, 5 do
-				now = now + 10
-				assert_eq(table.concat(announce.get_ip("eth0"), "."), "192.0.2.2", "same address")
-			end
-			assert_eq(#asked, 5, "one fork per tick")
-			for _, c in ipairs(asked) do
-				assert_true(c:match("^ip %-4 addr show dev br%-lan$") ~= nil, "only the bridge is asked: " .. c)
-			end
-			assert_eq(reads, 0, "and no sysfs or /proc reads")
-			-- Past the TTL the chain is walked again, so a layout change is
-			-- found even while the old holder keeps an address.
-			asked, now = {}, now + announce.HOLDER_TTL
-			announce.get_ip("eth0")
-			assert_eq(#asked, 3, "re-resolved after HOLDER_TTL")
-			-- A clock stepped backwards does not pin the cache.
-			asked, now = {}, now - 3600
-			announce.get_ip("eth0")
-			assert_eq(#asked, 3, "re-resolved after a backwards clock step")
-			-- Another interface is not answered from eth0's holder.
-			asked = {}
-			assert_nil(announce.get_ip("eth1"), "eth1 has no address")
-			assert_eq(asked[1], "ip -4 addr show dev eth1", "eth1 is asked itself")
-			announce._popen, announce._read_file, announce._now = orig, orig_read, orig_now
-			announce._holder = nil
-		end
-	},
-	{
-		name = "announce: when the remembered netdev loses its address the chain is walked at once",
-		fn = function()
-			local orig, orig_read = announce._popen, announce._read_file
-			local on = "br-lan"
-			announce._popen = function(cmd)
-				if cmd == "ip -4 addr show dev " .. on then
-					return "    inet 192.0.2.2/24 brd 192.0.2.255 scope global " .. on .. "\n"
-				end
-				return ""
-			end
-			announce._read_file = function(path)
-				if path == "/sys/class/net/eth0.1/master/uevent" then return "INTERFACE=br-lan\n" end
-				if path == "/proc/net/dev" then return PROC_NET_DEV end
-				return nil
-			end
-			announce._holder = nil
-			assert_eq(table.concat(announce.get_ip("eth0"), "."), "192.0.2.2", "on the bridge")
-			on = "eth0.1"
-			local ip = announce.get_ip("eth0")
-			announce._popen, announce._read_file = orig, orig_read
-			assert_not_nil(ip, "found in the same call, not a tick later")
-			assert_eq(announce._holder and announce._holder.dev, "eth0.1", "the new holder is remembered")
-			announce._holder = nil
-		end
-	},
-	{
 		name = "announce: get_ip returns nil when neither port nor bridge has an address",
 		fn = function()
-			announce._holder = nil
-			local orig, orig_read = announce._popen, announce._read_file
-			local asked = {}
+			local orig = announce._popen
+			announce._popen = function() return "" end
+			local unbridged = announce.get_ip("eth1")
 			announce._popen = function(cmd)
-				asked[#asked + 1] = cmd
+				if cmd:match("readlink") then
+					return "../../../../../virtual/net/br-lan\n"
+				end
 				return ""
 			end
-			announce._read_file = function() return nil end
-			local unbridged = announce.get_ip("eth1")
-			announce._read_file = function(path)
-				if path == "/sys/class/net/eth1/master/uevent" then
-					return "INTERFACE=br-lan\n"
-				end
-				return nil
-			end
-			asked = {}
 			local bridged = announce.get_ip("eth1")
-			announce._popen, announce._read_file = orig, orig_read
-			local asked_bridge = false
-			for _, c in ipairs(asked) do
-				if c:match("addr show dev br%-lan") then asked_bridge = true end
-			end
-			assert_true(asked_bridge, "the bridge was asked")
+			announce._popen = orig
 			assert_nil(unbridged, "no address and no bridge -> nil")
 			assert_nil(bridged, "bridge exists but has no address -> nil")
 		end
@@ -495,7 +529,6 @@ return {
 	{
 		name = "announce: _refresh re-reads uptime, ip and the adopted flag each tick",
 		fn = function()
-			announce._holder = nil
 			-- Everything the packet carries that can change while the
 			-- broadcaster runs. Before this the packet was frozen at the
 			-- values read at startup: uptime counted seconds since the DAEMON
@@ -530,7 +563,6 @@ return {
 	{
 		name = "announce: _refresh keeps the previous value when a source cannot be read",
 		fn = function()
-			announce._holder = nil
 			-- A proc file that is missing, or a state module that cannot be
 			-- found, must not blank a field that was correct a second ago.
 			local orig_read, orig_popen, orig_state =
@@ -562,6 +594,154 @@ return {
 			local pkt = announce.build_packet(cfg)
 			assert_true(find_tlv(pkt, 0x16):find(announce.VERSION_SUFFIX, 1, true) ~= nil,
 				"the default suffix is M.VERSION_SUFFIX")
+		end
+	},
+	{
+		name = "announce: a v1 probe gets the announce's TLVs under a v1 header",
+		fn = function()
+			local cfg = sample_cfg()
+			local reply = announce.probe_reply(cfg, string.char(0x01, 0x00, 0x00, 0x00))
+			assert_not_nil(reply, "v1 probe answered")
+			assert_eq(reply:byte(1), 0x01, "v1 version byte")
+			assert_eq(reply:byte(2), 0x00, "v1 command byte")
+			local plen = reply:byte(3) * 256 + reply:byte(4)
+			assert_eq(plen, #reply - 4, "length field covers the TLVs")
+			assert_eq(reply:sub(5), announce.build_packet(cfg):sub(5),
+				"same TLVs as the periodic announce")
+			assert_eq(find_tlv(reply, 0x01), string.char(0x24, 0xa4, 0x3c, 0x00, 0xd3, 0xad),
+				"hardware address present")
+		end
+	},
+	{
+		name = "announce: only the exact v1 probe is answered",
+		fn = function()
+			local cfg = sample_cfg()
+			assert_true(announce.probe_reply(cfg, string.char(0x02, 0x00, 0x00, 0x00)) == nil,
+				"v2 probe ignored, as a UCG Fiber does")
+			assert_true(announce.probe_reply(cfg, announce.build_packet(cfg)) == nil,
+				"another device's announce ignored")
+			assert_true(announce.probe_reply(cfg, string.char(0x01, 0x00, 0x00)) == nil,
+				"short datagram ignored")
+			assert_true(announce.probe_reply(cfg, "") == nil, "empty datagram ignored")
+		end
+	},
+	{
+		name = "announce: serve hands a probe to the probe handler, which replies to its source",
+		fn = function()
+			local cfg = sample_cfg()
+			local now = 0
+			local queue = {
+				{string.char(0x02, 0x00, 0x00, 0x00), "198.51.100.33", 51170},
+				{string.char(0x01, 0x00, 0x00, 0x00), "198.51.100.33", 57989},
+			}
+			local sent = {}
+			local listener = {
+				receivefrom = function()
+					local d = table.remove(queue, 1)
+					return d[1], d[2], d[3]
+				end,
+				sendto = function(_, data, ip, port)
+					sent[#sent + 1] = {data = data, ip = ip, port = port}
+					return #data
+				end,
+			}
+			local fake_socket = {
+				gettime = function() return now end,
+				select = function(r, _, t)
+					if #queue > 0 then return {r[1]} end
+					now = now + t
+					return {}
+				end,
+			}
+			announce.serve(fake_socket, {{sock = listener, fn = announce.probe_handler(cfg)}}, 10)
+			assert_eq(#sent, 1, "one reply, for the v1 probe only")
+			assert_eq(sent[1].ip, "198.51.100.33", "to the prober's address")
+			assert_eq(sent[1].port, 57989, "to the prober's source port")
+			assert_eq(sent[1].data, announce.probe_reply(cfg, string.char(1, 0, 0, 0)),
+				"the v1 reply")
+			assert_eq(now, 10, "returns once the interval is spent")
+		end
+	},
+	{
+		name = "announce: probes are answered only with discovery_replies on (and l2_announce)",
+		fn = function()
+			-- Answering them made the UniFi app treat the APs as standalone
+			-- devices and ask for their own login (2026-10-03).
+			assert_false(announce.answers_probes({}), "default: off")
+			assert_false(announce.answers_probes({l2_announce = true}), "l2_announce alone: off")
+			assert_true(announce.answers_probes({l2_announce = true, discovery_replies = true}), "both: on")
+			assert_false(announce.answers_probes({l2_announce = false, discovery_replies = true}),
+				"no l2_announce: off")
+			local config = require("config")
+			for _, o in ipairs(config.OPTIONS) do
+				if o[1] == "discovery_replies" then
+					assert_eq(o[3], false, "the shipped default is off")
+				end
+			end
+		end
+	},
+	{
+		name = "announce: the sibling exchange sends v3 always and v5 with a key, and logs refusals once",
+		fn = function()
+			local sib = require("openwrt.siblings")
+			local log = {}
+			local real = io.stderr
+			io.stderr = {write = function(_, s) log[#log + 1] = s end}
+			announce._sib_logged = {}
+			local cfg = {identity_mac = "00:00:5e:00:53:01", model = "U6IW"}
+			local key = sib.derive_key("0123456789abcdef0123456789abcdef")
+			local none = announce.sibling_packets(sib, cfg, {}, {"00:00:5e:00:53:21"}, nil, 1000)
+			local both = announce.sibling_packets(sib, cfg, {}, {"00:00:5e:00:53:21"}, key, 1000)
+			local store = {}
+			local v6 = "oUFs" .. string.char(6) .. none[1]:sub(6)
+			announce.sibling_receive(sib, store, v6, "00:00:5e:00:53:09", 1000, key)
+			announce.sibling_receive(sib, store, v6, "00:00:5e:00:53:09", 1000, key)
+			local ok5 = announce.sibling_receive(sib, store, both[2], "00:00:5e:00:53:09", 1000, key)
+			io.stderr = real
+			announce._sib_logged = {}
+			assert_eq(#none, 1, "no key: one packet")
+			assert_eq(none[1]:byte(5), 3, "v3")
+			assert_eq(#both, 2, "a key: two")
+			assert_eq(both[2]:byte(5), 5, "the second one v5")
+			assert_true(ok5, "a v5 sibling is heard")
+			local text = table.concat(log)
+			local _, n = text:gsub("version 6", "")
+			assert_eq(n, 1, "an unknown version is logged once")
+			assert_contains(text, "no site key", "locks with no key to send them under: logged")
+		end
+	},
+	{
+		name = "announce: das_tick binds UDP 3799 while a plan exists, closes it when the plan empties",
+		fn = function()
+			local orig = announce._read_file
+			local text = nil
+			announce._read_file = function() return text end
+			local opened, closed = 0, 0
+			local function open(_, port, what)
+				opened = opened + 1
+				assert_eq(port, 3799, "the DAS port")
+				assert_contains(what, "DAS", "named")
+				return {close = function() closed = closed + 1 end}
+			end
+			local ds, cfg = {}, {das_file = "/x/das.json"}
+			announce.das_tick(ds, cfg, nil, open)
+			local none = opened
+			text = '[{"port": 3799, "clients": [{"ip": "192.0.2.1", "secret": "s"}]}]'
+			announce.das_tick(ds, cfg, nil, open)
+			local after_plan = opened
+			announce.das_tick(ds, cfg, nil, open)
+			local same = opened
+			local plan_len = #cfg.das_plan
+			text = "[]"
+			announce.das_tick(ds, cfg, nil, open)
+			announce._read_file = orig
+			assert_eq(none, 0, "no plan: nothing bound")
+			assert_eq(after_plan, 1, "a plan: bound")
+			assert_eq(same, 1, "unchanged: not bound again")
+			assert_eq(plan_len, 1, "the plan the handler answers from")
+			assert_eq(closed, 1, "the plan emptied: closed")
+			assert_nil(ds.sock, "and forgotten")
+			assert_eq(#cfg.das_plan, 0, "an empty plan")
 		end
 	},
 }

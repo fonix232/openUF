@@ -1,4 +1,4 @@
--- Tests for openuf/satisfaction.lua: the UniFi firmware's WiFi Experience
+-- Tests for unifi/satisfaction.lua: the UniFi firmware's WiFi Experience
 -- formula (calc_sta_satisfaction and the roll-ups in libubnt 4.0.15).
 -- Run from project root: lua tests/run_tests.lua
 --
@@ -6,7 +6,7 @@
 -- boundary sits on the exact comparison the firmware makes (slti/sltiu
 -- against 0xf, 5, 0x32, 0x1771 ...).
 
-local sat = dofile("openuf/satisfaction.lua")
+local sat = require("unifi.satisfaction")
 
 return {
 	{

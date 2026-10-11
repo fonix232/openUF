@@ -6,14 +6,24 @@
 ]]--
 
 local M = {}
-local util = package.loaded["openuf.util"]
-	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
 -- Injectable: override in tests to return fixture file contents
-M._read_file = util.read_file
+M._read_file = function(path)
+	local f = io.open(path, "r")
+	if not f then return nil end
+	local s = f:read("*a")
+	f:close()
+	return s
+end
 
 -- Injectable: override in tests to return fixture command output
-M._run_cmd = util.capture
+M._run_cmd = function(cmd)
+	local h = io.popen(cmd .. " 2>/dev/null")
+	if not h then return "" end
+	local s = h:read("*a")
+	h:close()
+	return s or ""
+end
 
 
 -- ─── Lookup pass ────────────────────────────────────────────────────────────
@@ -21,10 +31,9 @@ M._run_cmd = util.capture
 -- The same seam ucihelper.begin_pass/end_pass provides, for the same reason:
 -- build_json asks several of the functions below the SAME question once per
 -- socket, and the answer cannot change inside one payload. `/proc/net/arp` was
--- read five times per heartbeat and `/tmp/dhcp.leases` four (once per
--- downstream socket, from both mac_table and switch_mac_table, plus one more
--- for the default gateway), and the switch's whole ARL table was walked once
--- per socket to keep the handful of entries on it.
+-- read once per downstream socket plus one more for the default gateway,
+-- `/tmp/dhcp.leases` once per socket, and the bridge's whole FDB was walked
+-- once per socket to keep the handful of entries on it.
 --
 -- Scoped to a pass rather than given a TTL: both files are genuinely live
 -- between heartbeats, and none of this may outlast the payload it was read
@@ -67,10 +76,9 @@ end
 -- dropped on the address's own bit and each bucket sorted (pairs() order is
 -- undefined; the payload must be stable).
 --
--- Both wired-host sources hand us that exact shape -- the switch's ARL table
--- and the bridge's FDB -- and both were scanned WHOLE once per socket to keep
--- the entries on that one, O(sockets x hosts) on a switch that may have
--- learned a couple of hundred. One inversion answers every socket.
+-- The bridge's FDB was scanned WHOLE once per socket to keep the entries on
+-- that one, O(sockets x hosts) on a bridge that may have learned a couple of
+-- hundred. One inversion answers every socket.
 --
 -- Memoized on the map TABLE, not on a name: build_json fetches one dump per
 -- heartbeat and hands the same table to every socket, so a pass given a fresh
@@ -107,27 +115,32 @@ function M.uptime()
 	end)
 end
 
--- Returns {total_kb, free_kb, buffers_kb} by parsing /proc/meminfo.
+-- Returns {total_kb, free_kb, available_kb, buffers_kb} by parsing
+-- /proc/meminfo. available_kb is the kernel's own estimate of what a new
+-- allocation could use without swapping (MemAvailable, 3.14+); MemFree alone
+-- counts every page cache page as "used", which on an AP whose RAM is mostly
+-- cache reported ~94% memory use for a box with room to spare.
 function M.meminfo()
 	local s = M._read_file("/proc/meminfo")
-	if not s then return {total_kb = 0, free_kb = 0, buffers_kb = 0} end
+	if not s then return {total_kb = 0, free_kb = 0} end
 	local total = tonumber(s:match("MemTotal:%s+(%d+)"))
 	local free  = tonumber(s:match("MemFree:%s+(%d+)"))
-	local bufs  = tonumber(s:match("Buffers:%s+(%d+)"))
 	return {
-		total_kb   = total or 0,
-		free_kb    = free  or 0,
-		buffers_kb = bufs  or 0,
+		total_kb     = total or 0,
+		free_kb      = free  or 0,
+		available_kb = tonumber(s:match("MemAvailable:%s+(%d+)")),
+		buffers_kb   = tonumber(s:match("Buffers:%s+(%d+)")),
 	}
 end
 
--- The 1, 5 and 15 minute load averages as /proc/loadavg prints them
--- ("0.05"), strings as UniFi firmware sends them in sys_stats.
+-- The three load averages as the strings the controller's sys_stats block
+-- carries ("0.42"), or nil when /proc/loadavg cannot be read.
 function M.loadavg()
-	local s = M._read_file("/proc/loadavg") or ""
+	local s = M._read_file("/proc/loadavg")
+	if not s then return nil end
 	local a, b, c = s:match("^(%S+)%s+(%S+)%s+(%S+)")
-	if not a then return "0.00", "0.00", "0.00" end
-	return a, b, c
+	if not a then return nil end
+	return {a, b, c}
 end
 
 -- Previous /proc/stat sample for delta-based CPU% (see M.cpu_percent).
@@ -258,7 +271,7 @@ function M.radio_stats(ifname)
 			-- line. It is the ONLY entry whose counters describe the radio's
 			-- actual airtime -- every other one is a scan dwell of a few
 			-- milliseconds -- so callers wanting utilisation must pick it out
-			-- rather than assume a position (see _in_use_survey in inform.lua).
+			-- rather than assume a position (see unifi/payload.lua's in_use_survey).
 			current = {freq = tonumber(freq), in_use = line:find("[in use]", 1, true) ~= nil}
 		elseif current then
 			-- Field names matched against the real iw(8) binary's own format
@@ -315,8 +328,9 @@ end
 -- FIELD_GET(COUNT) - 1 to tx_retries and tx_failed with no guard for a count
 -- of 0, so a fresh station's counters can read 4294967295; upstream later
 -- made it `count ? count - 1 : 0`. Passed on, one such reading added exactly
--- 2^32 to the controller's per-band totals (the Office AP showed 47 billion
--- tx packets and 50 % retries). No real retry count gets near 2^31.
+-- 2^32 to the controller's per-band totals (upstream c0a2047: an AX3000T
+-- showed 47 billion tx packets and 50 % retries). No real retry count gets
+-- near 2^31.
 function M.u32_count(v)
 	if v and v >= 2147483648 then return 0 end
 	return v
@@ -358,7 +372,7 @@ end
 -- Each entry: {mac, signal, signal_avg, tx_bitrate, rx_bitrate, tx_mcs,
 --              rx_mcs, tx_generation, tx_nss, rx_generation, rx_nss,
 --              tx_bytes, rx_bytes, tx_packets, rx_packets, tx_retries,
---              tx_failed, inactive_ms, connected_sec, tx_width, rx_width}
+--              tx_failed, inactive_ms, connected_sec, tx_width, rx_width, dev}
 -- signal is the last frame's, signal_avg mac80211's running average.
 -- tx_retries/tx_failed: iw(8) only exposes TX-side retry/failure counters
 -- (802.11 ARQ is TX-side by nature) -- there is no rx-side equivalent in
@@ -372,7 +386,9 @@ function M.sta_table(ifname)
 		local mac = line:match("^Station (%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)")
 		if mac then
 			if cur then clients[#clients + 1] = cur end
-			cur = {mac = mac}
+			-- dev: the netdev iw lists the station on ("(on phy0-ap0)"),
+			-- which for a key-VLAN station is the VLAN netdev, not the BSS.
+			cur = {mac = mac, dev = line:match("%(on ([%w%.%-_]+)%)")}
 		elseif cur then
 			local key = dump_key(line)
 			local b = BITRATE[key]
@@ -402,158 +418,156 @@ function M.sta_table(ifname)
 	return clients
 end
 
+-- Fast BSS Transition (802.11r) AKMs, by their 00-0f-ac suite number:
+-- FT-802.1X (3), FT-PSK (4), FT-SAE (9), FT-802.1X-SHA384 (13),
+-- FT-FILS-SHA256/384 (16/17), FT-PSK-SHA384 (19), FT-SAE-EXT-KEY (25).
+M.FT_AKMS = {[3] = true, [4] = true, [9] = true, [13] = true, [16] = true,
+	[17] = true, [19] = true, [25] = true}
+
+-- Whether one station's all_sta record says it associated with 802.11r:
+-- hostapd's per-station WPA MIB prints the negotiated AKM as
+-- "AKMSuiteSelector=00-0f-ac-<n>" (RSN_SUITE: hex OUI, decimal suite).
+-- nil when the record has no selector (an open BSS, or a hostapd built
+-- without the per-station MIB), so the field is left out rather than
+-- reported false on no evidence.
+local function _sta_is_11r(f)
+	local sel = f.AKMSuiteSelector
+	if not sel then return nil end
+	local n = sel:lower():match("^00%-0f%-ac%-(%d+)%s*$")
+	return n ~= nil and M.FT_AKMS[tonumber(n)] == true
+end
+
+-- Per-station flags on one hostapd BSS, keyed by MAC, from
+-- `hostapd_cli all_sta` (one fork per BSS): {is_11r = true/false/nil}
+-- (see _sta_is_11r).
+function M.hostapd_sta_flags(ifname)
+	if not ifname then return {} end
+	local out = M._run_cmd("hostapd_cli -i " .. ifname .. " all_sta")
+	local fields, cur = {}, nil
+	for line in out:gmatch("[^\n]+") do
+		local mac = line:match("^(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)%s*$")
+		if mac then
+			cur = {}
+			fields[mac:lower()] = cur
+		elseif cur then
+			local k, v = line:match("^([%w_]+)=(.*)$")
+			if k then cur[k] = v end
+		end
+	end
+	local flags = {}
+	for mac, f in pairs(fields) do
+		flags[mac] = {is_11r = _sta_is_11r(f)}
+	end
+	return flags
+end
+
+-- A station's flags (its AKM) are fixed for the life of its association, so
+-- hostapd is asked once per association, not every heartbeat (upstream
+-- 1d83e9f). An association is the station's BSS plus its start (uptime minus
+-- iw's connected time); a start that moved by more than the slack is a new
+-- one, which covers a reconnect between two heartbeats. A station unseen for
+-- STA_FLAGS_IDLE seconds is forgotten.
+M.STA_FLAGS_IDLE = 300
+M.STA_FLAGS_SLACK = 5
+M._sta_flags_cache = {}   -- [mac] = {bss, start, flags, seen}
+
+-- hostapd_sta_flags(bss) for the stations iw listed on it ({mac,
+-- connected_sec}...), from the cache when every one of them has a current
+-- answer; otherwise one hostapd_cli run, whose answers are kept. Returns the
+-- flags keyed by lowercase MAC.
+function M.hostapd_sta_flags_cached(bss, stas)
+	local now_up = M.uptime()
+	local cache = M._sta_flags_cache
+	if now_up <= 0 then return M.hostapd_sta_flags(bss) end
+	for mac, e in pairs(cache) do
+		if e.seen + M.STA_FLAGS_IDLE < now_up then cache[mac] = nil end
+	end
+	local out, miss = {}, false
+	for _, s in ipairs(stas or {}) do
+		local mac = type(s.mac) == "string" and s.mac:lower()
+		local conn = tonumber(s.connected_sec)
+		local e = mac and cache[mac]
+		if e and conn and e.bss == bss and math.abs(now_up - conn - e.start) <= M.STA_FLAGS_SLACK then
+			e.seen = now_up
+			out[mac] = e.flags
+		elseif mac then
+			miss = true
+		end
+	end
+	if not miss then return out end
+	local flags = M.hostapd_sta_flags(bss)
+	for _, s in ipairs(stas or {}) do
+		local mac = type(s.mac) == "string" and s.mac:lower()
+		local conn = tonumber(s.connected_sec)
+		-- Only an answer hostapd gave is kept: a station it did not list is
+		-- asked again.
+		if mac and flags[mac] and conn then
+			cache[mac] = {bss = bss, start = now_up - conn, flags = flags[mac], seen = now_up}
+		end
+	end
+	for mac, v in pairs(flags) do out[mac] = v end
+	return out
+end
+
 -- The kernel driver behind a wireless netdev ("ath9k", "ath10k_pci",
 -- "mt798x-wmac"), or nil. It does not change while the board runs, so it is
--- read once per netdev.
+-- read once per netdev. (WiFi Experience: unifi/satisfaction.lua
+-- failed_is_dropped.)
 M._driver_cache = {}
 function M.wifi_driver(ifname)
 	if not ifname then return nil end
 	if M._driver_cache[ifname] == nil then
-		M._driver_cache[ifname] = util.driver_of(ifname, M._read_file) or false
+		local link = M._run_cmd("readlink /sys/class/net/" .. ifname .. "/device/driver") or ""
+		M._driver_cache[ifname] = link:match("([^/%s]+)%s*$") or false
 	end
 	return M._driver_cache[ifname] or nil
 end
 
--- Whether a station is dozing right now (UniFi firmware's sta `state` bit
--- 0x10, which the controller turns into powersave_enabled): true/false, or nil
--- when this radio cannot say. mac80211 keeps the PS_STA flag itself only when
--- the driver leaves power-save tracking to it; a driver that sets AP_LINK_PS
--- in hwflags takes that job over, and neither ath10k nor mt76 reports back
--- (both APs, 2026-10-10: ath9k showed PS_STA on a dozing client, ath10k and
--- mt798x never once in 10 s across 17 stations). There, false would be a
--- guess. Needs debugfs, which OpenWrt mounts.
-M._ps_phy_cache = {}
-function M.sta_powersave(ifname, mac)
-	if not ifname or not mac then return nil end
-	local phy = M._ps_phy_cache[ifname]
-	if phy == nil then
-		phy = (M._read_file("/sys/class/net/" .. ifname .. "/phy80211/name") or ""):match("^%s*(%S+)")
-		if phy then
-			local hw = M._read_file("/sys/kernel/debug/ieee80211/" .. phy .. "/hwflags")
-			if not hw or hw:find("AP_LINK_PS", 1, true) then phy = nil end
-		end
-		M._ps_phy_cache[ifname] = phy or false
+-- Is the station in 802.11 power save right now? mac80211 keeps that as
+-- the station's PS_STA flag (set and cleared from the PM bit of the frames
+-- the station sends), and debugfs lists the set flags one name per line:
+--   /sys/kernel/debug/ieee80211/<phy>/netdev:<ifname>/stations/<mac>/flags
+-- A station's directory sits under the netdev it was added on -- the BSS,
+-- even after hostapd moves it to a key-VLAN netdev -- so each of ifnames is
+-- tried in turn. File reads only, no fork. nil when no flags file is found
+-- (debugfs not mounted, a kernel without CONFIG_MAC80211_DEBUGFS),
+-- otherwise true/false.
+--
+-- mac80211 keeps PS_STA itself only when the driver leaves power-save
+-- tracking to it: a driver that sets AP_LINK_PS in the phy's hwflags takes
+-- that job over, and neither ath10k nor mt76 reports back (upstream 074b070,
+-- both its APs: ath9k showed PS_STA on a dozing client, ath10k and mt798x
+-- never once in 10 s across 17 stations). There, false would be a guess, so
+-- such a phy answers nil. The verdict is cached per phy.
+M._ps_phy_ok = {}
+local function ps_tracked(phy)
+	if M._ps_phy_ok[phy] == nil then
+		local hw = M._read_file("/sys/kernel/debug/ieee80211/" .. phy .. "/hwflags")
+		M._ps_phy_ok[phy] = (hw ~= nil and not hw:find("AP_LINK_PS", 1, true))
 	end
-	if not phy then return nil end
-	local flags = M._read_file("/sys/kernel/debug/ieee80211/" .. phy .. "/netdev:"
-		.. ifname .. "/stations/" .. mac:lower() .. "/flags")
-	if not flags then return nil end
-	for word in flags:gmatch("%S+") do
-		if word == "PS_STA" then return true end
-	end
-	return false
+	return M._ps_phy_ok[phy]
 end
 
--- A radio's transmit-timeout and carrier-sense-timeout interrupt counts since
--- the driver loaded: UniFi firmware's athstats ast_txto and ast_cst, which its
--- athstats tool labels "global txmit timeout interrupts" and "carrier sense
--- timeout interrupts" (firmware-confirmed for 4.0.15). ath9k counts the same
--- two hardware interrupts as GTT and CST in debugfs. ath10k (its firmware
--- keeps a tx timeout count, but no carrier-sense one) and mt76 have no such
--- pair: nil there.
-function M.radio_timeouts(ifname)
-	if not ifname then return nil end
-	local phy = (M._read_file("/sys/class/net/" .. ifname .. "/phy80211/name") or ""):match("^%s*(%S+)")
-	if not phy then return nil end
-	local s = M._read_file("/sys/kernel/debug/ieee80211/" .. phy .. "/ath9k/interrupt")
-	if not s then return nil end
-	local gtt = tonumber(s:match("GTT:%s*(%d+)"))
-	local cst = tonumber(s:match("CST:%s*(%d+)"))
-	if not (gtt and cst) then return nil end
-	return gtt, cst
-end
-
--- Each station's AKM suite on the given hostapd BSSes, as hostapd prints it
--- ("00-0f-ac-9"), keyed by lower-case MAC. One hostapd_cli run for all of them.
--- The second result is the set of stations hostapd listed at all, so a
--- station it listed without an AKM (an open network) can be told from one
--- it never answered for.
-function M.sta_akms(bsses)
-	local out, listed = {}, {}
-	local names = {}
-	for _, b in ipairs(bsses or {}) do
-		if b:match("^[%w%-%._]+$") then names[#names + 1] = b end
-	end
-	if #names == 0 then return out, listed end
-	local text = M._run_cmd("for b in " .. table.concat(names, " ")
-		.. "; do hostapd_cli -i $b all_sta; done")
-	local cur
-	for line in text:gmatch("[^\n]+") do
-		local mac = line:match("^(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)%s*$")
-		if mac then
-			cur = mac:lower()
-			listed[cur] = true
-		elseif cur then
-			local akm = line:match("^AKMSuiteSelector=(%S+)")
-			if akm then out[cur] = akm:lower() end
-		end
-	end
-	return out, listed
-end
-
--- A station's AKM is fixed for the life of its association, so it is asked
--- of hostapd once per association, not every heartbeat. An association is
--- the station's BSS plus its start (uptime minus iw's connected time); a
--- start that moved by more than the slack is a new association, which
--- covers a reconnect between two heartbeats that iw's counter alone could
--- hide. A station unseen for AKM_IDLE seconds is forgotten.
-M.AKM_IDLE = 300
-M.AKM_START_SLACK = 5
-M._akm_cache = {}   -- [mac] = {bss = ifname, start = s, akm = akm|false, seen = s}
-
--- stas: {{mac = , bss = , conn = connected seconds}, ...}. Returns sta_akms'
--- map for those stations, running hostapd_cli only on BSSes that hold a
--- station with no current answer.
-function M.sta_akms_cached(stas)
-	local now_up = M.uptime()
-	local bsses, want = {}, {}
-	if now_up <= 0 then -- no clock to date associations by: ask every time
-		for _, s in ipairs(stas) do
-			if not want[s.bss] then want[s.bss] = true; bsses[#bsses + 1] = s.bss end
-		end
-		return (M.sta_akms(bsses))
-	end
-	local cache = M._akm_cache
-	for mac, e in pairs(cache) do
-		if e.seen + M.AKM_IDLE < now_up then cache[mac] = nil end
-	end
-	local out = {}
-	for _, s in ipairs(stas) do
-		local mac = s.mac:lower()
-		local e = cache[mac]
-		if e and s.conn and e.bss == s.bss
-			and math.abs(now_up - s.conn - e.start) <= M.AKM_START_SLACK then
-			e.seen = now_up
-			out[mac] = e.akm or nil
-		elseif not want[s.bss] then
-			want[s.bss] = true; bsses[#bsses + 1] = s.bss
-		end
-	end
-	if #bsses == 0 then return out end
-	local akms, listed = M.sta_akms(bsses)
-	listed = listed or {}
-	for _, s in ipairs(stas) do
-		if want[s.bss] then
-			local mac = s.mac:lower()
-			out[mac] = akms[mac]
-			-- Only an answer hostapd gave is kept: a station it did not list
-			-- (it failed, or the station came after iw's read) is asked again.
-			if listed[mac] and s.conn then
-				cache[mac] = {bss = s.bss, start = now_up - s.conn,
-					akm = akms[mac] or false, seen = now_up}
+function M.sta_powersave(ifnames, mac)
+	if type(ifnames) ~= "table" or type(mac) ~= "string" then return nil end
+	mac = mac:lower()
+	if not mac:match("^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$") then return nil end
+	for _, ifname in ipairs(ifnames) do
+		if type(ifname) == "string" and ifname:match("^[%w%.%-_]+$") then
+			local phy = (M._read_file("/sys/class/net/" .. ifname .. "/phy80211/name") or "")
+				:match("^%s*([%w%-_]+)")
+			if phy and not ps_tracked(phy) then return nil end
+			local flags = phy and M._read_file("/sys/kernel/debug/ieee80211/" .. phy
+				.. "/netdev:" .. ifname .. "/stations/" .. mac .. "/flags")
+			if flags then
+				for line in flags:gmatch("[^\n]+") do
+					if line:match("^%s*PS_STA%s*$") then return true end
+				end
+				return false
 			end
 		end
 	end
-	return out
-end
-
--- AKM suites that use Fast BSS Transition (IEEE 802.11-2020 table 9-151:
--- 3 FT-802.1X, 4 FT-PSK, 9 FT-SAE, 13 FT-802.1X-SHA384, 19 FT-PSK-SHA384,
--- 25 FT-SAE-EXT-KEY).
-local FT_AKMS = {["00-0f-ac-3"] = true, ["00-0f-ac-4"] = true, ["00-0f-ac-9"] = true,
-	["00-0f-ac-13"] = true, ["00-0f-ac-19"] = true, ["00-0f-ac-25"] = true}
-function M.akm_is_ft(akm)
-	return akm ~= nil and FT_AKMS[akm] == true
+	return nil
 end
 
 -- Sibling-AP recognition. The controller decides whether a scanned BSS is
@@ -701,6 +715,18 @@ local function peer_tag(ifname, nets, now_up)
 		local e = cache[n.bssid:lower()]
 		n.peer_mac = e and e.mac or nil
 	end
+end
+
+-- {bssid = identity MAC}, {identity MAC = {model, model_display}} of every
+-- sibling openUF AP heard on the LAN in the
+-- last siblings.TTL seconds (announce.lua keeps the file; siblings.lua).
+-- Lets an 802.11k-reported BSSID, which carries no vendor element, be
+-- recognised as a sibling's. authed_only: only the BSSIDs an authenticated
+-- (v5) packet vouched for -- what backhaul attribution may use.
+function M.sibling_bssids(authed_only)
+	local sib = require("openwrt.siblings")
+	local text, now, cjson = M._read_file(sib.FILE), M._time(), require("cjson")
+	return sib.decode(text, now, cjson, authed_only), sib.decode_models(text, now, cjson)
 end
 
 -- Returns a table of neighboring wireless networks visible to ifname, by
@@ -919,18 +945,12 @@ M._sae_supported_cache = nil
 -- SAE would make the controller push a config the radio cannot run.
 --
 -- Probed from the wifi config generator rather than by parsing a binary:
--- OpenWrt 24+ ships ucode wifi scripts that name the auth types they can
--- emit ('sae', 'psk-sae'), and older releases express the same in
--- hostapd.sh. Both are plain file reads, no process spawn.
+-- OpenWrt's ucode wifi scripts name the auth types they can emit ('sae',
+-- 'psk-sae'). A plain file read, no process spawn.
 function M.sae_supported()
 	if M._sae_supported_cache ~= nil then return M._sae_supported_cache end
-	local found = false
 	local ucode = M._read_file("/usr/share/ucode/wifi/ap.uc")
-	if ucode and ucode:find("psk-sae", 1, true) then found = true end
-	if not found then
-		local legacy = M._read_file("/lib/netifd/hostapd.sh")
-		if legacy and legacy:find("sae", 1, true) then found = true end
-	end
+	local found = ucode ~= nil and ucode:find("psk-sae", 1, true) ~= nil
 	M._sae_supported_cache = found
 	return found
 end
@@ -945,18 +965,33 @@ M._owe_supported_cache = nil
 -- halves are needed. `hostapd -v<feature>` exits 0 only when the running
 -- hostapd build has that feature compiled in (it exits 1 on a name it does not
 -- know), and transition mode is written as one wifi-iface with
--- owe_transition=1, which only the ucode generator (24.10+) expands into the
--- hidden OWE BSS plus the open one.
+-- owe_transition=1, which only the ucode generator expands into the hidden
+-- OWE BSS plus the open one (25.12's hostapd.uc; 24.10's shell hostapd.sh has
+-- no such option and would store and drop it).
 function M.owe_supported()
 	if M._owe_supported_cache ~= nil then return M._owe_supported_cache end
 	local found = false
 	local gen = M._read_file("/usr/share/ucode/wifi/hostapd.uc")
 	if gen and gen:find("owe_transition", 1, true) then
-		found = M._run_cmd("/usr/sbin/hostapd -vowe >/dev/null 2>&1 && echo yes")
+		found = (M._run_cmd("/usr/sbin/hostapd -vowe >/dev/null 2>&1 && echo yes") or "")
 			:find("yes", 1, true) ~= nil
 	end
 	M._owe_supported_cache = found
 	return found
+end
+
+M._hs20_supported_cache = nil
+
+-- Can this hostapd run Hotspot 2.0? Claimed as fw_caps 0x800000 (report.lua);
+-- without it the controller drops a Hotspot 2.0 WLAN from the push. hostapd's
+-- own probe: `hostapd -vhs20` exits 0 only on a CONFIG_HS20 build (the full
+-- wpad variants of 25.12; wpad-basic exits 1). openwrt/hotspot2.lua writes
+-- raw BSS lines, so no generator support is needed beyond hostapd_bss_options.
+function M.hs20_supported()
+	if M._hs20_supported_cache ~= nil then return M._hs20_supported_cache end
+	M._hs20_supported_cache = (M._run_cmd("/usr/sbin/hostapd -vhs20 >/dev/null 2>&1 && echo yes") or "")
+		:find("yes", 1, true) ~= nil
+	return M._hs20_supported_cache
 end
 
 M._ppsk_supported_cache = nil
@@ -964,19 +999,19 @@ M._ppsk_supported_cache = nil
 -- Can this device run Private Pre-Shared Keys: several passphrases on one
 -- SSID, each putting its client on its own VLAN?
 --
--- Claimed to the controller as wifi_caps 0x100000; without it a PPSK WLAN is
--- skipped entirely. Both halves are needed. The generator must turn
--- wifi-station sections into a wpa_psk_file with vlanid= (ap.uc,
+-- Claimed to the controller as wifi_caps 0x100000 (report.lua); without it a
+-- PPSK WLAN is skipped entirely. Both halves are needed. The generator must
+-- turn wifi-station sections into a wpa_psk_file with vlanid= (ap.uc,
 -- iface_wpa_stations, OpenWrt 24.10+), and hostapd must be built with VLAN
 -- support: a build without it has no "from wpa_psk_file" log string and would
 -- ignore every key's VLAN. There is no -v<feature> probe for VLAN, so the
--- binary is searched once.
+-- binary is searched, once.
 function M.ppsk_supported()
 	if M._ppsk_supported_cache ~= nil then return M._ppsk_supported_cache end
 	local found = false
 	local gen = M._read_file("/usr/share/ucode/wifi/ap.uc")
 	if gen and gen:find("vlanid=", 1, true) then
-		found = M._run_cmd("grep -qF 'from wpa_psk_file' /usr/sbin/hostapd && echo yes")
+		found = (M._run_cmd("grep -qF 'from wpa_psk_file' /usr/sbin/hostapd 2>/dev/null && echo yes") or "")
 			:find("yes", 1, true) ~= nil
 	end
 	M._ppsk_supported_cache = found
@@ -1061,27 +1096,45 @@ function M._phy_info(phy)
 	local now = M._time()
 	local c = M._phy_info_cache[phy]
 	if c and (now - c.at) < M.PHY_INFO_TTL then return c.text, c.caps end
-	local text = M._run_cmd("iw phy phy" .. phy .. " info")
+	-- By index ("phy#1"), not by the default name "phy1": boards rename their
+	-- phys (an E8450's are wl0/wl1), and `iw phy phy1 info` then answers
+	-- nothing -- every radio reported no capabilities at all and the
+	-- controller offered 20/40 MHz only on a 4x4 HE160 radio.
+	local text = M._run_cmd("iw phy#" .. phy .. " info")
 	if not text or text == "" then return text, nil end
 	local caps = parse_phy_info(text)
 	M._phy_info_cache[phy] = {text = text, caps = caps, at = now}
 	return text, caps
 end
 
--- The secondary 20 MHz channel's side of the primary, as the QCA driver
--- reports it (getparam chextoffset; UniFi firmware sends it as vap
--- extchannel): 1 above, -1 below, 0 without one. Above 40 MHz it is the
--- primary's partner in its 40 MHz half, so halve the block around the
--- primary until 40 MHz is left (80 MHz at 5530, primary 5520: 40 MHz at
--- 5510, so -1).
-function M.ext_offset(freq, width, center)
-	if not (freq and width and center) or width < 40 then return 0 end
-	while width > 40 do
-		width = width / 2
-		if freq < center then center = center - width / 2
-		else center = center + width / 2 end
+-- The radio's usable frequencies, from the Frequencies block of the cached
+-- `iw phy#N info` ("* 5260.0 MHz [52] (20.0 dBm) (no IR, radar detection)";
+-- a "(disabled)" one is left out), in list order as {freq, channel, passive}.
+-- `passive` marks a channel the radio may only listen on (no IR / radar):
+-- a scan dwells there ~110 ms instead of ~30-40 (mac80211's passive and
+-- active channel times). nil when the phy cannot be read; a sweep then runs
+-- the whole band in one go. (Ported from the yesrab fork, e7ffb87.)
+function M.phy_frequencies(ifname)
+	if not ifname then return nil end
+	local dev_info = M._run_cmd("iw dev " .. ifname .. " info") or ""
+	local phy = dev_info:match("wiphy%s+(%d+)")
+	if not phy then return nil end
+	local text = M._phy_info(phy)
+	if not text or text == "" then return nil end
+	local out = {}
+	for line in text:gmatch("[^\n]+") do
+		local freq, ch, rest = line:match("^%s*%*%s+(%d+)%.?%d*%s+MHz%s+%[(%d+)%]%s*(.*)$")
+		if freq and not rest:find("disabled", 1, true) then
+			out[#out + 1] = {
+				freq    = tonumber(freq),
+				channel = tonumber(ch),
+				passive = (rest:find("no IR", 1, true) or rest:find("radar detection", 1, true)
+					or rest:find("passive scanning", 1, true)) ~= nil,
+			}
+		end
 	end
-	return freq < center and 1 or -1
+	if #out == 0 then return nil end
+	return out
 end
 
 -- What `iw dev <ifname> info` says about one interface. Inside a pass every
@@ -1144,20 +1197,52 @@ function M.radio_caps(ifname)
 	local txpower = tonumber(dev_info:match("txpower%s+([%d%.]+)"))
 	caps.channel  = channel and tonumber(channel) or nil
 	caps.tx_power = txpower and math.floor(txpower) or nil
-	-- Live channel width in MHz ("width: 80 MHz"), for the satisfaction
-	-- estimate's rate ceiling. Not a wire field: build_json takes it off.
-	caps.width    = tonumber(dev_info:match("width:%s+(%d+)"))
 	-- Which side of the primary the secondary 20 MHz sits: 1 above, -1
-	-- below, 0 at 20 MHz. Not a radio_table field: build_json moves it to
+	-- below, 0 at 20 MHz. Not a radio_table field: report.lua moves it to
 	-- each vap's extchannel.
 	caps.extchannel = M.ext_offset(tonumber(dev_info:match("channel%s+%d+%s+%((%d+) MHz%)")),
-		caps.width, tonumber(dev_info:match("center1:%s+(%d+)")))
+		tonumber(dev_info:match("width:%s+(%d+)")), tonumber(dev_info:match("center1:%s+(%d+)")))
 
 	return caps
 end
 
+-- A radio's transmit-timeout and carrier-sense-timeout interrupt counts since
+-- the driver loaded: UniFi firmware's athstats ast_txto and ast_cst, which its
+-- athstats tool labels "global txmit timeout interrupts" and "carrier sense
+-- timeout interrupts" (firmware-confirmed for 4.0.15; upstream fafe47f).
+-- ath9k counts the same two hardware interrupts as GTT and CST in debugfs.
+-- ath10k (its firmware keeps a tx timeout count, but no carrier-sense one)
+-- and mt76 have no such pair: nil there.
+function M.radio_timeouts(ifname)
+	if not ifname then return nil end
+	local phy = (M._read_file("/sys/class/net/" .. ifname .. "/phy80211/name") or ""):match("^%s*([%w%-_]+)")
+	if not phy then return nil end
+	local s = M._read_file("/sys/kernel/debug/ieee80211/" .. phy .. "/ath9k/interrupt")
+	if not s then return nil end
+	local gtt = tonumber(s:match("GTT:%s*(%d+)"))
+	local cst = tonumber(s:match("CST:%s*(%d+)"))
+	if not (gtt and cst) then return nil end
+	return gtt, cst
+end
+
+-- The secondary 20 MHz channel's side of the primary, as the QCA driver
+-- reports it (getparam chextoffset; UniFi firmware sends it as vap
+-- extchannel, upstream 8b0ed77): 1 above, -1 below, 0 without one. Above
+-- 40 MHz it is the primary's partner in its 40 MHz half, so halve the block
+-- around the primary until 40 MHz is left (80 MHz at 5530, primary 5520:
+-- 40 MHz at 5510, so -1).
+function M.ext_offset(freq, width, center)
+	if not (freq and width and center) or width < 40 then return 0 end
+	while width > 40 do
+		width = width / 2
+		if freq < center then center = center - width / 2
+		else center = center + width / 2 end
+	end
+	return freq < center and 1 or -1
+end
+
 -- First-seen timestamps for wired hosts, keyed by "<source> mac" -- used to
--- derive `uptime` in M.mac_table()/M.switch_mac_table() the same way
+-- derive `uptime` in M.mac_table() the same way
 -- sta_table's connected_sec comes from iw (which has no equivalent concept
 -- for a learned MAC).
 -- Injectable/resettable by tests, same pattern as M._prev_cpu above.
@@ -1234,6 +1319,55 @@ function M._hostname_by_mac()
 				end
 			end
 		end
+		return by_mac
+	end)
+end
+
+-- Whether an IPv6 address is one a client is reached at: global or ULA. Not
+-- link-local (fe80::/10: every host has one, it identifies nothing beyond the
+-- link), multicast (ff00::/8) or anything written from "::" (unspecified,
+-- loopback, v4-mapped). The controller would take a link-local one -- its
+-- ordering of a client's list only sorts them last -- but shows the list as
+-- the client's addresses, which is not what a link-local address is.
+function M._ipv6_reportable(addr)
+	local first = addr:match("^(%x%x?%x?%x?):")
+	local n = first and tonumber(first, 16)
+	if not n then return false end
+	if n >= 0xff00 then return false end                     -- ff00::/8
+	if math.floor(n / 64) == math.floor(0xfe80 / 64) then    -- fe80::/10
+		return false
+	end
+	return true
+end
+
+-- MAC -> sorted list of the host's global/ULA IPv6 addresses, from the
+-- kernel's IPv6 neighbour cache. Busybox `ip` prints
+--   "<addr> dev <if> lladdr <mac> ref 1 used 0/0/0 probes 4 REACHABLE"
+-- and iproute2's ip-full "<addr> dev <if> lladdr <mac> [router] STALE";
+-- FAILED/INCOMPLETE entries carry no lladdr and drop out of the pattern.
+-- Sorted so a client's list is the same list from one heartbeat to the next:
+-- the controller compares it with the last_ipv6 it stored and rewrites that on
+-- any difference, order included. One fork per pass; like /proc/net/arp it
+-- holds only the hosts this device itself has exchanged packets with.
+function M._ipv6_by_mac()
+	return pass_memo("ipv6_by_mac", function()
+		local by_mac, seen = {}, {}
+		local out = M._run_cmd("ip -6 neigh show")
+		for line in (out or ""):gmatch("[^\n]+") do
+			local addr = line:match("^(%S+)%s+dev%s")
+			local mac  = line:match("%slladdr%s+(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)")
+			if addr and mac and M._ipv6_reportable(addr:lower()) then
+				addr, mac = addr:lower(), mac:lower()
+				local key = mac .. " " .. addr
+				if not seen[key] then
+					seen[key] = true
+					local list = by_mac[mac] or {}
+					list[#list + 1] = addr
+					by_mac[mac] = list
+				end
+			end
+		end
+		for _, list in pairs(by_mac) do table.sort(list) end
 		return by_mac
 	end)
 end
@@ -1329,7 +1463,7 @@ function M.nft_tap()
 		if not out or out == "" then return {macs = macs, ips = ips} end
 		for ifname, mac, rest in
 			out:gmatch('"([^"]+)"%s*%.%s*(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)([^,\n]*)') do
-			-- Same multicast-bit filter the FDB and ARL sources apply. A
+			-- Same multicast-bit filter the FDB source applies. A
 			-- source address can never be multicast, so this only ever
 			-- rejects a malformed dump -- kept for the same reason it is
 			-- kept there.
@@ -1428,89 +1562,22 @@ function M.mac_table(ifname, bridge, allow_tap)
 	return hosts_from_macs(ifname, macs, tap and tap.ips[ifname] or nil)
 end
 
--- === swconfig: what the CPU netdev cannot tell you =========================
---
--- On the ath79 boards openUF targets, every ethernet socket sits behind a
--- switch ASIC and the kernel sees only the CPU port. sysfs therefore answers
--- questions about the internal SoC<->switch link (always 1000/full), not about
--- the socket a cable is actually in, and the bridge FDB attributes every wired
--- host to the one CPU netdev. Both were reported as port facts and both were
--- wrong on real hardware -- a TL-WDR3500 whose uplink socket had negotiated
--- 100baseT reported GbE, while the gateway's own view of the same link said FE.
---
--- The switch knows all of it, and one `swconfig dev <sw> show` returns the lot:
--- per-port link/speed/duplex, per-port pvid, the ARL table (MAC -> physical
--- port), and -- where the driver exposes them -- per-port MIB byte counters.
-
--- Parses one `swconfig dev <device> show` into
---   {ports = {[phys] = {up, speed, full_duplex, pvid, rx_bytes, tx_bytes}},
---    arl   = {[mac] = phys}}
--- Both tables are empty when swconfig is missing or the board has no switch,
--- which is the signal callers use to stay on the netdev-only path.
---
--- Two line shapes both start with "Port <n>:" and must not be confused: an ARL
--- entry ("Port 4: MAC aa:bb:..", listed under the global attributes, one line
--- per learned host) and a port section header ("Port 4:" alone, followed by
--- indented attributes). The MAC is the discriminator.
---
--- MIB counters are optional: the AR8327 in an Archer C5 reports "mib: ???"
--- (its ar8xxx_mib_poll_interval is 0) while the AR9344 in a WDR3500 prints a
--- RxGoodByte/TxByte block. Only those two counters exist even there -- there
--- is no per-port packet or error count to be had from this interface.
-function M.switch_status(device)
-	local status = {ports = {}, arl = {}}
-	local out = M._run_cmd("swconfig dev " .. (device or "switch0") .. " show")
-	if not out or out == "" then return status end
-
-	local cur   -- physical port whose section is being parsed
-	for line in out:gmatch("[^\n]+") do
-		local arl_port, arl_mac =
-			line:match("^Port (%d+):%s+MAC%s+(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)")
-		local header = line:match("^Port (%d+):%s*$")
-		if arl_mac then
-			status.arl[arl_mac:lower()] = tonumber(arl_port)
-		elseif header then
-			cur = tonumber(header)
-			status.ports[cur] = {up = false}
-		elseif line:match("^VLAN %d+:") then
-			cur = nil   -- the VLAN table follows the port sections
-		elseif cur and status.ports[cur] then
-			local p = status.ports[cur]
-			local pvid = line:match("^%s*pvid:%s*(%d+)")
-			if pvid then p.pvid = tonumber(pvid) end
-			local state = line:match("^%s*link:%s*port:%d+%s+link:(%a+)")
-			if state then
-				p.up = (state == "up")
-				if p.up then
-					local speed = line:match("speed:(%d+)baseT")
-					p.speed = speed and tonumber(speed) or nil
-					p.full_duplex = line:match("(%a+)%-duplex") ~= "half"
-				end
-			end
-			local rx = line:match("^RxGoodByte%s*:%s*(%d+)")
-			if rx then p.rx_bytes = tonumber(rx) end
-			local tx = line:match("^TxByte%s*:%s*(%d+)")
-			if tx then p.tx_bytes = tonumber(tx) end
-		end
-	end
-	return status
-end
-
 -- Uplink detection is deliberately MEASURED rather than declared (see
--- M.uplink_phys_port): a modelmap constant is wrong the moment someone moves
--- the cable. But one of its inputs is not a measurement of the cable at all
--- and was re-asked every ten seconds anyway: the default route's gateway IP
--- (an `ip route` fork). It changes only when the network is reconfigured.
--- (Which bridge a netdev sits in is a sysfs read, cheap enough to ask live.)
+-- M.uplink_bridge_port): a board constant is wrong the moment someone moves
+-- the cable. But two of its three inputs are not measurements of the cable at
+-- all and were re-asked every ten seconds anyway -- which bridge a netdev is
+-- enslaved to (a `readlink` fork), and the default route's gateway IP (an
+-- `ip route` fork). Both change only when the network is reconfigured.
 --
 -- Cached with the same TTL discipline as PHY_INFO_TTL. What stays live is the
 -- part that actually follows the cable: the gateway's MAC is looked up in the
--- ARP cache every time, and resolved against the ARL/FDB every time, so a
+-- ARP cache every time, and resolved against the FDB every time, so a
 -- moved cable is still picked up on the next heartbeat.
 --
--- A nil answer is NOT cached. "No default route yet" is an ordinary state
--- during boot, before DHCP has settled; caching it would leave the device
--- unable to find its uplink for the next five minutes.
+-- A nil answer is NOT cached. "No default route yet" and "not a bridge port
+-- yet" are both ordinary states during boot, before DHCP has settled or netifd
+-- has finished; caching them would leave the device unable to find its uplink
+-- for the next five minutes.
 M.UPLINK_TTL = 300
 M._uplink_cache = {}
 local function uplink_memo(key, fn)
@@ -1522,13 +1589,22 @@ local function uplink_memo(key, fn)
 	return value
 end
 
+-- Drop everything the TTL cache holds, for the one event the TTL cannot cover:
+-- openUF itself moving a socket between bridges. The 300 s here is tuned for
+-- "a human moved a cable", which nobody does twice a minute -- but a controller
+-- push that reassigns a port VLAN rewrites the answer to bridge_of() in the
+-- same second, and a port reporting against the bridge it was in five minutes
+-- ago reports no hosts at all. Called on the config path, not the heartbeat.
+function M.forget_uplink_cache()
+	M._uplink_cache = {}
+end
+
 -- The MAC of the default gateway: its IP from the default route, then that
 -- IP's hardware address from the kernel's ARP cache. Lowercased. nil whenever
 -- any link of the chain is missing -- no default route, no ARP entry yet.
 --
--- This is the "which way is the controller" question, and both uplink
--- detectors below are only different ways of asking the switch where that MAC
--- lives: swconfig's ARL table on ath79, the bridge FDB on DSA.
+-- This is the "which way is the controller" question; uplink_bridge_port
+-- asks the bridge FDB which socket that MAC lives behind.
 function M._default_gateway_mac()
 	local gw_ip = uplink_memo("default_gw_ip", function()
 		return tostring(M._run_cmd("ip route show default") or "")
@@ -1544,41 +1620,29 @@ function M._default_gateway_mac()
 	return nil
 end
 
--- Which physical switch port the uplink cable is in, from an ARL table as
--- returned by M.switch_status().arl -- the port the default gateway's MAC was
--- learned on. Verified against both real boards: the same gateway MAC appears
--- on physical port 4 of one AP and port 2 of the other, matching the cabling.
+-- === Sockets and the bridge ===============================================
 --
--- Deliberately measured rather than declared in the modelmap. These boards are
--- deployed as APs with the cable in whichever LAN socket is convenient, and a
--- wrong answer is not a cosmetic error: a socket wrongly treated as downstream
--- makes the AP report the entire LAN segment, gateway included, as hosts
--- plugged into it. Returns nil whenever any link of the chain is missing, and
--- callers must then fall back to the netdev-only port rather than guess.
-function M.uplink_phys_port(arl)
-	if type(arl) ~= "table" then return nil end
-	local gw_mac = M._default_gateway_mac()
-	return gw_mac and arl[gw_mac] or nil
-end
-
--- === DSA: the same questions, asked of the bridge ==========================
---
--- A DSA board (mediatek/filogic, and every other 21.02+ target) has no
--- swconfig and no ARL to read. It does not need one: each socket is its own
--- netdev, so sysfs answers link speed and duplex per socket honestly rather
--- than describing an internal CPU link, and the bridge FDB answers the one
--- thing sysfs cannot -- which socket a MAC sits behind.
+-- Each socket is its own netdev (DSA), so sysfs answers link speed and duplex
+-- per socket, and the bridge FDB answers the one thing sysfs cannot -- which
+-- socket a MAC sits behind.
 --
 -- Confirmed on a Xiaomi Mi Router AX3000T, whose four sockets are the netdevs
 -- wan/lan2/lan3/lan4, all enslaved to br-lan.
 
 -- The bridge a netdev is enslaved to, or nil when it is not a bridge port.
+-- /sys/class/net/<if>/master symlinks to the enslaving device.
 function M.bridge_of(ifname)
-	return util.master_of(ifname, M._read_file)
+	if not ifname then return nil end
+	return uplink_memo("bridge_of:" .. ifname, function()
+		local m = M._run_cmd("readlink /sys/class/net/" .. ifname .. "/master")
+		m = type(m) == "string" and m:match("([^/%s]+)%s*$") or nil
+		if m and m ~= "" and m ~= ifname then return m end
+		return nil
+	end)
 end
 
 -- {[mac] = port_ifname} for every host the bridge has LEARNED, from one
--- `bridge fdb show br <bridge>`. The DSA analogue of switch_status().arl.
+-- `bridge fdb show br <bridge>`.
 --
 -- Same filter discipline as M.mac_table, and for the same reasons. The
 -- load-bearing half is "permanent": the port's own address arrives as
@@ -1609,44 +1673,43 @@ function M.bridge_fdb_ports(bridge)
 	end)
 end
 
+-- On a vlan-filtering bridge the FDB says which VLAN each host was learned
+-- in (`<mac> dev lan2 vlan 3 master br-lan`), and that -- not the bridge's
+-- name -- is the network the host belongs to. mac -> vid, first entry wins;
+-- memoized per pass like bridge_fdb_ports.
+function M.bridge_fdb_vlans(bridge)
+	if not bridge then return {} end
+	return pass_memo("fdbvlan_br:" .. bridge, function()
+		local vlans = {}
+		local out = M._run_cmd("bridge fdb show br " .. bridge)
+		for line in tostring(out or ""):gmatch("[^\n]+") do
+			if line:find("master") and not line:find("self") and not line:find("permanent") then
+				local mac = line:match("^(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)")
+				local vid = tonumber(line:match("%svlan%s+(%d+)") or "")
+				if mac and vid and not vlans[mac:lower()] then vlans[mac:lower()] = vid end
+			end
+		end
+		return vlans
+	end)
+end
+
+-- Does this bridge filter VLANs? (sysfs, no fork)
+function M.bridge_filters_vlans(bridge)
+	if not bridge then return false end
+	local v = M._read_file("/sys/class/net/" .. bridge .. "/bridge/vlan_filtering")
+	return v ~= nil and v:match("^%s*1") ~= nil
+end
+
 -- Which bridge port -- i.e. which socket -- the uplink cable is in, as an
--- ifname. Same contract as M.uplink_phys_port: measured, never declared, and
--- nil rather than a guess when the chain cannot be completed.
+-- ifname: the port the default gateway's MAC was learned on. Measured, never
+-- declared -- these boards are cabled into whichever socket is convenient, and
+-- a socket wrongly treated as downstream makes the AP report the entire LAN
+-- segment, gateway included, as hosts plugged into it. nil rather than a
+-- guess when the chain cannot be completed; callers then fall back.
 function M.uplink_bridge_port(bridge)
 	local gw_mac = M._default_gateway_mac()
 	if not gw_mac then return nil end
 	return M.bridge_fdb_ports(bridge)[gw_mac]
-end
-
--- The wired hosts learned on one physical switch port, in the same shape
--- M.mac_table() returns ({mac, ip, hostname, age, uptime}) so port_table's
--- consumer does not care which source a port's hosts came from.
---
--- Multicast/broadcast MACs are filtered on the address's own multicast bit --
--- the ARL has no "self"/"permanent" markers to lean on the way `bridge fdb`
--- does. The device's own MACs and its wireless stations are filtered by the
--- caller, which is where both sets are already known.
-function M.switch_mac_table(phys, arl)
-	if phys == nil or type(arl) ~= "table" then return {} end
-	local macs = hosts_by_port(arl)[phys]
-	if not macs or #macs == 0 then return {} end
-
-	local ip_by_mac       = M._ip_by_mac()
-	local hostname_by_mac = M._hostname_by_mac()
-
-	local now = M._time()
-	local hosts = {}
-	for _, mac in ipairs(macs) do
-		local first_seen = M._note_seen("swport" .. tostring(phys) .. " " .. mac, now)
-		hosts[#hosts + 1] = {
-			mac      = mac,
-			ip       = ip_by_mac[mac],
-			hostname = hostname_by_mac[mac],
-			age      = 0,
-			uptime   = math.floor(now - first_seen),
-		}
-	end
-	return hosts
 end
 
 return M

@@ -1,15 +1,15 @@
--- Tests for openuf/hook/syswrapper.lua (set-adopt, set-inform, reset-inform, 11k-scan).
+-- Tests for src/hook/syswrapper.lua (set-adopt, set-inform, reset-inform).
 -- Run from project root: lua tests/run_tests.lua
 
 SYSWRAPPER_TEST_MODE = true
 
 -- syswrapper.lua needs to find state.lua; load state first and inject it
-local state = dofile("openuf/state.lua")
+local state = dofile("src/state.lua")
 
 -- Redirect state to a temp file so tests don't touch /etc/openuf
 state._state_file = "/tmp/openuf_test_sysw.json"
 
-local sw = dofile("openuf/hook/syswrapper.lua")
+local sw = dofile("src/hook/syswrapper.lua")
 
 -- Inject state module into syswrapper
 sw._set_state(state)
@@ -136,110 +136,105 @@ return {
 		end
 	},
 	{
-		name = "syswrapper: conf.lua's state_file is honoured, so all three processes agree",
+		name = "syswrapper: the state_file option is honoured, so all three processes agree",
 		fn = function()
-			-- The option was documented for years and read by nothing: every
-			-- entry point used state.lua's hardcoded default, so a device that
-			-- set it had inform.lua writing one file and syswrapper's
-			-- SSH set-adopt writing another. conf.lua cannot be dofile()d from
-			-- this hook (it dofile()s its modelmap by a path relative to
-			-- /opt/openuf, and the controller's SSH session lands anywhere),
-			-- so the one assignment line is read as text.
-			local dir = "/tmp/openuf_test_conf_" .. tostring(os.time()) .. "/"
-			os.execute("mkdir -p '" .. dir .. "'")
-			local f = io.open(dir .. "conf.lua", "w")
-			f:write("config = {\n")
-			f:write("\t-- state_file = \"/decoy/commented-out.json\"\n")
-			f:write("\tinform_url = \"http://unifi:8080/inform\",\n")
-			f:write("\tstate_file = \"/srv/openuf/state.json\",\n")
-			f:write("}\n")
-			f:close()
-			local got = sw._conf_state_file(dir)
-			os.execute("rm -rf '" .. dir .. "'")
-			assert_eq(got, "/srv/openuf/state.json", "the live assignment is read")
+			-- inform.lua and announce.lua move state.json when the option is
+			-- set; the hook must look in the same place or an SSH set-adopt
+			-- writes a file the daemon never reads.
+			local conf = dofile("src/config.lua")
+			local orig = conf._cursor
+			package.loaded["uci"] = {cursor = function()
+				return {get_all = function() return {state_file = "/srv/openuf/state.json"} end}
+			end}
+			local got = sw._conf_state_file()
+			package.loaded["uci"] = {cursor = function()
+				return {get_all = function() return nil end}
+			end}
+			local default = sw._conf_state_file()
+			package.loaded["uci"] = nil
+			conf._cursor = orig
+			assert_eq(got, "/srv/openuf/state.json", "the option is read")
+			assert_eq(default, "/etc/openuf/state.json", "unset: the default path")
 		end
 	},
 	{
-		name = "syswrapper: a conf.lua without state_file leaves the default alone",
+		name = "syswrapper: 11k-scan leaves a dated request for the daemon",
 		fn = function()
-			local dir = "/tmp/openuf_test_conf2_" .. tostring(os.time()) .. "/"
-			os.execute("mkdir -p '" .. dir .. "'")
-			local f = io.open(dir .. "conf.lua", "w")
-			f:write('config = {\n\tinform_url = "http://unifi:8080/inform",\n}\n')
-			f:close()
-			local got = sw._conf_state_file(dir)
-			os.execute("rm -rf '" .. dir .. "'")
-			assert_nil(got, "no option, no override")
-			assert_nil(sw._conf_state_file("/nonexistent-dir-openuf/"),
-				"no conf.lua at all is not an error either")
-		end
-	},
-	{
-		name = "syswrapper: 11k-scan leaves two due times inside the hour, spread as UniFi firmware does",
-		fn = function()
-			local FILE = "/tmp/openuf_test_sysw_scan"
-			os.remove(FILE)
-			sw._set_scan_request_file(FILE)
-			sw._set_clock(function() return 1000000 end)
-			local asked = {}
-			local function run(pick)
-				asked = {}
-				sw._set_rand(function(n) asked[#asked + 1] = n; return pick(n) end)
-				local real = io.stdout
-				io.stdout = {write = function() end}
-				local ok = sw.cmd_11k_scan()
-				io.stdout = real
-				local f = io.open(FILE, "r")
-				local body = f and f:read("*a")
-				if f then f:close() end
-				local due = {}
-				for d in (body or ""):gmatch("%d+") do due[#due + 1] = tonumber(d) end
-				return ok, due
-			end
-
-			local ok, low = run(function() return 0 end)
-			local asked_low = asked
-			local _, high = run(function(n) return n - 1 end)
-			local asked_high = asked
-			local _, mid = run(function() return 1000 end)
-
-			-- The real source: in range, and not constant.
-			local seen, inrange = {}, true
-			for _ = 1, 50 do
-				local v = sw._urandom_below(3590)
-				if v < 0 or v >= 3590 or v ~= math.floor(v) then inrange = false end
-				seen[v] = true
-			end
-			local distinct = 0
-			for _ in pairs(seen) do distinct = distinct + 1 end
-
-			os.remove(FILE)
-			sw._set_rand(nil)
-			sw._set_clock(nil)
-
-			assert_true(ok, "succeeds")
-			assert_eq(#low, 2, "two scans")
-			assert_eq(low[1], 1000010, "the earliest is 10 s out")
-			assert_eq(low[2], 1000020, "the second 10 s after the first")
-			assert_eq(asked_low[1], 3590, "the first delay is drawn from the hour less 10 s")
-			assert_eq(asked_low[2], 3580, "the second from what is left, less 10 s")
-			assert_eq(high[1], 1000000 + 10 + 3589, "the latest first scan is just inside the hour")
-			assert_eq(asked_high[2], 1, "which leaves the second no room to wander")
-			assert_true(high[2] <= 1000000 + sw.SCAN_WINDOW + 10, "but it still lands at the window's end")
-			assert_eq(mid[1], 1001010, "10 s + the random delay")
-			assert_eq(mid[2], 1002020, "then 10 s + another")
-			assert_true(inrange, "/dev/urandom gives integers in [0, n)")
-			assert_true(distinct > 10, "that vary")
-
+			local file = "/tmp/openuf_test_11k_request"
+			sw._scan_request_file(file)
+			local real = io.stdout
+			io.stdout = {write = function() end}
+			local ok = sw.cmd_11k_scan()
+			io.stdout = real
+			assert_true(ok, "written")
+			local f = io.open(file, "r"); local raw = f:read("*a"); f:close()
+			os.remove(file)
+			assert_true(math.abs(tonumber(raw:match("%d+")) - os.time()) <= 2, "dated now")
 			-- An unwritable path fails loudly rather than pretending.
-			sw._set_scan_request_file("/nonexistent-dir/x")
+			sw._scan_request_file("/nonexistent-dir/x")
 			local err = ""
 			local rs = io.stderr
 			io.stderr = {write = function(_, s) err = err .. s end}
-			assert_false(sw.cmd_11k_scan(), "fails")
+			local failed = not sw.cmd_11k_scan()
 			io.stderr = rs
+			sw._scan_request_file("/tmp/openuf-scan-request")
+			assert_true(failed, "fails")
 			assert_contains(err, "cannot write", "says so")
-			sw._set_scan_request_file("/tmp/openuf-scan-request")
 		end
 	},
+	{
+		name = "syswrapper: reprovision clears cfgversion so the controller re-sends its config",
+		fn = function()
+			reset_state()
+			local s = state.load()
+			s.adopted, s.cfgversion, s.cfgversion_effective = true, "abc123", "abc123"
+			state.save(s)
+			local real = io.stdout
+			io.stdout = {write = function() end}
+			sw.cmd_reprovision()
+			io.stdout = real
+			local after = state.load()
+			assert_eq(after.cfgversion, "", "cleared")
+			assert_eq(after.adopted, true, "adoption untouched")
+			assert_eq(after.cfgversion_effective, "abc123", "the applied record untouched")
+		end
+	},
+	{
+		name = "adopt-shell: accepts 10.6's /usr/bin form and a matching MAC, refuses the rest",
+		fn = function()
+			local dir = "/tmp/openuf_test_adoptshell_" .. tostring(os.time())
+			os.execute("mkdir -p " .. dir)
+			local f = io.open(dir .. "/sw", "w")
+			f:write("#!/bin/sh\necho RAN \"$@\"\n")
+			f:close()
+			os.execute("chmod +x " .. dir .. "/sw")
+			f = io.open(dir .. "/state.json", "w")
+			f:write('{"mac":"00:00:5e:00:53:3e","adopted":false}')
+			f:close()
+			local key = string.rep("ab", 16)
+			local function run(cmd)
+				local h = io.popen("OPENUF_SYSWRAPPER=" .. dir .. "/sw OPENUF_STATE=" .. dir
+					.. "/state.json sh src/hook/adopt-shell.sh -c '" .. cmd .. "' 2>&1")
+				local out = h:read("*a")
+				h:close()
+				return out
+			end
+			local url = "http://10.0.0.1:8080/inform"
+			assert_true(run("syswrapper.sh set-adopt " .. url .. " " .. key):find("RAN set%-adopt") ~= nil,
+				"bare form")
+			assert_true(run("/usr/bin/syswrapper.sh set-adopt " .. url .. " " .. key):find("RAN set%-adopt") ~= nil,
+				"10.6 absolute path")
+			assert_true(run("/usr/bin/syswrapper.sh set-adopt " .. url .. " " .. key .. " 00:00:5E:00:53:3E")
+				:find("RAN set%-adopt " .. url .. " " .. key .. "\n", 1, true) == nil
+				and run("/usr/bin/syswrapper.sh set-adopt " .. url .. " " .. key .. " 00:00:5E:00:53:3E")
+				:find("RAN set-adopt", 1, true) ~= nil, "own MAC, any case; not passed on")
+			assert_true(run("/usr/bin/syswrapper.sh set-adopt " .. url .. " " .. key .. " 00:11:22:33:44:55")
+				:find("not this device", 1, true) ~= nil, "another device's MAC refused")
+			assert_true(run("/bin/sh -c id"):find("not permitted", 1, true) ~= nil, "other commands refused")
+			assert_true(run("syswrapper.sh set-adopt " .. url .. " " .. key .. "; id")
+				:find("RAN", 1, true) == nil, "no command chaining")
+			os.execute("rm -rf " .. dir)
+		end
+	},
+
 }

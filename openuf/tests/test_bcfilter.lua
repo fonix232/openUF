@@ -1,4 +1,4 @@
--- Tests for openuf/bcfilter.lua ("Multicast and Broadcast Blocker" nftables
+-- Tests for src/openwrt/bcfilter.lua ("Multicast and Broadcast Blocker" nftables
 -- enforcement). Run from project root: lua tests/run_tests.lua
 --
 -- The generated nft syntax was checked against a real nftables 1.0.9 while
@@ -6,16 +6,22 @@
 -- pkttype vs the invalid `ether daddr type multicast`); these tests pin the
 -- command shape so a regression in it is visible.
 
-local bcfilter = dofile("openuf/bcfilter.lua")
+local bcfilter = dofile("src/openwrt/bcfilter.lua")
 
--- Capture the nft statements that took effect instead of running them.
--- `fail` (optional) is a function(statement) -> true for one nft rejects, so a
--- test can make one specific statement fail the way a real one does.
-local function with_bcfilter(fn, fail)
+-- Capture nft invocations instead of running them. `status` (optional) is a
+-- function(cmd) returning what os.execute would return for that command, so a
+-- test can make one specific nft call fail the way a real one does.
+-- The module builds one nft script (util.nft_apply); cmds lists every
+-- statement nft accepted as "nft <statement>". status(cmd) gets the same form
+-- and fails that statement the way a real nft does.
+local function with_bcfilter(fn, status)
 	local orig = bcfilter._exec
-	local exec, r = fake_nft(fail)
+	local exec, r = fake_nft(status and function(line)
+		local s = status("nft " .. line)
+		return not (s == true or s == 0)
+	end)
 	bcfilter._exec = exec
-	local ok, err = pcall(fn, r.cmds, r)
+	local ok, err = pcall(fn, r.cmds)
 	bcfilter._exec = orig
 	if not ok then error(err, 0) end
 end
@@ -32,9 +38,11 @@ local function with_stderr(fn)
 	return table.concat(buf)
 end
 
--- What an image without kmod-nft-bridge rejects: the drop rule.
-local function lua51_fail(stmt)
-	return stmt:find("add rule", 1, true) ~= nil
+-- os.execute on the target (Lua 5.1) returns the raw exit status: 0 is
+-- success, non-zero is failure, and BOTH are truthy.
+local function lua51_fail(cmd)
+	if cmd:find("add rule", 1, true) then return 1 end
+	return 0
 end
 
 local function joined(cmds) return table.concat(cmds, "\n") end
@@ -47,9 +55,8 @@ return {
 	{
 		name = "bcfilter: reconcile rebuilds its own table from scratch",
 		fn = function()
-			with_bcfilter(function(cmds, r)
+			with_bcfilter(function(cmds)
 				bcfilter.reconcile({})
-				assert_eq(r.runs, 1, "one nft run")
 				assert_true(contains(cmds, "nft delete table bridge openuf_bcfilt"),
 					"deletes before recreating (idempotent)")
 				assert_true(contains(cmds, "nft add table bridge openuf_bcfilt"),
@@ -59,7 +66,7 @@ return {
 				-- The hook spec is what makes the chain filter anything at
 				-- all -- a chain with a corrupted hook/priority passes every
 				-- other assertion while filtering nothing.
-				assert_true(contains(cmds, "bcfilt { type filter hook forward priority 0; }"),
+				assert_true(contains(cmds, "{ type filter hook forward priority 0; }"),
 					"chain is hooked into forward at priority 0")
 			end)
 		end
@@ -143,11 +150,9 @@ return {
 			-- looked fine on the device and in the controller while the WLAN
 			-- filtered nothing.
 			local out = with_stderr(function()
-				with_bcfilter(function(cmds)
-					local ok = bcfilter.reconcile({{ifname = "wlan0", macs = {"aa:bb:cc:dd:ee:ff"}}})
+				with_bcfilter(function()
+					local ok = bcfilter.reconcile({{ifname = "wlan0", macs = {}}})
 					assert_false(ok, "reconcile reports failure to its caller")
-					assert_true(contains(cmds, "allow_wlan0 { aa:bb:cc:dd:ee:ff }"),
-						"the set is still built and filled, as nft without the module leaves it")
 				end, lua51_fail)
 			end)
 			assert_true(out:find("kmod%-nft%-bridge") ~= nil,
@@ -167,7 +172,7 @@ return {
 				with_bcfilter(function()
 					local ok = bcfilter.reconcile({{ifname = "wlan0", macs = {}}})
 					assert_true(ok, "exit status 0 is success")
-				end)
+				end, function() return 0 end)
 			end)
 			assert_eq(out, "", "no warning on a healthy reconcile")
 		end
@@ -181,22 +186,6 @@ return {
 				bcfilter.reconcile({{ifname = nil, macs = {"aa:bb:cc:dd:ee:ff"}}})
 				assert_false(contains(cmds, "add rule"), "no unscoped rule emitted")
 			end)
-		end
-	},
-	{
-		name = "bcfilter: an odd interface name never reaches the nft script",
-		fn = function()
-			-- The name is spliced into a script line: a newline in it would be
-			-- a statement of its own.
-			local logged = with_stderr(function()
-				with_bcfilter(function(cmds)
-					bcfilter.reconcile({{ifname = "wlan0\nflush ruleset", macs = {}},
-						{ifname = "wlan1", macs = {}}})
-					assert_false(contains(cmds, "flush"), "the injected statement never runs")
-					assert_true(contains(cmds, 'oifname "wlan1"'), "the good VAP is still filtered")
-				end)
-			end)
-			assert_true(logged:find("odd interface name", 1, true) ~= nil, "and the drop is logged")
 		end
 	},
 	{

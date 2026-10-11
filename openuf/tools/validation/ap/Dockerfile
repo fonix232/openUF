@@ -64,7 +64,7 @@ RUN ssh-keygen -A \
     && sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
     && printf '\nHostKeyAlgorithms +ssh-rsa\nPubkeyAcceptedAlgorithms +ssh-rsa\n' >> /etc/ssh/sshd_config
 
-COPY openuf/ /opt/openuf/
+COPY src/ /usr/share/openuf/
 COPY tools/validation/ap/uci-mock.lua /usr/local/share/lua/5.1/uci.lua
 # ubus/iw mocks: get_ifname_for_radio() shells out to `ubus call
 # network.wireless status` to resolve a UCI radio name to its live wireless
@@ -83,18 +83,24 @@ COPY tools/validation/ap/iw-mock.sh /usr/local/bin/iw
 # iw-mock.sh shadows `iw`.
 COPY tools/validation/ap/bridge-mock.sh /usr/local/bin/bridge
 COPY tools/validation/ap/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN ln -sf /opt/openuf/hook/syswrapper.sh /usr/bin/syswrapper.sh \
-    && chmod +x /usr/bin/syswrapper.sh /opt/openuf/hook/syswrapper.sh \
+RUN ln -sf /usr/share/openuf/hook/syswrapper.sh /usr/bin/syswrapper.sh \
+    && chmod +x /usr/bin/syswrapper.sh /usr/share/openuf/hook/syswrapper.sh \
     && chmod +x /usr/local/bin/ubus /usr/local/bin/iw /usr/local/bin/bridge /usr/local/bin/entrypoint.sh \
     && mkdir -p /etc/openuf /var/log \
-    && sed -i 's/debug_dump_file = nil/debug_dump_file = "\/var\/log\/openuf-informs.log"/' \
-        /opt/openuf/conf.lua \
-    && sed -i 's/lan_cpueth\t= "eth1"/lan_cpueth\t= "eth0"/' \
-        /opt/openuf/modelmap/generic-dualband-ap.lua \
-    && sed -i 's/{idx = 2, ifname = "eth1"}/{idx = 2, ifname = "eth0"}/' \
-        /opt/openuf/modelmap/generic-dualband-ap.lua \
-    && printf '1735689600 ca:fe:be:ef:00:01 192.168.1.101 printer *\n' > /tmp/dhcp.leases \
-    && mkdir -p /usr/share/ucode/wifi \
+    && echo '{"config": {"debug_dump_file": "/var/log/openuf-informs.log"}}' > /etc/openuf/local.json \
+    && printf '1735689600 ca:fe:be:ef:00:01 192.168.1.101 printer *\n' > /tmp/dhcp.leases
+
+# The ap.uc stub stands in for OpenWrt 25.12's wifi generator, the file
+# sysinfo.sae_supported() reads. Without it the radios claim no SAE, the
+# radio_caps2 WPA3 bits stay clear, and the controller downgrades or drops
+# every WPA3 WLAN before it reaches the wire, so no WPA3 key is ever capturable.
+# The hostapd.uc and hostapd stubs do the same for Enhanced Open (radio_caps2
+# 0x8, sysinfo.owe_supported()): without them no OWE WLAN is ever pushed.
+# The ap.uc and hostapd stubs also carry the strings sysinfo.ppsk_supported()
+# looks for (wifi_caps 0x100000): without them a Private Pre-Shared Keys WLAN
+# is skipped. The hostapd stub replaces Alpine's real one, which nothing here
+# runs; hostapd_cli is a separate binary.
+RUN mkdir -p /usr/share/ucode/wifi \
     && printf "// validation stub: sysinfo.sae_supported() probes for 'psk-sae',\n// sysinfo.ppsk_supported() for vlanid=\n" \
         > /usr/share/ucode/wifi/ap.uc \
     && printf "// validation stub: sysinfo.owe_supported() probes for owe_transition\n" \
@@ -103,34 +109,11 @@ RUN ln -sf /opt/openuf/hook/syswrapper.sh /usr/bin/syswrapper.sh \
         > /usr/sbin/hostapd \
     && chmod +x /usr/sbin/hostapd
 
-# The ap.uc stub stands in for OpenWrt 25.12's wifi generator, the file
-# sysinfo.sae_supported() reads. Without it the radios claim no SAE, the
-# radio_caps2 WPA3 bits stay clear, and the controller downgrades or drops
-# every WPA3 WLAN before it reaches the wire, so no WPA3 key is ever capturable.
-# The hostapd.uc and hostapd stubs do the same for Enhanced Open (radio_caps2
-# 0x8, sysinfo.owe_supported()): without them no OWE WLAN is ever pushed.
-# The same two stubs carry the strings sysinfo.ppsk_supported() looks for
-# (wifi_caps 0x100000): without them a Private Pre-Shared Keys WLAN is skipped.
+# The board description (openwrt/board.lua) finds no /etc/board.json in this
+# container and falls back to its one socket, eth0 -- which is what the
+# single-NIC container has, so informs carry its real MAC and IP.
 
-# generic-dualband-ap.lua assumes real hardware's switch topology (eth0=WAN,
-# eth1=LAN via VLANs) -- this single-NIC container only has eth0. Without
-# this override, announce.get_mac/get_ip (used by inform.lua's
-# _populate_net_info) silently fail to find "eth1", leaving st.mac/st.ip
-# unset -- informs then report MAC 00:00:00:00:00:00 and IP 0.0.0.0, which
-# the controller cannot adopt (it has no address to SSH the device at).
-# The port_table ports list's LAN entry needs the same eth1->eth0 retarget
-# for the same reason (this container has no real second netdev), so both
-# ports report against the container's one real interface -- the uplink
-# and the fake-wired-clients port then share the same if_table counters,
-# which is an acceptable single-NIC-container artifact, not a real openUF
-# behavior (a real device has genuinely separate WAN/LAN netdevs).
-#
-# /tmp/dhcp.leases is only present for one of bridge-mock.sh's two fake
-# hosts, on purpose -- proves sysinfo.mac_table()'s hostname field stays
-# correctly optional (nil, not invented) for a host with no lease entry,
-# same as this project's unit tests already cover.
-
-WORKDIR /opt/openuf
+WORKDIR /usr/share/openuf
 EXPOSE 22
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["/usr/sbin/sshd", "-D"]

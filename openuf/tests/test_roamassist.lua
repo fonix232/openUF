@@ -1,7 +1,7 @@
--- Tests for openuf/roamassist.lua ("Roaming Assistant").
--- Run from project root: lua tests/run_tests.lua
+-- Tests for src/openwrt/roamassist.lua ("Roaming Assistant").
+-- Run from the package directory: lua tests/run_tests.lua
 
-local ra = dofile("openuf/roamassist.lua")
+local ra = dofile("src/openwrt/roamassist.lua")
 local cjson = require("cjson")
 
 local HERE  = "phy1-ap0"
@@ -87,32 +87,6 @@ return {
 				assert_true(has(cmds, '"addr":"' .. MAC .. '"'), "to that client")
 				assert_true(has(cmds, '"neighbors":["' .. NR .. '"]'), "naming the peer's neighbor report")
 				assert_true(has(cmds, '"disassociation_imminent":true'), "disassoc imminent")
-			end)
-		end
-	},
-	{
-		-- assoctrack's kick ledger: the departure that follows a BTM request
-		-- or the disassociation is reported as Roaming Assistant's (8192), so
-		-- the hook has to have run before the command that causes it.
-		name = "roamassist: on_steer hears of the BTM request and the disassociation first",
-		fn = function()
-			with_ra(sticky(), function(cmds)
-				local seen = {}
-				local opts = {on_steer = function(mac) seen[#seen + 1] = mac .. "@" .. #cmds end}
-				local o = obs()
-				ra.tick({o}, 1000, opts)
-				ra.tick({o}, 1000 + ra.BELOW_HOLD, opts)
-				assert_eq(#seen, 1, "the BTM request")
-				assert_eq(seen[1], MAC .. "@0", "before its command")
-				ra.tick({o}, 1000 + ra.BELOW_HOLD + ra.GRACE, opts)
-				assert_eq(#seen, 2, "then the disassociation")
-				assert_eq(seen[2], MAC .. "@1", "before its command too")
-				assert_true(has(cmds, "del_client"), "which did happen")
-			end)
-			with_ra(sticky(), function()
-				ra.tick({obs()}, 1000, {on_steer = function() error("boom") end})
-				assert_eq(ra.tick({obs()}, 1000 + ra.BELOW_HOLD,
-					{on_steer = function() error("boom") end}), 1, "a failing hook stops nothing")
 			end)
 		end
 	},
@@ -308,6 +282,41 @@ return {
 				ra.tick({}, 1000 + ra.FORGET)
 				assert_nil(ra._state[MAC], "forgotten")
 			end)
+		end
+	},
+	{
+		name = "roamassist: a client locked to this AP is never moved",
+		fn = function()
+			-- Lock to Access Point: every other AP refuses the client.
+			with_ra(sticky(), function(cmds)
+				local locked = {[MAC] = true}
+				ra.tick({obs()}, 1000, {locked = locked})
+				local n = ra.tick({obs()}, 1000 + ra.BELOW_HOLD, {locked = locked})
+				assert_eq(n, 0, "no action")
+				assert_eq(#cmds, 0, "no BSS transition request, no disassociation")
+				assert_eq(run_until_decided(obs(), 5000), 1, "unlocked, the same client is moved")
+			end)
+		end
+	},
+	{
+		name = "roamassist: connected_elsewhere asks usteer whether another AP has the client",
+		fn = function()
+			local answer
+			local o_popen = ra._popen
+			ra._popen = function() return answer end
+			answer = cjson.encode({nodes = {[PEER] = {connected = true, signal = -50},
+				["hostapd." .. HERE] = {connected = false}}})
+			local yes = ra.connected_elsewhere(MAC)
+			answer = cjson.encode({nodes = {["hostapd." .. HERE] = {connected = true}}})
+			local here_only = ra.connected_elsewhere(MAC)
+			answer = ""
+			local unknown = ra.connected_elsewhere(MAC)
+			local bad = ra.connected_elsewhere("not a mac")
+			ra._popen = o_popen
+			assert_true(yes, "a remote node has it")
+			assert_false(here_only, "this AP's own radio is not another AP")
+			assert_nil(unknown, "usteer silent: unknown")
+			assert_nil(bad, "a malformed MAC never reaches the command line")
 		end
 	},
 }

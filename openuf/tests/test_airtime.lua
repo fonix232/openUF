@@ -1,7 +1,9 @@
--- Tests for openuf/airtime.lua (Airtime Fairness via mac80211 debugfs).
--- Run from project root: lua tests/run_tests.lua
+-- Tests for src/unifi/atf.lua (the controller's Airtime Fairness switch) and
+-- src/openwrt/airtime.lua (mac80211's airtime_flags in debugfs).
+-- Run from the package directory: lua tests/run_tests.lua
 
-local airtime = dofile("openuf/airtime.lua")
+local atf     = dofile("src/unifi/atf.lua")
+local airtime = dofile("src/openwrt/airtime.lua")
 
 local P0 = "/sys/kernel/debug/ieee80211/phy0/airtime_flags"
 local P1 = "/sys/kernel/debug/ieee80211/phy1/airtime_flags"
@@ -15,11 +17,12 @@ local function render(v)
 end
 
 -- A fake debugfs: `phys` maps path -> current value. `reject` makes a write to
--- that path fail. Returns the list of writes.
+-- that path fail. fn receives the list of writes.
 local function with_debugfs(phys, fn, reject)
 	local o_cmd, o_w, o_r = airtime._run_cmd, airtime._write_file, airtime._read_file
+	local o_err = io.stderr
 	local writes = {}
-	airtime._run_cmd = function(cmd)
+	airtime._run_cmd = function()
 		local out = {}
 		for p in pairs(phys) do out[#out + 1] = p end
 		table.sort(out, function(a, b) return a > b end)  -- unsorted on purpose
@@ -35,7 +38,9 @@ local function with_debugfs(phys, fn, reject)
 		return phys[path] and render(phys[path]) or nil
 	end
 	airtime._supported_cache = nil
+	io.stderr = {write = function() end}   -- the partial-readback warning
 	local ok, err = pcall(fn, writes)
+	io.stderr = o_err
 	airtime._run_cmd, airtime._write_file, airtime._read_file = o_cmd, o_w, o_r
 	airtime._supported_cache = nil
 	if not ok then error(err, 0) end
@@ -43,15 +48,18 @@ end
 
 return {
 	{
-		name = "airtime: parse reads atf.mode, nil without it",
+		name = "atf: parse reads atf.mode, nil without it",
 		fn = function()
 			-- Captured on 10.4.57 2026-09-27 with wifi_caps 0x2C claimed.
-			assert_true(airtime.parse("x=1\natf.status=enabled\natf.mode=enabled\n"), "enabled")
-			assert_false(airtime.parse("atf.status=enabled\natf.mode=disabled\n"), "disabled, at blob start")
-			assert_nil(airtime.parse("radio.1.channel=6\n"), "no block")
-			assert_nil(airtime.parse("atf.status=enabled\n"), "status alone is not the switch")
-			assert_nil(airtime.parse("x=1\natf.mode=bogus\n"), "unknown mode")
-			assert_nil(airtime.parse(nil), "nil blob")
+			assert_true(atf.parse("x=1\natf.status=enabled\natf.mode=enabled\n"), "enabled")
+			assert_eq(atf.parse("atf.status=enabled\natf.mode=disabled\n"), false, "disabled")
+			assert_eq(atf.parse("atf.mode=disabled\natf.status=enabled\n"), false, "at blob start")
+			assert_nil(atf.parse("radio.1.channel=6\n"), "no block")
+			assert_nil(atf.parse("atf.status=enabled\n"), "status alone is not the switch")
+			assert_nil(atf.parse("x=1\natf.mode=bogus\n"), "unknown mode")
+			assert_nil(atf.parse("x=1\nwireless.1.atf.mode=disabled\n"), "only the top-level key")
+			assert_nil(atf.parse(nil), "nil blob")
+			assert_eq(airtime.parse, require("unifi.atf").parse, "the device side reads it through unifi/")
 		end
 	},
 	{
@@ -126,6 +134,26 @@ return {
 			airtime._run_cmd = o
 			assert_eq(#files, 1, "one")
 			assert_eq(files[1], P0, "phy0")
+		end
+	},
+	{
+		name = "airtime: renamed phys (the E8450's wl0/wl1) are found and switched",
+		fn = function()
+			local W0 = "/sys/kernel/debug/ieee80211/wl0/airtime_flags"
+			local W1 = "/sys/kernel/debug/ieee80211/wl1/airtime_flags"
+			local asked
+			local phys = {[W0] = "3", [W1] = "3"}
+			with_debugfs(phys, function()
+				local orig = airtime._run_cmd
+				airtime._run_cmd = function(cmd) asked = cmd; return orig(cmd) end
+				assert_true(airtime.supported(), "supported on a board without phyN names")
+				assert_eq(table.concat(airtime.flag_files(), " "), W0 .. " " .. W1, "both found")
+				local done, n = airtime.set_enabled(false)
+				assert_eq(n, 2, "both phys")
+				assert_eq(done, 2, "both read back off")
+			end)
+			assert_contains(asked, "/sys/kernel/debug/ieee80211/*/airtime_flags", "listed, not guessed")
+			assert_eq(phys[W0], "0", "wl0 off")
 		end
 	},
 }

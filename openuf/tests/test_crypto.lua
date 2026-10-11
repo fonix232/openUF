@@ -1,8 +1,11 @@
--- Tests for openuf/crypto.lua (AES-128-CBC/GCM wrappers).
+-- Tests for src/unifi/crypto.lua (AES-128-CBC/GCM wrappers).
 -- Run from project root: lua tests/run_tests.lua
--- Requires: lua-openssl or luacrypto (or the openssl CLI for CBC fallback)
+-- Requires: lua-openssl
 
-local crypto = dofile("openuf/crypto.lua")
+local crypto = dofile("src/unifi/crypto.lua")
+
+-- The well-known pre-adoption key (state.DEFAULT_KEY), as test material.
+local DEFAULT_KEY = "ba86f2bbe107c7c57eb5f2690775c712"
 
 -- Fixed IV for deterministic tests
 local FIXED_IV = string.rep("\0", 16)
@@ -46,7 +49,7 @@ return {
 	{
 		name = "crypto: hex_to_bin + bin_to_hex round-trip",
 		fn = function()
-			local original = crypto.DEFAULT_KEY
+			local original = DEFAULT_KEY
 			assert_eq(crypto.bin_to_hex(crypto.hex_to_bin(original)), original, "round-trip")
 		end
 	},
@@ -74,7 +77,7 @@ return {
 	{
 		name = "crypto: CBC encrypt + decrypt round-trip",
 		fn = function()
-			local key = crypto.DEFAULT_KEY
+			local key = DEFAULT_KEY
 			local plaintext = "Hello, UniFi! OK"	-- exactly 16 bytes
 			local ct = crypto.aes_cbc_encrypt(key, FIXED_IV, plaintext)
 			local pt = crypto.aes_cbc_decrypt(key, FIXED_IV, ct)
@@ -84,7 +87,7 @@ return {
 	{
 		name = "crypto: CBC encrypt + decrypt round-trip with non-block-aligned plaintext",
 		fn = function()
-			local key = crypto.DEFAULT_KEY
+			local key = DEFAULT_KEY
 			local plaintext = "short"
 			local ct = crypto.aes_cbc_encrypt(key, FIXED_IV, plaintext)
 			local pt = crypto.aes_cbc_decrypt(key, FIXED_IV, ct)
@@ -94,7 +97,7 @@ return {
 	{
 		name = "crypto: CBC ciphertext length is multiple of 16 (PKCS7 padded)",
 		fn = function()
-			local key = crypto.DEFAULT_KEY
+			local key = DEFAULT_KEY
 			-- 16-byte plaintext should produce 32-byte ciphertext (padding block added)
 			local ct = crypto.aes_cbc_encrypt(key, FIXED_IV, string.rep("A", 16))
 			assert_eq(#ct % 16, 0, "ciphertext is block-aligned")
@@ -117,7 +120,7 @@ return {
 		name = "crypto: CBC different keys produce different ciphertext",
 		fn = function()
 			local pt = "same plaintext!!"
-			local ct1 = crypto.aes_cbc_encrypt(crypto.DEFAULT_KEY, FIXED_IV, pt)
+			local ct1 = crypto.aes_cbc_encrypt(DEFAULT_KEY, FIXED_IV, pt)
 			local ct2 = crypto.aes_cbc_encrypt("ffffffffffffffffffffffffffffffff", FIXED_IV, pt)
 			assert_neq(ct1, ct2, "different keys produce different ciphertext")
 		end
@@ -125,7 +128,7 @@ return {
 	{
 		name = "crypto: CBC different IVs produce different ciphertext",
 		fn = function()
-			local key = crypto.DEFAULT_KEY
+			local key = DEFAULT_KEY
 			local pt = "same plaintext!!"
 			local iv2 = string.rep("\255", 16)
 			local ct1 = crypto.aes_cbc_encrypt(key, FIXED_IV, pt)
@@ -140,7 +143,7 @@ return {
 			-- assert_neq") took the pkcs7-unpad error path on almost every run
 			-- and asserted nothing at all.
 			local pt = "secret message!!"
-			local ct = crypto.aes_cbc_encrypt(crypto.DEFAULT_KEY, FIXED_IV, pt)
+			local ct = crypto.aes_cbc_encrypt(DEFAULT_KEY, FIXED_IV, pt)
 			local ok, result = pcall(crypto.aes_cbc_decrypt,
 				"ffffffffffffffffffffffffffffffff", FIXED_IV, ct)
 			assert_true((not ok) or (result ~= pt),
@@ -148,22 +151,8 @@ return {
 		end
 	},
 	{
-		-- The GCM path (the post-adoption inform crypto) needs a Lua binding
-		-- (lua-openssl/luacrypto). Locally a missing binding downgrades the
-		-- GCM tests to a LOUD skip; in CI OPENUF_REQUIRE_GCM=1 turns a
-		-- missing backend into a hard failure, so the pipeline can never
-		-- silently lose GCM coverage again (it did: for a long stretch no
-		-- environment executed the GCM code at all -- the old tests quietly
-		-- returned without asserting).
 		name = "crypto: GCM known-answer vector (16-byte IV, 40-byte AAD, cross-implementation)",
 		fn = function()
-			if not crypto.gcm_available() then
-				if os.getenv("OPENUF_REQUIRE_GCM") == "1" then
-					error("OPENUF_REQUIRE_GCM=1 but no GCM backend -- CI must install lua-openssl")
-				end
-				print("SKIP  GCM known-answer vector (no backend -- luarocks install --local openssl)")
-				return
-			end
 			-- Vector generated once with pycryptodome (an independent AES-GCM
 			-- implementation, the same library tools/test_controller.py runs
 			-- on), so a shared misunderstanding on both sides -- dropped AAD,
@@ -191,14 +180,7 @@ return {
 	{
 		name = "crypto: GCM decrypt fails on tampered AAD or tag",
 		fn = function()
-			if not crypto.gcm_available() then
-				if os.getenv("OPENUF_REQUIRE_GCM") == "1" then
-					error("OPENUF_REQUIRE_GCM=1 but no GCM backend -- CI must install lua-openssl")
-				end
-				print("SKIP  GCM tamper test (no backend)")
-				return
-			end
-			local key = crypto.DEFAULT_KEY
+			local key = DEFAULT_KEY
 			local pt  = "GCM secret body!"
 			local aad = string.rep("\1", 40)
 			local ct, tag = crypto.aes_gcm_encrypt(key, FIXED_IV, pt, aad)
@@ -212,76 +194,6 @@ return {
 			assert_error(function()
 				crypto.aes_gcm_decrypt(key, FIXED_IV, ct, bad_tag, aad)
 			end, "wrong tag must fail verification")
-		end
-	},
-	{
-		name = "crypto: GCM without a backend raises a clear error (never silent garbage)",
-		fn = function()
-			if crypto.gcm_available() then
-				print("SKIP  no-backend contract (a GCM backend is installed here)")
-				return
-			end
-			local ok, err = pcall(crypto.aes_gcm_encrypt,
-				crypto.DEFAULT_KEY, FIXED_IV, "x", string.rep("\1", 40))
-			assert_false(ok, "gcm_encrypt must error without a backend")
-			assert_contains(tostring(err), "no GCM backend", "actionable error message")
-		end
-	},
-	{
-		name = "crypto: module table has no top-level encrypt field (require self-collision guard)",
-		fn = function()
-			-- crypto.lua does pcall(require, "crypto") to detect a luacrypto
-			-- binding. Lua's default package.path includes "./?.lua", so when
-			-- this file runs from its own directory (e.g. /opt/openuf, exactly
-			-- how install.sh deploys it) with neither lua-openssl nor
-			-- luacrypto installed, require("crypto") can resolve right back to
-			-- this same crypto.lua instead of failing. The fix checks the
-			-- returned table has luacrypto's shape (an `encrypt` function)
-			-- before trusting it, so a self-match falls through to the
-			-- openssl(1) CLI backend instead of erroring. That guard only
-			-- works because this module's own public API has no top-level
-			-- `encrypt` field -- assert that invariant holds.
-			assert_true(crypto.encrypt == nil, "module has no top-level encrypt field")
-		end
-	},
-	{
-		name = "crypto: looking for luacrypto never loads a second copy of this module",
-		fn = function()
-			-- The daemons run from /opt/openuf, where "./?.lua" made
-			-- require("crypto") load this file again and keep that copy in
-			-- package.loaded for the life of the process. Reproduce the
-			-- directory with "openuf/?.lua" on the path, with lua-openssl
-			-- present and with it missing.
-			local path, preload = package.path, package.preload.openssl
-			local had_ossl, had_crypto = package.loaded.openssl, package.loaded.crypto
-			local function load_from_openuf_dir()
-				package.loaded.crypto = nil
-				package.path = "openuf/?.lua;" .. path
-				local ok, err = pcall(dofile, "openuf/crypto.lua")
-				package.path = path
-				assert_true(ok, tostring(err))
-				local c = package.loaded.crypto
-				return c == nil or type(c.encrypt) == "function"
-			end
-			local ok, err = pcall(function()
-				local orig_require, asks = require, 0
-				require = function(name)
-					if name == "crypto" then asks = asks + 1 end
-					return orig_require(name)
-				end
-				package.loaded.openssl = nil
-				package.preload.openssl = function() return {} end  -- loads; never called here
-				local fine = load_from_openuf_dir()
-				require = orig_require
-				assert_true(fine, "with lua-openssl")
-				assert_eq(asks, 0, "with lua-openssl, luacrypto is not looked for at all")
-				package.loaded.openssl = nil
-				package.preload.openssl = function() error("lua-openssl absent") end
-				assert_true(load_from_openuf_dir(), "without lua-openssl")
-			end)
-			package.path, package.preload.openssl = path, preload
-			package.loaded.openssl, package.loaded.crypto = had_ossl, had_crypto
-			if not ok then error(err, 0) end
 		end
 	},
 }

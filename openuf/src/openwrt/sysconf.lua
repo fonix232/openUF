@@ -1,10 +1,10 @@
 --[[
 	Controller-managed system settings: timezone, NTP servers, cron jobs.
 
-	Every full `system_cfg` push carries three blocks openUF did not read
-	(first found by the yesrab/openUF fork, 2026-09-15):
+	Every full `system_cfg` push carries three blocks nothing read until the
+	unhandled ledger listed them (yesrab/openUF, ported):
 
-	  system.timezone=<POSIX TZ>          (and locale.timezone, the same value)
+	  system.timezone=IST-5:30            (and locale.timezone, the same value)
 	  ntpclient.status=enabled
 	  ntpclient.<n>.status=enabled / .server=<n>.ubnt.pool.ntp.org   x4
 	  cron.status=enabled
@@ -13,11 +13,10 @@
 
 	The cron job is the interesting one: the controller schedules a nightly
 	04:00 (device local time) neighbour scan on every AP through the AP's own
-	cron. The verb is added to syswrapper.sh, which, as UniFi firmware does,
-	picks two random times within the next hour and asks the running inform
-	daemon to scan at each (inform.lua's _maybe_service_scan_request), so the
-	scan code stays in one place and each result rides out on that heartbeat's
-	scan_table.
+	cron -- the "automated RRM scans" Ubiquiti's Channel AI describes. The
+	verb is added to syswrapper.sh, which asks the running inform daemon to
+	scan on its next heartbeat (inform.lua's _scan_requested), so the scan
+	code stays in one place and the result rides out on the next inform.
 
 	Timezone -> UCI system.@system[0].timezone (the wire string IS a POSIX TZ
 	string, which is exactly what that option holds); NTP -> system.ntp.server.
@@ -29,19 +28,27 @@
 	a pushed command this build cannot run is logged, never written -- crond
 	running an unknown string as root is not "compatibility".
 
-	The pushed cron user is ignored: the account does not exist here and the
-	jobs run as root. Nothing is written when the pushed value already matches,
-	so a steady stream of identical pushes costs no flash writes.
+	The pushed cron user is ignored (jobs run as root here; the pushed account
+	does not exist). The timezone is only ever written when it differs.
+
+	`controller_system` gates each part: true (default) applies all three,
+	false none, or a table {timezone=, ntp=, cron=} picks. config.lua builds it
+	from the system_timezone / system_ntp / system_cron options. A site with a
+	local NTP server sets ntp=false and keeps the board's own list.
 ]]--
 
 local M = {}
-local util = package.loaded["openuf.util"]
-	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
 -- Injectable seams, as in the other modules.
 M._uci  = nil                                            -- mock UCI table; nil = require("uci")
-M._exec = os.execute
-M._read_file = util.read_file
+M._exec = function(cmd) return os.execute(cmd) end
+M._read_file = function(path)
+	local f = io.open(path, "r")
+	if not f then return nil end
+	local s = f:read("*a")
+	f:close()
+	return s
+end
 -- Sibling temp file and rename, like state.save: crond must never see half a file.
 M._write_file = function(path, content)
 	local tmp = path .. ".tmp"
@@ -63,129 +70,20 @@ M.CRON_COMMANDS = {
 	["syswrapper.sh 11k-scan"] = "/usr/bin/syswrapper.sh 11k-scan",
 }
 
--- Wire commands openUF's inform loop already does on its own, so they need
--- no crontab line: the WiFi Blackout Schedule's re-check (wlansched.lua),
--- done on every heartbeat.
-M.CRON_IN_DAEMON = {
-	["syswrapper.sh schedule-action"] = true,
-}
-
 local function get_uci()
 	if M._uci then return M._uci end
 	return require("uci")
 end
 
--- ─── Validation ──────────────────────────────────────────────────────────────
--- Everything here is spliced into UCI or a crontab that crond runs as root.
+-- ─── Validation and parsing ───────────────────────────────────────────────────
 
--- A POSIX TZ string: "IST-5:30", "CET-1CEST,M3.5.0,M10.5.0/3", "<+0530>-5:30".
-function M.is_valid_tz(s)
-	return type(s) == "string" and #s > 0 and #s <= 64
-		and s:match("^[%w%+%-:,/%.<>]+$") ~= nil
-end
+-- The controller's side (unifi/system.lua): its settings, and the checks
+-- every value passes before it reaches UCI or the crontab.
+local system = require("unifi.system")
+M.is_valid_tz, M.is_valid_server, M.is_valid_schedule =
+	system.is_valid_tz, system.is_valid_server, system.is_valid_schedule
+M.parse = system.parse
 
--- A hostname or IPv4 literal.
-function M.is_valid_server(s)
-	return type(s) == "string" and #s > 0 and #s <= 253
-		and s:match("^[%w%.%-]+$") ~= nil and not s:match("^[%.%-]")
-end
-
--- Five crontab fields of digits, '*', ',', '-', '/'.
-function M.is_valid_schedule(s)
-	if type(s) ~= "string" then return false end
-	local n = 0
-	for field in s:gmatch("%S+") do
-		n = n + 1
-		if not field:match("^[%d%*,%-/]+$") then return false end
-	end
-	return n == 5
-end
-
--- ─── Parsing ─────────────────────────────────────────────────────────────────
-
--- The three blocks out of a system_cfg blob. Each is nil when the blob does
--- not carry it (a partial push), so apply() touches only what was pushed.
--- Returns nil when none of the three is present at all.
-function M.parse(sys_raw)
-	if type(sys_raw) ~= "string" then return nil end
-	local tz, ntp, cron = nil, nil, nil
-	local ntp_rows, cron_rows = {}, {}
-	for line in (sys_raw .. "\n"):gmatch("([^\n]*)\n") do
-		local k, v = line:match("^([^=]+)=(.*)$")
-		if k then
-			if k == "system.timezone" or (k == "locale.timezone" and tz == nil) then
-				if v ~= "" then tz = v end
-			elseif k == "ntpclient.status" then
-				ntp = ntp or {servers = {}}
-				ntp.enabled = (v == "enabled")
-			else
-				local i, key = k:match("^ntpclient%.(%d+)%.(.+)$")
-				if i then
-					ntp = ntp or {servers = {}}
-					i = tonumber(i)
-					ntp_rows[i] = ntp_rows[i] or {}
-					ntp_rows[i][key] = v
-				elseif k == "cron.status" then
-					cron = cron or {jobs = {}}
-					cron.enabled = (v == "enabled")
-				else
-					local c, rest = k:match("^cron%.(%d+)%.(.+)$")
-					if c then
-						cron = cron or {jobs = {}}
-						c = tonumber(c)
-						cron_rows[c] = cron_rows[c] or {jobs = {}}
-						local j, jkey = rest:match("^job%.(%d+)%.(.+)$")
-						if j then
-							j = tonumber(j)
-							cron_rows[c].jobs[j] = cron_rows[c].jobs[j] or {}
-							cron_rows[c].jobs[j][jkey] = v
-						else
-							cron_rows[c][rest] = v
-						end
-					end
-				end
-			end
-		end
-	end
-	if ntp then
-		-- Indices are slot numbers; keep the controller's order.
-		local idx = {}
-		for i in pairs(ntp_rows) do idx[#idx + 1] = i end
-		table.sort(idx)
-		for _, i in ipairs(idx) do
-			local r = ntp_rows[i]
-			if r.status ~= "disabled" and M.is_valid_server(r.server) then
-				ntp.servers[#ntp.servers + 1] = r.server
-			elseif r.server and r.server ~= "" and r.status ~= "disabled" then
-				io.stderr:write("sysconf: ignoring malformed NTP server " .. ("%q"):format(r.server) .. "\n")
-			end
-		end
-		if ntp.enabled == nil then ntp.enabled = (#ntp.servers > 0) end
-	end
-	if cron then
-		local cidx = {}
-		for c in pairs(cron_rows) do cidx[#cidx + 1] = c end
-		table.sort(cidx)
-		for _, c in ipairs(cidx) do
-			local tab = cron_rows[c]
-			local jidx = {}
-			for j in pairs(tab.jobs) do jidx[#jidx + 1] = j end
-			table.sort(jidx)
-			for _, j in ipairs(jidx) do
-				local job = tab.jobs[j]
-				cron.jobs[#cron.jobs + 1] = {
-					schedule = job.schedule,
-					cmd      = job.cmd,
-					user     = tab.user,
-					enabled  = (tab.status ~= "disabled") and (job.status ~= "disabled"),
-				}
-			end
-		end
-		if cron.enabled == nil then cron.enabled = (#cron.jobs > 0) end
-	end
-	if tz == nil and ntp == nil and cron == nil then return nil end
-	return {timezone = tz, ntp = ntp, cron = cron}
-end
 
 -- ─── Apply ───────────────────────────────────────────────────────────────────
 
@@ -215,6 +113,14 @@ local function system_section(cursor)
 	return sec
 end
 
+-- A POSIX TZ string without its explicit transition times ("/1", "/3", ...):
+-- the controller sends "GMT0BST,M3.5.0,M10.5.0" for Europe/London, where
+-- OpenWrt's zoneinfo has "GMT0BST,M3.5.0/1,M10.5.0". Same zone, same rules,
+-- but the controller's form moves the clock change to 02:00 -- an hour off.
+function M.tz_zone(tz)
+	return (tostring(tz or ""):gsub("/[%d:+-]+", ""))
+end
+
 -- UCI system.@system[0].timezone <- the pushed POSIX string. Written only when
 -- it differs; the original is stamped once as openuf_timezone_orig. zonename
 -- (the Olson name LuCI keeps alongside the string it derived) is moved to
@@ -231,7 +137,24 @@ function M.apply_timezone(tz)
 	local sec = system_section(cursor)
 	if not sec then return false end
 	local cur = cursor:get("system", sec, "timezone")
-	if cur == tz then return false end
+	-- The same zone in a more precise form wins: keep the board's string, or
+	-- put back the one stamped before an earlier push replaced it.
+	if cur and M.tz_zone(cur) == M.tz_zone(tz) then
+		local orig = cursor:get("system", sec, "openuf_timezone_orig")
+		if not (orig and orig ~= cur and M.tz_zone(orig) == M.tz_zone(tz)) then return false end
+		cursor:set("system", sec, "timezone", orig)
+		cursor:delete("system", sec, "openuf_timezone_orig")
+		local zn = cursor:get("system", sec, "openuf_zonename_orig")
+		if zn then
+			cursor:set("system", sec, "zonename", zn)
+			cursor:delete("system", sec, "openuf_zonename_orig")
+		end
+		cursor:commit("system")
+		io.stderr:write(("sysconf: timezone %s -> %s (the board's form of the controller's zone)\n")
+			:format(tostring(cur), orig))
+		M._exec("/etc/init.d/system reload >/dev/null 2>&1")
+		return true
+	end
 	if not cursor:get("system", sec, "openuf_timezone_orig") then
 		cursor:set("system", sec, "openuf_timezone_orig", cur or "UTC")
 	end
@@ -313,7 +236,9 @@ end
 -- commands in CRON_COMMANDS are installed; anything else is logged and
 -- skipped. Rewritten only when the resulting file differs, and crond told
 -- when it does. cron.status=disabled, or no installable job, removes the
--- block. Returns true when the file was rewritten.
+-- block, so apply_cron({enabled = false}) is how the block is taken away
+-- (inform._release_disabled, for a switched-off system_cron). Returns true
+-- when the file was rewritten.
 function M.apply_cron(cron)
 	if type(cron) ~= "table" then return false end
 	local lines = {}
@@ -321,9 +246,7 @@ function M.apply_cron(cron)
 		for _, job in ipairs(cron.jobs or {}) do
 			if job.enabled ~= false then
 				local runs = M.CRON_COMMANDS[job.cmd]
-				if M.CRON_IN_DAEMON[job.cmd] then
-					-- Nothing to install.
-				elseif not runs then
+				if not runs then
 					io.stderr:write("sysconf: cron job not installed -- not a command this build provides: "
 						.. ("%q"):format(tostring(job.cmd)) .. "\n")
 				elseif not M.is_valid_schedule(job.schedule) then
@@ -360,16 +283,29 @@ end
 
 -- One call from the setparam path. Each part is pcall'd on its own: a full
 -- overlay or a missing init script must cost one part, not the other two.
-function M.apply(parsed)
+-- `gate` is config.controller_system (see the header).
+function M.enabled(gate, part)
+	if gate == nil or gate == true then return true end
+	if type(gate) == "table" then return gate[part] ~= false end
+	return false
+end
+
+function M.apply(parsed, gate)
 	local r = {}
 	if type(parsed) ~= "table" then return r end
 	local ok, res
-	ok, res = pcall(M.apply_timezone, parsed.timezone); r.timezone = ok and res or false
-	if not ok then io.stderr:write("sysconf: timezone: " .. tostring(res) .. "\n") end
-	ok, res = pcall(M.apply_ntp, parsed.ntp);           r.ntp = ok and res or false
-	if not ok then io.stderr:write("sysconf: ntp: " .. tostring(res) .. "\n") end
-	ok, res = pcall(M.apply_cron, parsed.cron);         r.cron = ok and res or false
-	if not ok then io.stderr:write("sysconf: cron: " .. tostring(res) .. "\n") end
+	if M.enabled(gate, "timezone") then
+		ok, res = pcall(M.apply_timezone, parsed.timezone); r.timezone = ok and res or false
+		if not ok then io.stderr:write("sysconf: timezone: " .. tostring(res) .. "\n") end
+	end
+	if M.enabled(gate, "ntp") then
+		ok, res = pcall(M.apply_ntp, parsed.ntp);           r.ntp = ok and res or false
+		if not ok then io.stderr:write("sysconf: ntp: " .. tostring(res) .. "\n") end
+	end
+	if M.enabled(gate, "cron") then
+		ok, res = pcall(M.apply_cron, parsed.cron);         r.cron = ok and res or false
+		if not ok then io.stderr:write("sysconf: cron: " .. tostring(res) .. "\n") end
+	end
 	return r
 end
 

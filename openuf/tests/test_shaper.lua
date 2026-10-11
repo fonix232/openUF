@@ -1,4 +1,4 @@
--- Tests for openuf/shaper.lua ("WiFi Speed Limit": per-client tc classes).
+-- Tests for src/openwrt/shaper.lua ("WiFi Speed Limit": per-client tc classes).
 -- Run from project root: lua tests/run_tests.lua
 --
 -- The command shapes pinned here ran against a real kernel and iproute2
@@ -12,7 +12,7 @@ local A, B, C = "02:00:00:00:00:01", "02:00:00:00:00:02", "02:00:00:00:00:03"
 -- stubbed. fail(cmd) -> true makes that command exit 1, the Lua 5.1 shape.
 local function fresh(opts)
 	opts = opts or {}
-	local sh = dofile("openuf/shaper.lua")
+	local sh = dofile("src/openwrt/shaper.lua")
 	local env = {cmds = {}, logged = {}, ifindex = opts.ifindex or {wlan0 = 7, wlan1 = 8}, now = 1000}
 	sh._exec = function(cmd)
 		env.cmds[#env.cmds + 1] = cmd

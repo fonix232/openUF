@@ -1,7 +1,7 @@
--- Tests for openuf/state.lua (state persistence).
+-- Tests for src/state.lua (state persistence).
 -- Run from project root: lua tests/run_tests.lua
 
-local state = dofile("openuf/state.lua")
+local state = dofile("src/state.lua")
 local TMP = "/tmp/openuf_test_state.json"
 local DEFKEY = state.DEFAULT_KEY
 
@@ -148,20 +148,6 @@ return {
 		end
 	},
 	{
-		name = "state: sched_vaps_down (the WiFi Blackout Schedule's ledger) round-trips",
-		fn = function()
-			with_tmp(function()
-				local st = state.load()
-				st.adopted = true
-				st.sched_vaps_down = {"phy0-ap1", "phy1-ap1"}
-				state.save(st)
-				local loaded = state.load()
-				assert_eq(table.concat(loaded.sched_vaps_down or {}, " "), "phy0-ap1 phy1-ap1",
-					"kept for a restart")
-			end)
-		end
-	},
-	{
 		name = "state: sta_rates (per-client WiFi Speed Limits) round-trips",
 		fn = function()
 			with_tmp(function()
@@ -245,7 +231,7 @@ return {
 			-- therefore never fire at all.
 			local writers = {}
 			local h = io.popen(
-				"grep -rhoE 'st\\.[a-z_]+ *=[^=]' openuf/*.lua 2>/dev/null")
+				"grep -rhoE 'st\\.[a-z_]+ *=[^=]' src/*.lua 2>/dev/null")
 			if not h then return end
 			for line in h:lines() do
 				local f = line:match("^st%.([a-z_]+)")
@@ -321,25 +307,25 @@ return {
 				state.save({
 					adopted = true, authkey = "f00d",
 					mac = "00:00:5e:00:53:16", led_enabled = false,
-					locating = true, locate_prev_trigger = "phy0tpt",
-					ip_mode = "static", swvlan_backup = {["10"] = "0t 2 3"},
+					locating = true, led_scheme = 2,
+					ip_mode = "static", dsa_brlan_ports = {"lan1", "lan2"},
 					atf_enabled = false,
 				})
 				local st = state.load()
 				assert_eq(st.mac, "00:00:5e:00:53:16", "identity mac survives")
 				assert_false(st.led_enabled, "led_enabled survives as false, not nil")
 				assert_true(st.locating, "locating survives")
-				assert_eq(st.locate_prev_trigger, "phy0tpt", "the LED's trigger survives")
+				assert_eq(st.led_scheme, 2, "the LED hand-back marker survives")
 				assert_eq(st.ip_mode, "static", "the static-vs-DHCP guard survives")
-				assert_eq(st.swvlan_backup["10"], "0t 2 3", "the VLAN ledger survives")
-				assert_false(st.atf_enabled, "a pushed ATF off survives as false, not nil")
+				assert_eq(st.dsa_brlan_ports[2], "lan2", "the VLAN ledger survives")
+				assert_eq(st.atf_enabled, false, "a pushed ATF off survives as false, not nil")
 
 				-- Absent stays absent: readers test `~= nil` for "never set",
 				-- so a field must not materialise out of nowhere.
 				state.save({adopted = true, authkey = "f00d"})
 				local bare = state.load()
 				assert_nil(bare.led_enabled, "an unset field loads as nil, not false")
-				assert_nil(bare.swvlan_backup, "and not as an empty table")
+				assert_nil(bare.dsa_brlan_ports, "and not as an empty table")
 
 				-- state.json is hand-editable and syswrapper-written; a wrong
 				-- type must be dropped at the boundary rather than reaching a
@@ -395,6 +381,53 @@ return {
 					"a controller-assigned URL wins over the default")
 			end)
 			state.DEFAULT_INFORM_URL = orig_default
+		end
+	},
+	{
+		name = "state: a failed write or close raises, removes the temp file and keeps the good state",
+		fn = function()
+			with_tmp(function()
+				state.save({adopted = true, authkey = "f00d"})
+				local real_open = state._open
+				local made = {}
+				for _, failing in ipairs({"write", "close"}) do
+					state._open = function(path, mode)
+						local f = real_open(path, mode)
+						made[#made + 1] = path
+						return {
+							write = function(_, s)
+								if failing == "write" then return nil, "No space left on device" end
+								return f:write(s)
+							end,
+							close = function()
+								f:close()
+								if failing == "close" then return nil, "No space left on device" end
+								return true
+							end,
+						}
+					end
+					local ok, err = pcall(state.save, {adopted = false, authkey = "beef"})
+					state._open = real_open
+					assert_false(ok, "a failed " .. failing .. " raises")
+					assert_contains(tostring(err), "No space", "with the reason")
+					assert_eq(state.load().authkey, "f00d", "the good state.json is untouched")
+					assert_nil(io.open(made[#made], "r"), "the temp file is gone")
+				end
+				assert_true(made[1] ~= TMP .. ".tmp", "the temp name is per process, not syswrapper's")
+				assert_true(made[1]:find(TMP .. ".tmp.", 1, true) == 1, "next to the file")
+			end)
+		end
+	},
+	{
+		name = "state: save remembers what it wrote",
+		fn = function()
+			with_tmp(function()
+				state.save({adopted = true, authkey = "f00d"})
+				local f = io.open(TMP, "r")
+				local text = f:read("*a")
+				f:close()
+				assert_eq(state.last_written, text, "the exact text on disk")
+			end)
 		end
 	},
 }

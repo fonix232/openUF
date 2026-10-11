@@ -9,9 +9,10 @@
 	5GHz/6GHz vaps only, emitted only when wifi_caps2 bit 0x20
 	(supportsAssistedRoaming) is claimed. The name says what a UniFi AP does
 	with it: a BSS Transition Management request, then a disassociation.
-	inform.lua parses it; ucihelper stamps the threshold on the wifi-iface as
-	openuf_roam_assist; get_vap_table reads it back for build_json, which
-	hands this module one observation per associated station per heartbeat.
+	unifi/wlan.lua parses it; ucihelper stamps the threshold on the wifi-iface
+	as openuf_roam_assist; get_vap_table reads it back for report.lua, which
+	collects one observation per associated station per heartbeat; inform.lua's
+	loop hands them to tick() below.
 
 	WHY NOT usteer's OWN ROAM TRIGGER
 
@@ -29,6 +30,10 @@
 	old. If the client moved in that time the request can name an AP that
 	is no longer better; the client then picks for itself after the
 	disassociation, which is where a UniFi AP would leave it too.
+
+	Nothing here takes the radio off its channel: the readings are the ones
+	usteer already shares between APs, and the only frames sent are to the
+	client, on the channel it is already on.
 
 	WHAT HAPPENS TO A CLIENT
 
@@ -50,12 +55,16 @@
 ]]--
 
 local M = {}
-local util = package.loaded["openuf.util"]
-	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
 -- Seams, mirroring rrmscan.lua.
-M._popen = util.popen
-M._exec = os.execute
+M._popen = function(cmd)
+	local f = io.popen(cmd)
+	if not f then return nil end
+	local out = f:read("*a")
+	f:close()
+	return out
+end
+M._exec = function(cmd) return os.execute(cmd) end
 M._load_cjson = function()
 	local ok, mod = pcall(require, "cjson")
 	return ok and mod or nil
@@ -122,7 +131,8 @@ function M.find_candidate(obs, client_nodes, nodes, diff_db)
 		-- A remote node only: another radio of this same AP is not "another
 		-- AP", and UniFi's own event for this is a move between APs
 		-- (MOVED_DUE_TO_ROAMING_ASSISTANT).
-		if name:find("#", 1, true) and info and signal and not n.connected
+		if type(name) == "string" and name:find("#", 1, true) and type(info) == "table"
+			and signal and not n.connected
 			and info.ssid == obs.ssid
 			and band ~= nil and band_of(info.freq) == band
 			and type(info.rrm_nr) == "table" and type(info.rrm_nr[3]) == "string"
@@ -167,15 +177,68 @@ end
 
 -- One pass. observations: one per associated station on a vap with Roaming
 -- Assistant on: {ifname, ssid, mac, signal, connected_sec, threshold}.
--- opts.diff_db overrides DEFAULT_DIFF_DB. opts.on_steer(mac), when given, is
--- called just before each BTM request and disassociation (assoctrack's kick
--- ledger: the departure that follows is reported as Roaming Assistant's).
--- Returns the number of actions.
+-- opts.diff_db overrides DEFAULT_DIFF_DB. Returns the number of actions.
+-- Whether usteer sees mac associated to another AP (a remote node, "#" in
+-- its name): true, false, or nil when usteer cannot answer.
+function M.connected_elsewhere(mac)
+	if not safe("x", mac) then return nil end
+	local info = ubus_json(string.format(
+		"ubus call usteer get_client_info '{\"address\":\"%s\"}'", mac))
+	if not (info and type(info.nodes) == "table") then return nil end
+	for name, n in pairs(info.nodes) do
+		if type(name) == "string" and name:find("#", 1, true) and type(n) == "table"
+				and n.connected == true then
+			return true
+		end
+	end
+	return false
+end
+
+-- What the Roaming Assistant did to a client that has just left, for its
+-- departure event (unifi/staevents.lua), each action reported once:
+--   "btm"       it left while a BSS Transition request waited out its GRACE
+--               (last seen inside it: the disassociation never came) and is
+--               now associated to another AP -- a roam;
+--   "requested" the same departure, but no other AP is seen to have it (or
+--               usteer cannot say): moved by the Roaming Assistant, not
+--               claimed as a roam;
+--   "disassoc"  it was disassociated within `window` seconds;
+--   nil         none of these.
+-- A client's state outlives its departure by FORGET, which covers the
+-- heartbeat that notices it gone.
+function M.departure_cause(mac, now, window)
+	local cs = M._state[mac]
+	if not cs then return nil end
+	local p = cs.pending
+	if p then
+		cs.pending = nil
+		if (cs.seen_at or 0) - p.at < M.GRACE and now - p.at <= M.GRACE + (window or 120) then
+			cs.reported_at = cs.acted_at
+			return M.connected_elsewhere(mac) == true and "btm" or "requested"
+		end
+		return nil
+	end
+	if cs.acted_at and cs.reported_at ~= cs.acted_at and now - cs.acted_at <= (window or 120) then
+		cs.reported_at = cs.acted_at
+		return "disassoc"
+	end
+	return nil
+end
+
 function M.tick(observations, now, opts)
 	local diff_db = tonumber(opts and opts.diff_db) or M.DEFAULT_DIFF_DB
-	local on_steer = opts and opts.on_steer
-	local function steered(mac) if on_steer then pcall(on_steer, mac) end end
 	local actions = 0
+	-- A client locked to this AP ("Lock to Access Point", opts.locked, a set
+	-- of lowercase MACs) is left alone: every other AP refuses it, so moving
+	-- it would only disconnect it.
+	local locked = opts and opts.locked
+	if locked and next(locked) then
+		local kept = {}
+		for _, o in ipairs(observations or {}) do
+			if not locked[tostring(o.mac):lower()] then kept[#kept + 1] = o end
+		end
+		observations = kept
+	end
 	local nodes = nil  -- fetched lazily: most heartbeats need no ubus at all
 
 	for _, o in ipairs(observations or {}) do
@@ -193,7 +256,6 @@ function M.tick(observations, now, opts)
 			-- same BSS after GRACE: disassociate with the short ban.
 			if cs.pending.ifname == o.ifname and now - cs.pending.at >= M.GRACE then
 				if safe(o.ifname, o.mac) then
-					steered(o.mac)
 					disassociate(o.ifname, o.mac)
 					M._log(string.format("%s still on %s after BSS transition "
 						.. "request; disassociated (ban %d s)", o.mac, o.ifname,
@@ -229,7 +291,6 @@ function M.tick(observations, now, opts)
 				local cand = info and type(info.nodes) == "table"
 					and M.find_candidate(o, info.nodes, nodes, diff_db)
 				if cand and safe(o.ifname, o.mac, cand.nr) then
-					steered(o.mac)
 					btm_request(o.ifname, o.mac, cand.nr)
 					M._log(string.format("%s at %d dBm on %s (threshold %d); "
 						.. "BSS transition request to %s (%s, %d dBm)",

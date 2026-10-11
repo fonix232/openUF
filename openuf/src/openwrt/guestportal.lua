@@ -1,373 +1,26 @@
 --[[
-	Guest portal (Hotspot) enforcement: the controller's guest ebtables rules,
-	re-expressed in nftables, plus the HTTP answer that sends an unauthorized
-	guest to the portal. LAB-VALIDATED ONLY (2026-10-10): never run against a
-	real guest WLAN on the production APs.
+	The guest portal's local HTTP answer (LAB-VALIDATED UPSTREAM ONLY, never
+	run on hardware): what sends an unauthorized guest to the controller's
+	portal. The nft side -- the marking, the hand-off to the bridge and the
+	NAT redirect to PORT -- is guestguard.lua's, the one owner of the guest
+	tables.
 
-	What the controller pushes (PROTOCOL-VALIDATION.md, "Guest portal
-	(Hotspot)"): a GUESTIN chain on every guest VAP's ingress (policy DROP)
-	and a GUESTOUT chain on its egress, ~47 ebtables fragments in all, plus
-	redirector.url (the portal) and three iptables REDIRECTs for the frames
-	the ebtables rules mark. The stock firmware's own parts are the
-	AUTHORIZED_GUESTS chain -- pushed empty, the device fills it from
-	authorize-guest -- and a local HTTP/DNS answerer for the marked frames.
-
-	Not a verbatim translator. parse() reads the facts the rules carry: the
-	(ip, port) pairs a guest may always reach (the portal), the ones to
-	answer locally (`-I GUESTIN ... -j REDIRECT_HTTP`), and the subnets
-	dropped either way. reconcile() builds openUF's own chains from them, in
-	the stock order:
-
-	  in:  EAPOL, portal accepts, intercepts, broadcast DHCP request, ARP,
-	       DNS -> accept; IPv6, other broadcast, multicast, restricted
-	       subnets -> drop; authorized MAC to another host -> accept;
-	       tcp 80 -> local answer; everything else -> drop
-	  out: DHCP reply, ARP -> accept; IPv6, other broadcast, multicast -> drop
-
-	After the authorized accept, a `selfrun` chain that lets every guest
-	through while the controller is unreachable (set_selfrun); with
-	selfrun_guest_mode=off the guest VAPs go down instead (inform._guest_selfrun).
-
-	Deliberate narrowings, all of them stated in README/USAGE:
-	- DNS passes for every guest. The stock firmware answers an unauthorized
-	  guest's DNS itself (dnsmasq on br0); openUF runs no resolver, and a
-	  captive-portal check needs real answers to reach the HTTP step at all.
-	- No HTTPS answer. Marked 443 would need a certificate the client
-	  trusts; it is dropped, so the client's HTTP probe is what finds the
-	  portal.
-	- The local answer needs an IPv4 address on the guest VAP's bridge: the
-	  frame is handed to the bridge's own stack (ebtables `redirect`, here
-	  `ether daddr set` + `pkttype set host`) and NAT-redirected to M.PORT,
-	  and the reply leaves from that bridge. A guest WLAN on a VLAN bridge
-	  without an address stays blocked but sees no portal.
-
-	Mechanism as in firewall.lua/l2guard.lua: own tables, rebuilt from
-	scratch on every reconcile, kernel state that dies with a reboot and is
-	rebuilt at startup from state.json, each rebuild one nft transaction
-	(util.nft_apply). The authorized set alone is refreshed in place
-	(set_authorized), so an authorize-guest does not open a gap in the rest.
+	inform.lua listens on PORT while the portal is enforced and answers
+	between heartbeats with a 302 to redirector.url, carrying id=<guest MAC,
+	from /proc/net/arp>, ap=<AP MAC>, t=<now>, url=<what the guest asked
+	for> and ssid=: the parameters the controller's redirect handler reads
+	(CFR, 10.4.57, devmgr/IXbVCbWPDmZdkfbJ; PROTOCOL-VALIDATION.md, "Guest
+	portal (Hotspot)"). A request is read with a bound, so a guest cannot
+	hold the inform loop.
 ]]--
 
 local M = {}
-local util = package.loaded["openuf.util"]
-	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
-M._exec = os.execute
+M.PORT = require("openwrt.guestguard").PORTAL_PORT
 
-M.BRIDGE_TABLE = "bridge openuf_guest"
-M.NAT_TABLE    = "ip openuf_guest"
--- The stock REDIRECT_HTTP mark; the iptables side matches it under
--- 0xc0000000.
-M.MARK_HTTP    = "0x40000000"
--- Where the NAT-redirected HTTP is answered. Not 80: uhttpd/LuCI may hold it.
-M.PORT         = 8820
-
--- ─── Parsing ─────────────────────────────────────────────────────────────────
-
-local function is_ipv4(s)
-	if type(s) ~= "string" then return false end
-	local a, b, c, d = s:match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
-	if not a then return false end
-	for _, o in ipairs({a, b, c, d}) do
-		if tonumber(o) > 255 then return false end
-	end
-	return true
+local function is_mac(s)
+	return type(s) == "string" and s:match("^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$") ~= nil
 end
-
-local function is_cidr(s)
-	if type(s) ~= "string" then return false end
-	local ip, len = s:match("^([%d%.]+)/(%d+)$")
-	if ip then return is_ipv4(ip) and tonumber(len) <= 32 end
-	return is_ipv4(s)
-end
-
-local function is_port(s)
-	local n = tonumber(s)
-	return n ~= nil and n >= 1 and n <= 65535 and n == math.floor(n)
-end
-
--- The fixed skeleton of the guest ruleset: chain declarations and rules the
--- chains above re-create by construction. %S+ stands for a VAP name.
-local SKELETON = {
-	"^%-t nat %-N GUESTIN %-P DROP$",
-	"^%-t nat %-N GUESTOUT %-P ACCEPT$",
-	"^%-t nat %-A POSTROUTING %-%-out%-interface %S+ %-j GUESTOUT$",
-	"^%-t nat %-A GUESTIN %-%-in%-interface %S+ %-%-proto 0x888e %-j ACCEPT$",
-	"^%-t nat %-A GUESTIN %-p 0x800 %-%-pkttype%-type broadcast %-%-ip%-proto 17 %-%-ip%-sport 68 %-%-ip%-dport 67 %-j ACCEPT$",
-	"^%-t nat %-A GUESTIN %-p arp %-j ACCEPT$",
-	"^%-t nat %-N GUEST_DNS %-P DROP$",
-	"^%-t nat %-A GUESTIN %-p 0x800 %-%-ip%-proto 17 %-%-ip%-dport 53 %-j GUEST_DNS$",
-	"^%-t nat %-A GUESTIN %-p 0x800 %-%-ip%-proto 6 %-%-ip%-dport 53 %-j GUEST_DNS$",
-	"^%-t nat %-A GUESTIN %-p 0x86dd %-j DROP$",
-	"^%-t nat %-A GUESTIN %-%-pkttype%-type broadcast %-j DROP$",
-	"^%-t nat %-A GUESTOUT %-p 0x800 %-%-pkttype%-type broadcast %-%-ip%-proto 17 %-%-ip%-sport 67 %-%-ip%-dport 68 %-j ACCEPT$",
-	"^%-t nat %-A GUESTOUT %-p arp %-j ACCEPT$",
-	"^%-t nat %-A GUESTOUT %-p 0x86dd %-j DROP$",
-	"^%-t nat %-A GUESTOUT %-%-pkttype%-type broadcast %-j DROP$",
-	"^%-t nat %-N CAPTIVE_PORTAL %-P RETURN$",
-	"^%-t nat %-A GUESTIN %-p 0x800 %-%-ip%-proto 6 %-%-ip%-dport 443 %-j CAPTIVE_PORTAL$",
-	"^%-t nat %-N REDIRECT_HTTP$",
-	"^%-t nat %-A REDIRECT_HTTP %-j mark %-%-mark%-or 0x40000000 %-%-mark%-target CONTINUE$",
-	"^%-t nat %-A REDIRECT_HTTP %-j redirect$",
-	"^%-t nat %-N REDIRECT_HTTPS$",
-	"^%-t nat %-A REDIRECT_HTTPS %-j mark %-%-mark%-or 0x80000000 %-%-mark%-target CONTINUE$",
-	"^%-t nat %-A REDIRECT_HTTPS %-j redirect$",
-	"^%-t nat %-N AUTHORIZED_GUESTS %-P RETURN$",
-	"^%-t nat %-A GUESTIN %-p 0x800 %-%-pkttype%-type otherhost %-j AUTHORIZED_GUESTS$",
-	"^%-t nat %-A GUESTIN %-p 0x800 %-%-ip%-proto 6 %-%-ip%-dport 80 %-j REDIRECT_HTTP$",
-	"^%-t nat %-A GUESTIN %-p 0x800 %-%-ip%-proto 6 %-%-ip%-dport 443 %-j REDIRECT_HTTPS$",
-	"^%-t nat %-N REDIRECT_DNS$",
-	"^%-t nat %-A REDIRECT_DNS %-j mark %-%-mark%-or 0x40000000 %-%-mark%-target CONTINUE$",
-	"^%-t nat %-A REDIRECT_DNS %-j redirect$",
-	"^%-t nat %-A GUEST_DNS %-p 0x800 %-%-ip%-proto 17 %-%-ip%-dport 53 %-j AUTHORIZED_GUESTS$",
-	"^%-t nat %-A GUEST_DNS %-p 0x800 %-%-ip%-proto 6 %-%-ip%-dport 53 %-j AUTHORIZED_GUESTS$",
-	"^%-t nat %-A GUEST_DNS %-p 0x800 %-%-ip%-proto 17 %-%-ip%-dport 53 %-j REDIRECT_DNS$",
-	"^%-t nat %-A GUEST_DNS %-p 0x800 %-%-ip%-proto 6 %-%-ip%-dport 53 %-j REDIRECT_DNS$",
-}
-
--- Chains only the guest ruleset uses: a rule naming one of them is the
--- portal's, whether or not parse() knows its shape.
-local GUEST_CHAINS = {"GUESTIN", "GUESTOUT", "GUEST_DNS", "CAPTIVE_PORTAL",
-	"REDIRECT_HTTP", "REDIRECT_HTTPS", "REDIRECT_DNS", "AUTHORIZED_GUESTS"}
-
--- Whether an ebtables fragment belongs to the guest ruleset (l2guard leaves
--- these to this module rather than reporting them as unrecognised).
-function M.is_guest_rule(v)
-	if type(v) ~= "string" then return false end
-	for _, c in ipairs(GUEST_CHAINS) do
-		if (" " .. v .. " "):find(" " .. c .. " ", 1, true) then return true end
-	end
-	return false
-end
-
--- One guest-ruleset fragment into spec. Returns false when the shape is
--- not known.
-local function classify(v, spec)
-	local dev = v:match("^%-t nat %-A PREROUTING %-%-in%-interface (%S+) %-j GUESTIN$")
-	if dev then
-		spec.devs[#spec.devs + 1] = dev
-		return true
-	end
-	for _, p in ipairs(SKELETON) do
-		if v:match(p) then return true end
-	end
-	local port, ip = v:match("^%-t nat %-A GUESTIN %-p 0x800 %-%-ip%-proto 6 %-%-ip%-dport (%d+) %-%-ip%-dst (%S+) %-j ACCEPT$")
-	if not port then
-		ip, port = v:match("^%-t nat %-I GUESTIN %-p 0x800 %-%-ip%-dst (%S+) %-%-ip%-proto 6 %-%-ip%-dport (%d+) %-j ACCEPT$")
-	end
-	if port then
-		if not (is_ipv4(ip) and is_port(port)) then return false end
-		spec.accept[#spec.accept + 1] = {ip = ip, port = tonumber(port)}
-		return true
-	end
-	ip, port = v:match("^%-t nat %-I GUESTIN %-p 0x800 %-%-ip%-dst (%S+) %-%-ip%-proto 6 %-%-ip%-dport (%d+) %-j REDIRECT_HTTP$")
-	if ip then
-		if not (is_ipv4(ip) and is_port(port)) then return false end
-		spec.intercept[#spec.intercept + 1] = {ip = ip, port = tonumber(port)}
-		return true
-	end
-	local chain, net = v:match("^%-t nat %-A (GUEST[IO][NU]T?) %-p 0x800 %-%-ip%-dst (%S+) %-j DROP$")
-	if chain == "GUESTIN" or chain == "GUESTOUT" then
-		if not is_cidr(net) then return false end
-		local list = chain == "GUESTIN" and spec.restrict or spec.restrict_out
-		list[#list + 1] = net
-		return true
-	end
-	return false
-end
-
--- The portal as pushed, or nil when the blob does not say (no
--- redirector.status: a partial push). enabled is false when the portal is
--- off, or on but without the facts to enforce it (no URL, no GUESTIN hook).
-function M.parse(sys_raw)
-	if type(sys_raw) ~= "string" then return nil end
-	local spec = {enabled = false, devs = {}, accept = {}, intercept = {},
-		restrict = {}, restrict_out = {}, unknown = {}}
-	local status
-	for line in (sys_raw .. "\n"):gmatch("([^\n]*)\n") do
-		local k, v = line:match("^([^=]+)=(.*)$")
-		if k == "redirector.status" then
-			status = v
-		elseif k == "redirector.url" then
-			-- Spliced into a Location header: one token, http(s) only.
-			if v:match("^https?://[%w%.%-:%[%]]+[%S]*$") and not v:find("[%c\"<>\\]") then
-				spec.url = v
-			end
-		elseif k and k:match("^ebtables%.%d+%.cmd$") and M.is_guest_rule(v) then
-			if not classify(v, spec) then spec.unknown[#spec.unknown + 1] = v end
-		end
-	end
-	if status == nil then return nil end
-	spec.enabled = (status == "enabled" and spec.url ~= nil and #spec.devs > 0)
-	return spec
-end
-
--- ─── Apply ───────────────────────────────────────────────────────────────────
-
-local valid_ifname = util.valid_ifname
-
-local is_mac = util.is_mac
-
-M._read = util.read_file
-
--- The MAC of the bridge a VAP is enslaved to, or nil when it is not bridged.
-function M.bridge_mac(ifname)
-	if not valid_ifname(ifname) then return nil end
-	local raw = M._read("/sys/class/net/" .. ifname .. "/master/address")
-	local mac = raw and raw:match("^%s*(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)")
-	return mac and mac:lower() or nil
-end
-
--- The statement that puts macs (a list) into the authorized set, or nil when
--- none is valid.
-local function authorized_stmt(macs)
-	local list = {}
-	for _, mac in ipairs(macs or {}) do
-		if is_mac(mac) then list[#list + 1] = mac:lower() end
-	end
-	if #list == 0 then return nil end
-	return "add element " .. M.BRIDGE_TABLE .. " authorized { " .. table.concat(list, ", ") .. " }"
-end
-
-local SELFRUN_RULE = "add rule %s selfrun meta pkttype other accept"
-
--- Refill the authorized set from macs (a list), flush and refill in one
--- transaction: an authorized guest is never dropped in between. False when
--- the table is not there.
-function M.set_authorized(macs)
-	local add = authorized_stmt(macs)
-	return util.nft_run("flush set " .. M.BRIDGE_TABLE .. " authorized\n"
-		.. (add and add .. "\n" or ""), M._exec, true)
-end
-
--- selfrun_guest_mode=pass while the controller is unreachable (the firmware's
--- AUTHORIZED_GUESTS ACCEPT-all): every guest
--- is let through as an authorized one would be (to other hosts only, and
--- still not into the restricted subnets), since nobody can log in to the
--- portal meanwhile. An empty chain otherwise. Refreshed in place.
-function M.set_selfrun(pass)
-	return util.nft_run("flush chain " .. M.BRIDGE_TABLE .. " selfrun\n"
-		.. (pass and SELFRUN_RULE:format(M.BRIDGE_TABLE) .. "\n" or ""), M._exec, true)
-end
-
--- Rebuild both tables for spec on these VAPs ({ifname=, bridge_mac=}), with
--- macs authorized and selfrun (see set_selfrun) applied. Returns the number of
--- rules installed (0, tables gone, when there is nothing to enforce or
--- nothing to enforce it on).
-function M.reconcile(spec, vaps, macs, selfrun)
-	local tables = {M.BRIDGE_TABLE, M.NAT_TABLE}
-	if type(spec) ~= "table" or not spec.enabled then
-		util.nft_apply(tables, nil, M._exec)
-		return 0
-	end
-	local names, redirect = {}, {}
-	for _, v in ipairs(vaps or {}) do
-		if valid_ifname(v.ifname) then
-			names[#names + 1] = '"' .. v.ifname .. '"'
-			if is_mac(v.bridge_mac) then redirect[#redirect + 1] = v end
-		else
-			io.stderr:write("guestportal: ignoring odd interface name "
-				.. ("%q"):format(tostring(v.ifname)) .. "\n")
-		end
-	end
-	if #names == 0 then
-		util.nft_apply(tables, nil, M._exec)
-		io.stderr:write("guestportal: no guest interfaces up yet -- rules deferred\n")
-		return 0
-	end
-	local T = M.BRIDGE_TABLE
-	local set = "{ " .. table.concat(names, ", ") .. " }"
-
-	local rules = {
-		{"pre",  "iifname " .. set .. " jump guestin"},
-		{"post", "oifname " .. set .. " jump guestout"},
-		{"guestin", "ether type 0x888e accept"},
-	}
-	local function add(chain, rule) rules[#rules + 1] = {chain, rule} end
-	-- The controller inserts these at the top (-I): ahead of every drop.
-	for _, a in ipairs(spec.intercept) do
-		add("guestin", "ip daddr " .. a.ip .. " tcp dport " .. a.port .. " jump redirect_http")
-	end
-	for _, a in ipairs(spec.accept) do
-		add("guestin", "ip daddr " .. a.ip .. " tcp dport " .. a.port .. " accept")
-	end
-	add("guestin", "meta pkttype broadcast udp sport 68 udp dport 67 accept")
-	add("guestin", "ether type arp accept")
-	add("guestin", "ether type ip udp dport 53 accept")
-	add("guestin", "ether type ip tcp dport 53 accept")
-	add("guestin", "ether type ip6 drop")
-	add("guestin", "meta pkttype broadcast drop")
-	for _, net in ipairs(spec.restrict) do
-		add("guestin", "ip daddr " .. net .. " drop")
-	end
-	-- AUTHORIZED_GUESTS: --pkttype-type otherhost, i.e. not to the AP itself.
-	add("guestin", "ether saddr @authorized meta pkttype other accept")
-	add("guestin", "jump selfrun")
-	add("guestin", "tcp dport 80 jump redirect_http")
-	add("guestin", "drop")
-	add("redirect_http", "meta mark set meta mark or " .. M.MARK_HTTP)
-	for _, v in ipairs(redirect) do
-		add("redirect_http", 'iifname "' .. v.ifname .. '" ether daddr set ' .. v.bridge_mac:lower()
-			.. " meta pkttype set host accept")
-	end
-	add("redirect_http", "drop")
-	add("guestout", "meta pkttype broadcast udp sport 67 udp dport 68 accept")
-	add("guestout", "ether type arp accept")
-	add("guestout", "ether type ip6 drop")
-	add("guestout", "meta pkttype broadcast drop")
-	for _, net in ipairs(spec.restrict_out) do
-		add("guestout", "ip daddr " .. net .. " drop")
-	end
-
-	local stmts = {
-		"add set " .. T .. " authorized { type ether_addr; }",
-		"add chain " .. T .. " pre { type filter hook prerouting priority -300; policy accept; }",
-		"add chain " .. T .. " post { type filter hook postrouting priority 0; policy accept; }",
-		"add chain " .. T .. " guestin",
-		"add chain " .. T .. " guestout",
-		"add chain " .. T .. " redirect_http",
-		"add chain " .. T .. " selfrun",
-	}
-	local first = #stmts + 1
-	for _, r in ipairs(rules) do
-		stmts[#stmts + 1] = "add rule " .. T .. " " .. r[1] .. " " .. r[2]
-	end
-	local last = #stmts
-	stmts[#stmts + 1] = authorized_stmt(macs)
-	if selfrun then stmts[#stmts + 1] = SELFRUN_RULE:format(T) end
-	-- The marked frames reach the bridge's own stack; send them to M.PORT.
-	stmts[#stmts + 1] = "add chain " .. M.NAT_TABLE .. " pre { type nat hook prerouting priority -101; }"
-	stmts[#stmts + 1] = "add rule " .. M.NAT_TABLE .. " pre meta mark and 0xc0000000 == " .. M.MARK_HTTP
-		.. " meta l4proto tcp redirect to :" .. M.PORT
-	local _, bad = util.nft_apply(tables, stmts, M._exec)
-
-	local n, failed = 0, 0
-	for i = first, last do
-		if bad[i] then
-			failed = failed + 1
-			io.stderr:write("openuf: guestportal: nft rejected " .. ("%q"):format(rules[i - first + 1][2]) .. "\n")
-		else
-			n = n + 1
-		end
-	end
-	if failed > 0 then
-		io.stderr:write("openuf: guestportal: " .. failed .. " rule(s) not installed; iifname/oifname in "
-			.. "the bridge family need kmod-nft-bridge. The guest portal is NOT fully enforced.\n")
-	end
-	if bad[#stmts] then
-		io.stderr:write("openuf: guestportal: nft rejected the NAT redirect (kmod-nft-nat?). "
-			.. "Guests stay blocked but are not shown the portal.\n")
-	else
-		n = n + 1
-	end
-	if #redirect < #names then
-		io.stderr:write("openuf: guestportal: " .. (#names - #redirect) .. " guest interface(s) not "
-			.. "bridged; their guests are blocked but not shown the portal\n")
-	end
-	return n
-end
-
--- ─── The HTTP answer ────────────────────────────────────────────────────────
 
 local function urlencode(s)
 	return (tostring(s):gsub("[^%w%-%._~]", function(c)
@@ -375,7 +28,8 @@ local function urlencode(s)
 	end))
 end
 
--- The station MAC behind an IPv4 address, from /proc/net/arp's text.
+-- The station MAC behind an IPv4 address, from /proc/net/arp's text: a
+-- complete entry (flags 0x2) only.
 function M.arp_mac(ip, text)
 	for line in ((text or "") .. "\n"):gmatch("([^\n]*)\n") do
 		local a, flags, mac = line:match("^(%S+)%s+%S+%s+(%S+)%s+(%S+)")
@@ -389,7 +43,7 @@ end
 
 -- Where the portal is: the controller's redirect handler takes the guest
 -- from id=, the AP from ap=, and refuses a t= more than 60 s from its own
--- clock (PROTOCOL-VALIDATION.md, "Guest portal (Hotspot)").
+-- clock.
 function M.location(ctx, mac, orig_url, ssid, now)
 	local q = {"id=" .. urlencode(mac), "ap=" .. urlencode(ctx.ap or ""), "t=" .. string.format("%.0f", now)}
 	if orig_url then q[#q + 1] = "url=" .. urlencode(orig_url) end
@@ -397,8 +51,7 @@ function M.location(ctx, mac, orig_url, ssid, now)
 	return ctx.url .. (ctx.url:find("?", 1, true) and "&" or "?") .. table.concat(q, "&")
 end
 
--- The request line and Host header, read with a bound: a guest is not
--- allowed to hold the inform loop.
+-- The request line and Host header, read with a bound.
 local function read_request(client)
 	local first, host
 	for i = 1, 32 do

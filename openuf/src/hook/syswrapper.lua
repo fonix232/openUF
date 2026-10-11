@@ -8,7 +8,6 @@
 	  syswrapper.sh set-adopt  <inform_url> <authkey_hex32>
 	  syswrapper.sh set-inform <inform_url>
 	  syswrapper.sh reset-inform
-	  syswrapper.sh 11k-scan          -- the controller's nightly cron job
 
 	authkey_hex32: exactly 32 hex characters (= 16 bytes, AES-128 key).
 	inform_url:    http(s)://host:port/inform
@@ -16,44 +15,34 @@
 	Exit codes: 0 = success, 1 = invalid arguments.
 ]]--
 
-local state
-
--- conf.lua's state_file option, read as TEXT from the conf.lua next to the
--- state.lua that was found. conf.lua cannot simply be dofile()d from here: it
--- dofile()s its modelmap by a path relative to /opt/openuf, and this hook runs
--- from wherever the controller's SSH session happens to land. One uncommented
--- assignment line is all that is needed -- the same approach install.sh takes
--- for inform_url. inform.lua and announce.lua honour the option too, so the
--- three processes that touch state.json agree on where it is; before this none
--- of them did and the option was documentation only.
-local function conf_state_file(dir)
-	local f = io.open(dir .. "conf.lua", "r")
-	if not f then return nil end
-	local src = f:read("*a")
-	f:close()
-	for line in src:gmatch("[^\n]+") do
-		local v = line:match('^%s*state_file%s*=%s*"([^"]+)"')
-		if v then return v end
-	end
-	return nil
+-- Run from wherever the controller's SSH session lands: put the install
+-- directory (this file's parent) on package.path so openUF's modules load
+-- by name.
+do
+	local dir = (debug.getinfo(1, "S").source:match("^@(.*/)") or "./"):gsub("hook/$", "")
+	if dir == "" then dir = "./" end
+	package.path = dir .. "?.lua;" .. package.path
 end
 
--- Allow the state module path to be injected for testing
+local state
+
+-- The state_file option (UCI openuf.main.state_file), so that this hook,
+-- inform.lua and announce.lua agree on where state.json is. Read on its own:
+-- config.load() would run the model map, which is not needed here.
+local function conf_state_file()
+	local ok, conf = pcall(require, "config")
+	if not ok then return nil end
+	local v = conf.get("state_file")
+	return (type(v) == "string" and v ~= "") and v or nil
+end
+
+-- Allow the state module to be injected for testing
 local function load_state()
 	if state then return state end
-	-- Try relative paths: called from openuf/ dir or from an absolute install path
-	local paths = {"state.lua", "openuf/state.lua", "/opt/openuf/state.lua"}
-	for _, p in ipairs(paths) do
-		local f = io.open(p, "r")
-		if f then
-			f:close()
-			state = dofile(p)
-			local sf = conf_state_file(p:match("^(.*/)") or "")
-			if sf then state._state_file = sf end
-			return state
-		end
-	end
-	error("syswrapper: cannot find state.lua")
+	state = require("state")
+	local sf = conf_state_file()
+	if sf then state._state_file = sf end
+	return state
 end
 
 local function usage()
@@ -61,7 +50,11 @@ local function usage()
 		"Usage: syswrapper.sh set-adopt <url> <key32hex>\n" ..
 		"       syswrapper.sh set-inform <url>\n" ..
 		"       syswrapper.sh reset-inform\n" ..
-		"       syswrapper.sh 11k-scan\n" ..
+		"       syswrapper.sh netmodel-retry     (re-apply a rolled-back network plan)\n" ..
+		"       syswrapper.sh netmodel-restore   (put the pre-openUF network and WiFi config back)\n" ..
+		"       syswrapper.sh 11k-scan           (the controller's nightly neighbour scan)\n" ..
+		"       syswrapper.sh upgrade <url>      (hand an upgrade to owut; the URL is not fetched)\n" ..
+		"       syswrapper.sh reprovision        (have the controller re-send its full config)\n" ..
 		"\n" ..
 		"key32hex: exactly 32 hexadecimal characters (16 bytes, AES-128)\n"
 	)
@@ -124,72 +117,118 @@ local function cmd_reset_inform()
 	return true
 end
 
--- 11k-scan
--- What the controller's pushed cron job runs at 04:00 every night (see
--- sysconf.lua): a neighbour scan on every radio. The scan itself is the
--- inform daemon's job -- it owns the radios' netdev names and the scan
--- cache, and its next heartbeat carries the result out -- so this only
--- leaves a request file that inform.lua's _maybe_service_scan_request reads
--- each heartbeat.
---
--- The request holds two due times, as UniFi firmware schedules this job
--- (syswrapper.sh elevenk_scan -> elevenk_sched 3600 2, firmware-confirmed for
--- 4.0.15): two scans inside one hour, each 10 s plus a random delay drawn from
--- what is left of the hour. Every AP's crond fires at 04:00 sharp, so without
--- the random delay all APs go off-channel at the same second and each one's
--- sweep finds its neighbours off-channel too. A new request replaces a pending
--- one, as elevenk_sched kills the previous run. The randomness comes from
--- /dev/urandom like the firmware's: math.random seeded from the clock would
--- give two APs started by the same cron second the same delays.
-local scan_request_file = "/tmp/openuf-scan-request"
-local SCAN_WINDOW, SCAN_COUNT, SCAN_DELAY = 3600, 2, 10
-
--- A uniform integer in [0, n). Injectable for tests.
-local function urandom_below(n)
-	local f = io.open("/dev/urandom", "rb")
-	local b = f and f:read(3)
-	if f then f:close() end
-	if not b or #b < 3 then return math.random(0, n - 1) end
-	-- 24 bits: far more than a 3600 s window needs, and clear of the
-	-- 2^31 limit of the APs' LNUM-patched Lua.
-	return ((b:byte(1) * 256 + b:byte(2)) * 256 + b:byte(3)) % n
+-- netmodel-retry
+-- Forget that a network plan was rolled back, so the next push re-applies it
+-- (netmodel.lua refuses a plan that lost the controller once).
+local function cmd_netmodel_retry()
+	local st = load_state()
+	local s  = st.load()
+	s.netmodel_failed, s.netmodel_failed_logged = nil, nil
+	st.save(s)
+	io.stdout:write("syswrapper: the next network push will be applied again\n")
+	return true
 end
-local rand_below = urandom_below
-local now = os.time
 
--- elevenk_run's arithmetic: the window shrinks by each delay taken, so the
--- second scan always lands after the first and both inside the window.
-local function scan_due_times(t0)
-	local left, at, due = SCAN_WINDOW, t0, {}
-	for i = 1, SCAN_COUNT do
-		left = left - SCAN_DELAY
-		if left < 1 then left = 1 end
-		local r = rand_below(left)
-		left = left - r
-		at = at + SCAN_DELAY + r
-		due[i] = at
+-- netmodel-restore
+-- Put back the board's own /etc/config/network from before openUF took the
+-- bridge over (/etc/openuf/network.pre-openuf) and reload -- and its own
+-- /etc/config/wireless (/etc/openuf/wireless.pre-openuf), when own_config
+-- deleted its SSIDs. The controller will manage the AP again on its next
+-- push unless openUF is stopped or the device forgotten first.
+local wireless_pristine = "/etc/openuf/wireless.pre-openuf"
+local function restore_wireless()
+	local f = io.open(wireless_pristine, "r")
+	if not f then return false end
+	local saved = f:read("*a")
+	f:close()
+	local o = io.open("/etc/config/wireless", "w")
+	if not o then return false end
+	o:write(saved)
+	o:close()
+	os.execute("wifi reload >/dev/null 2>&1")
+	return true
+end
+
+local function cmd_netmodel_restore()
+	local ok, nm = pcall(require, "openwrt.netmodel")
+	if not ok then
+		io.stderr:write("syswrapper: netmodel.lua not found\n")
+		return false
 	end
-	return due
+	local st = load_state()
+	local s  = st.load()
+	local net = nm.restore_pristine(s)
+	if net then
+		-- The board's own bridge is back: so are its LEDs' devices.
+		local ok_c, changes = pcall(nm.reconcile_leds)
+		local ok_l, led = pcall(require, "openwrt.led")
+		if ok_c and ok_l then pcall(led.repoint, changes) end
+	end
+	local wifi = restore_wireless()
+	if not (net or wifi) then
+		io.stderr:write("syswrapper: no " .. nm.PRISTINE_FILE .. " or " .. wireless_pristine
+			.. " -- openUF never took the network or the WiFi over\n")
+		return false
+	end
+	st.save(s)
+	io.stdout:write("syswrapper: restored the pre-openUF" .. (net and " network" or "")
+		.. ((net and wifi) and " and" or "") .. (wifi and " wireless" or "") .. " config\n")
+	return true
 end
 
+-- reprovision
+-- Ask the controller for its full config again. The controller only pushes
+-- when the device reports a cfgversion other than the one it expects, and it
+-- deduplicates identical pushes for ten minutes, so this forgets the
+-- cfgversion: the next inform reports none and the controller sends the whole
+-- config. What an openUF update needs to re-apply everything with new logic.
+local function cmd_reprovision()
+	local st = load_state()
+	local s = st.load()
+	s.cfgversion = ""
+	st.save(s)
+	io.stdout:write("syswrapper: cfgversion cleared; the controller re-sends its config on the next inform\n")
+	return true
+end
+
+-- ─── Entry point ─────────────────────────────────────────────────────────────
+
+-- 11k-scan
+-- What the controller's pushed cron job runs every night (see sysconf.lua).
+-- The scan belongs to the inform daemon -- it owns the radios and the 802.11k
+-- beacon-request machinery, and its next heartbeat carries the result out --
+-- so this only leaves a dated request that the daemon picks up within one
+-- interval and discards when it is more than ten minutes old.
+local scan_request_file = "/tmp/openuf-scan-request"
 local function cmd_11k_scan()
-	local t0 = now()
-	local due = scan_due_times(t0)
 	local f = io.open(scan_request_file, "w")
 	if not f then
 		io.stderr:write("syswrapper: cannot write " .. scan_request_file .. "\n")
 		return false
 	end
-	f:write(table.concat(due, "\n"), "\n")
+	f:write(tostring(os.time()), "\n")
 	f:close()
-	local ins = {}
-	for i, t in ipairs(due) do ins[i] = tostring(t - t0) .. " s" end
-	io.stdout:write("syswrapper: neighbour scans requested in " .. table.concat(ins, " and ") ..
-		"; the inform daemon runs each on the heartbeat after it falls due\n")
+	io.stdout:write("syswrapper: neighbour scan requested; the inform daemon picks it up within one heartbeat\n")
 	return true
 end
 
--- ─── Entry point ─────────────────────────────────────────────────────────────
+-- upgrade <url> / upgrade2 <url>
+-- The controller's SSH upgrade verb. The URL is UniFi firmware and is never
+-- fetched; the inform daemon hands the request to owut when
+-- config.upgrade_mode = "owut" (upgrade.lua) and refuses it otherwise.
+local upgrade_request_file = "/tmp/openuf-upgrade-request"
+local function cmd_upgrade(url)
+	local f = io.open(upgrade_request_file, "w")
+	if not f then
+		io.stderr:write("syswrapper: cannot write " .. upgrade_request_file .. "\n")
+		return false
+	end
+	f:write(tostring(os.time()), "\n")
+	f:close()
+	io.stdout:write("syswrapper: upgrade requested (" .. tostring(url)
+		.. " is not fetched; the inform daemon decides)\n")
+	return true
+end
 
 local function main(args)
 	local cmd = args[1]
@@ -203,8 +242,16 @@ local function main(args)
 		end
 	elseif cmd == "reset-inform" then
 		cmd_reset_inform()
+	elseif cmd == "netmodel-retry" then
+		cmd_netmodel_retry()
+	elseif cmd == "netmodel-restore" then
+		if not cmd_netmodel_restore() then os.exit(1) end
 	elseif cmd == "11k-scan" then
 		if not cmd_11k_scan() then os.exit(1) end
+	elseif cmd == "reprovision" then
+		cmd_reprovision()
+	elseif cmd == "upgrade" or cmd == "upgrade2" then
+		if not cmd_upgrade(args[2]) then os.exit(1) end
 	else
 		io.stderr:write("syswrapper: unknown command: " .. tostring(cmd) .. "\n")
 		usage()
@@ -224,12 +271,12 @@ return {
 	cmd_set_adopt  = cmd_set_adopt,
 	cmd_set_inform = cmd_set_inform,
 	cmd_reset_inform = cmd_reset_inform,
+	cmd_netmodel_retry = cmd_netmodel_retry,
 	cmd_11k_scan = cmd_11k_scan,
-	_set_scan_request_file = function(p) scan_request_file = p end,
-	_set_rand = function(f) rand_below = f or urandom_below end,
-	_set_clock = function(f) now = f or os.time end,
-	_urandom_below = urandom_below,
-	SCAN_WINDOW = SCAN_WINDOW,
+	cmd_upgrade  = cmd_upgrade,
+	cmd_reprovision = cmd_reprovision,
+	_upgrade_request_file = function(p) upgrade_request_file = p end,
+	_scan_request_file = function(p) scan_request_file = p end,
 	is_hex32 = is_hex32,
 	is_url   = is_url,
 	_set_state = function(s) state = s end,

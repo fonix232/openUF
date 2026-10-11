@@ -47,18 +47,29 @@
 	and with it SSID, security and channel width (see parse_report). Both are
 	collected, and the control-socket record wins. Entries that the passive
 	cache already knows keep the cache's version, which alone can carry the
-	sibling tag. This AP's own BSSIDs and its siblings' are skipped (merge_into).
+	sibling tag. This AP's own BSSIDs are skipped (merge_into); siblings are
+	kept and tagged by the caller.
 ]]--
 
 local M = {}
-local util = package.loaded["openuf.util"]
-	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
 -- Injectable seams, mirroring ucihelper/bcfilter.
-M._popen = util.popen
-M._exec  = os.execute
-M._read_file = util.read_file
+M._popen = function(cmd)
+	local f = io.popen(cmd)
+	if not f then return nil end
+	local out = f:read("*a")
+	f:close()
+	return out
+end
+M._exec  = function(cmd) return os.execute(cmd) end
 M._now   = function() return os.time() end
+M._read_file = function(path)
+	local f = io.open(path, "r")
+	if not f then return nil end
+	local s = f:read("*a")
+	f:close()
+	return s
+end
 
 -- Where the background collector parks hostapd's ubus notifications.
 M.EVENT_FILE = "/tmp/openuf-rrm.jsonl"
@@ -69,10 +80,7 @@ M.EVENT_FILE = "/tmp/openuf-rrm.jsonl"
 -- `ubus subscribe hostapd.<iface>` receives them. Confirmed live: a listen
 -- across two requests captured zero notifications while a subscribe over the
 -- same window captured 22 beacon-reports.
-local SUBSCRIBE_MATCH = "ubus subscribe hostapd"
--- The collector's fdb half (collector_script, opts.fdb). Bracketed for the
--- reason collector_stop gives.
-local FDB_KILL = "kill $(pgrep -f '[b]ridge monitor fdb') 2>/dev/null"
+local SUBSCRIBE_MATCH = "^ubus subscribe hostapd"
 
 -- 802.11 RCPI is a 0.5-dBm-step scale anchored at -110 dBm (IEEE 802.11-2020
 -- 9.4.2.38), so dBm = rcpi/2 - 110. Sanity-checked against reality on the
@@ -273,27 +281,43 @@ end
 -- get_clients exposes them in the first byte of "rrm".
 local RRM_BEACON_PASSIVE = 0x10  -- bit 4
 local RRM_BEACON_ACTIVE  = 0x20  -- bit 5
+local RRM_BEACON_TABLE   = 0x40  -- bit 6
 
--- Stations on this BSS that can actually go and look. Deliberately requires
--- passive or active measurement and NOT beacon-table: a table-only client
--- reports from a cache it may never have filled, and the one real example
--- observed acked every request and answered none. hostapd agrees about the
--- direction -- asking a table-only client for a passive measurement is
--- refused by hostapd itself with "does not support passive beacon report",
--- before anything reaches the air.
+-- Request modes (IEEE 802.11-2020 9.4.2.20.7, Measurement Mode).
+M.MODE_ACTIVE = 1
+M.MODE_TABLE  = 2
+
+-- Stations on this BSS that can report what they see, and how to ask each:
+-- returns {mac, ...} and {mac = M.MODE_ACTIVE | M.MODE_TABLE}. A station
+-- with passive or active measurement is asked to go and look. A beacon-TABLE
+-- one is asked for what its own scans already hold: asking it for a passive
+-- measurement is refused by hostapd itself ("does not support passive beacon
+-- report"). Table-only stations used to be left out because one acked every
+-- request and answered none; on 2026-10-03 every 802.11k client on a home AP
+-- was table-only (rrm 0x42/0x43), so none was ever asked, and one asked by hand
+-- (mode 2, op_class 0, channel 0) answered within a second with five BSSes,
+-- two of them sibling APs on other channels. A table-only station that never
+-- answers is benched by tick()'s unanswered-request count like any other.
 function M.capable_stations(ifname)
-	if not ifname then return {} end
+	if not ifname then return {}, {} end
 	local out = M._popen("ubus call hostapd." .. ifname .. " get_clients 2>/dev/null") or ""
-	local stations = {}
+	local stations, modes = {}, {}
 	for mac, block in out:gmatch('"(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)":%s*(%b{})') do
 		local rrm = tonumber(block:match('"rrm":%s*%[%s*(%d+)')) or 0
+		local mode
 		if rrm % (RRM_BEACON_PASSIVE * 2) >= RRM_BEACON_PASSIVE
 		   or rrm % (RRM_BEACON_ACTIVE * 2) >= RRM_BEACON_ACTIVE then
+			mode = M.MODE_ACTIVE
+		elseif rrm % (RRM_BEACON_TABLE * 2) >= RRM_BEACON_TABLE then
+			mode = M.MODE_TABLE
+		end
+		if mode then
 			stations[#stations + 1] = mac
+			modes[mac] = mode
 		end
 	end
 	table.sort(stations)  -- deterministic, so round-robin actually rotates
-	return stations
+	return stations, modes
 end
 
 -- Ask one station for a full sweep. mode 1 is ACTIVE measurement: the client
@@ -313,9 +337,10 @@ function M.request(ifname, sta, opts)
 	opts = opts or {}
 	local cmd = string.format(
 		"ubus call hostapd.%s rrm_beacon_req " ..
-		"'{\"addr\":\"%s\",\"mode\":%d,\"op_class\":%d,\"channel\":255,\"duration\":%d}' " ..
+		"'{\"addr\":\"%s\",\"mode\":%d,\"op_class\":%d,\"channel\":%d,\"duration\":%d}' " ..
 		">/dev/null 2>&1",
-		ifname, sta, opts.mode or 1, opts.op_class or 115, opts.duration or 50)
+		ifname, sta, opts.mode or M.MODE_ACTIVE, opts.op_class or 115,
+		opts.channel or 255, opts.duration or 50)
 	M._exec(cmd)
 	return true
 end
@@ -324,9 +349,24 @@ end
 -- this doubles as the restart trigger: the subscription dies whenever one of
 -- the hostapd objects it named goes away, which a `wifi reload` does on every
 -- config push.
-function M.collector_running()
+--
+-- Anchored, so the shell that runs pgrep (whose own command line contains the
+-- pattern) is never counted as the collector.
+function M.collector_pids()
 	local out = M._popen("pgrep -f '" .. SUBSCRIBE_MATCH .. "' 2>/dev/null") or ""
-	return out:match("%d") ~= nil
+	local pids = {}
+	for p in out:gmatch("%d+") do pids[#pids + 1] = p end
+	return pids
+end
+
+function M.collector_running()
+	return #M.collector_pids() > 0
+end
+
+M._file_exists = function(path)
+	local f = io.open(path, "r")
+	if f then f:close() return true end
+	return false
 end
 
 -- Every hostapd BSS object currently on ubus.
@@ -341,106 +381,34 @@ function M.hostapd_objects()
 	return objs
 end
 
--- The collector, as a script rather than an inline command: it is a loop now,
--- and quoting a loop through os.execute's sh -c is where bugs hide.
---
--- Every line is prefixed with /proc/uptime when it arrives, because a
--- notification carries no timestamp of its own and assoctrack.lua measures
--- connection stages from these (auth -> assoc -> authorized, ~40 and ~120 ms
--- apart on the Archer C5). `case`, `read` and `printf` are ash builtins, so
--- the loop forks nothing per line -- it runs for every probe request in
--- range, a few per second.
---
--- opts.on_auth, when given, is a shell fragment run the moment an "auth"
--- line arrives, with the station's MAC in $m. It exists for work that cannot
--- wait for the next drain (see assoctrack.forget_shell). The MAC is checked
--- for shape before it reaches the fragment.
-M.COLLECTOR_SCRIPT = "/tmp/openuf-collect.sh"
-
-function M.collector_script(opts)
-	opts = opts or {}
-	local lines = {
-		"#!/bin/sh",
-		"# openUF hostapd event collector -- written by rrmscan.lua, do not edit.",
-	}
-	if opts.fdb then
-		-- Bridge address moves, for assoctrack's roam reports: a station
-		-- that left for another AP is learned on the uplink here in the same
-		-- second. Only learned entries; ageing ("Deleted") and the switch's
-		-- own table ("self") are dropped before they reach the file. Each
-		-- line arrives within 10 ms through this pipe (both boards).
-		lines[#lines + 1] = "bridge monitor fdb 2>/dev/null | while IFS= read -r l; do"
-		lines[#lines + 1] = "	case \"$l\" in Deleted*|*' self'*) continue ;; esac"
-		lines[#lines + 1] = "	read -r u _ < /proc/uptime"
-		lines[#lines + 1] = "	printf '%s fdb %s\\n' \"$u\" \"$l\""
-		lines[#lines + 1] = "done &"
-	end
-	lines[#lines + 1] = 'ubus subscribe "$@" | while IFS= read -r l; do'
-	-- Probe requests are most of what hostapd notifies (57 of 57 lines in
-	-- one living-room sample) and nothing reads them: dropped here, they are
-	-- never stamped, written, re-read every ROAM_POLL_S and parsed.
-	lines[#lines + 1] = "	case \"$l\" in *'{ \"probe\": '*) continue ;; esac"
-	lines[#lines + 1] = "	read -r u _ < /proc/uptime"
-	if opts.on_auth then
-		lines[#lines + 1] = "	case \"$l\" in"
-		lines[#lines + 1] = "	*'{ \"auth\": {\"address\":\"'*)"
-		lines[#lines + 1] = "		m=${l#*'\"address\":\"'}; m=${m%%'\"'*}"
-		lines[#lines + 1] = "		case \"$m\" in"
-		lines[#lines + 1] = "		[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:"
-			.. "[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) " .. opts.on_auth .. " ;;"
-		lines[#lines + 1] = "		esac ;;"
-		lines[#lines + 1] = "	esac"
-	end
-	lines[#lines + 1] = "	printf '%s %s\\n' \"$u\" \"$l\""
-	lines[#lines + 1] = "done"
-	return table.concat(lines, "\n") .. "\n"
-end
-
 -- (Re)start the collector across every current BSS. Safe to call on every
 -- cycle: it is a no-op while one is running.
 --
--- A running collector is only kept if it is THIS script, unchanged: one
--- started by an older openUF (a bare `ubus subscribe >> file`, no
--- timestamps) or with a different on_auth would otherwise survive the
--- upgrade or the config change -- it is reparented to init -- and feed
--- untimestamped lines until the next `wifi reload` happened to kill it.
-function M.collector_ensure(opts)
-	local want = M.collector_script(opts)
+-- A collector alive with its file gone writes every report into an unlinked
+-- inode nobody can read, and still counts as running. Seen on all three home
+-- APs on 2026-10-03 (/proc/<pid>/fd/1 -> "/tmp/openuf-rrm.jsonl (deleted)"):
+-- collector_stop() used pkill, which OpenWrt's busybox does not have, so the
+-- stop removed the file and left the collector. Such a collector is replaced.
+function M.collector_ensure()
 	if M.collector_running() then
-		local have = M._read_file(M.COLLECTOR_SCRIPT)
-		local ours = (M._popen("pgrep -f '" .. M.COLLECTOR_SCRIPT .. "' 2>/dev/null") or ""):match("%d")
-		if have == want and ours then return false end
+		if M._file_exists(M.EVENT_FILE) then return false end
 		M.collector_stop()
 	end
 	local objs = M.hostapd_objects()
 	if #objs == 0 then return false end
-	-- The script's fdb half outlives a `ubus subscribe` that a wifi reload
-	-- killed (it is its own pipeline): without this every reload would add
-	-- one more.
-	M._exec(FDB_KILL)
-	local f = io.open(M.COLLECTOR_SCRIPT, "w")
-	if not f then return false end
-	f:write(want)
-	f:close()
-	M._exec("sh " .. M.COLLECTOR_SCRIPT .. " " .. table.concat(objs, " ") ..
+	M._exec("ubus subscribe " .. table.concat(objs, " ") ..
 		" >> " .. M.EVENT_FILE .. " 2>/dev/null &")
 	return true
 end
 
--- Not `pkill`: the Archer C5's busybox (OpenWrt 25.12) has no pkill applet,
--- so the kill silently did nothing and an orphaned collector kept appending
--- to the event file forever. pgrep is there. The pattern's first letter is
--- bracketed because this is a compound command: sh does not exec it
--- directly, so the shell's own command line -- which contains the pattern --
--- is a live process pgrep would otherwise match and kill mid-command.
--- "[u]bus" still matches "ubus" and no longer matches itself.
+-- By pid from pgrep: busybox on OpenWrt 25.12 has no pkill.
 function M.collector_stop()
-	M._exec("kill $(pgrep -f '[" .. SUBSCRIBE_MATCH:sub(1, 1) .. "]"
-		.. SUBSCRIBE_MATCH:sub(2) .. "') 2>/dev/null")
-	M._exec(FDB_KILL)
+	local pids = M.collector_pids()
+	if #pids > 0 then
+		M._exec("kill " .. table.concat(pids, " ") .. " 2>/dev/null")
+	end
 	M.monitors_stop()
-	M._exec("rm -f " .. M.EVENT_FILE .. " " .. M.COLLECTOR_SCRIPT .. " "
-		.. M.ACTION_SCRIPT .. " 2>/dev/null")
+	M._exec("rm -f " .. M.EVENT_FILE .. " " .. M.ACTION_SCRIPT .. " 2>/dev/null")
 end
 
 -- The control-socket half of the collector. hostapd's ubus beacon-report
@@ -522,22 +490,16 @@ end
 -- so a notification written between the read and the truncate is lost rather
 -- than corrupted -- acceptable for opportunistic enrichment, and the next
 -- request re-reports the same neighbourhood anyway.
-function M.drain()
-	local f = io.open(M.EVENT_FILE, "r")
-	if not f then return nil end
-	local blob = f:read("*a") or ""
-	f:close()
-	local t = io.open(M.EVENT_FILE, "w")
-	if t then t:close() end
-	return blob
-end
-
--- `blob` is what drain() returned; omitted, harvest drains the file itself.
--- The caller passes it when another consumer (assoctrack) reads the same
--- drain -- the file can only be emptied once.
+-- blob: the events to read (tests); nil drains EVENT_FILE.
 function M.harvest(blob)
-	if blob == nil then blob = M.drain() end
-	if not blob then return {}, {} end
+	if blob == nil then
+		local f = io.open(M.EVENT_FILE, "r")
+		if not f then return {}, {} end
+		blob = f:read("*a") or ""
+		f:close()
+		local t = io.open(M.EVENT_FILE, "w")
+		if t then t:close() end
+	end
 
 	local now, seen, out = M._now(), {}, {}
 	-- Every station that produced an ANSWER, alongside the neighbours it
@@ -628,18 +590,18 @@ end
 -- two and letting it fall out mirrors what a real scan produces, and the
 -- controller keeps its own history of what it was told.
 --
--- opts.skip: BSSIDs never to report (lowercase keys) -- this AP's own and its
--- siblings'. A client reports the AP it sits on, and the APs next to it, like
--- any other BSS; a UniFi AP never lists itself, and lists an adopted sibling
--- as a UniFi neighbour that the controller keeps out of the scanner. Listed
--- here untagged, they were "neighbours", and once the SSID is known, a sibling
--- carrying the site's SSID is exactly what the controller flags as an
--- impersonating rogue.
+-- opts.skip: BSSIDs never to report (lowercase keys) -- this AP's own. A
+-- client reports the AP it sits on like any other BSS; a UniFi AP never lists
+-- itself.
 --
--- opts.site_ssids: this site's own SSIDs. A reported BSS carrying one that is
--- not in skip may still be a sibling skip does not know about (usteer down),
--- so its SSID is withheld rather than raise a false rogue alert. The trade:
--- an evil twin that only a client ever saw is not flagged.
+-- opts.siblings: BSSIDs of sibling openUF APs (lowercase keys), which the
+-- caller tags is_unifi after the merge (sysinfo.sibling_bssids); they keep
+-- their SSID.
+--
+-- opts.site_ssids: this site's own SSIDs. Any other reported BSS carrying one
+-- would go out untagged with the site's SSID, which the controller flags as an
+-- impersonating rogue, so its SSID is withheld. The trade: an evil twin that
+-- only a client ever saw is not flagged.
 function M.merge_into(entries, neighbours, opts)
 	entries = entries or {}
 	opts    = opts or {}
@@ -648,6 +610,7 @@ function M.merge_into(entries, neighbours, opts)
 	local max_age = opts.max_age or 30
 	local skip    = opts.skip or {}
 	local site    = opts.site_ssids or {}
+	local known   = opts.siblings or {}
 	local have = {}
 	for _, e in ipairs(entries) do
 		if e.bssid then have[e.bssid] = true end
@@ -688,23 +651,165 @@ function M.merge_into(entries, neighbours, opts)
 				-- Observed live -- four WPA2 neighbours rendered as "open"
 				-- before the default was removed.
 				security   = n.security,
-				essid      = (n.essid and not site[n.essid]) and n.essid or nil,
+				essid      = (n.essid and (known[n.bssid:lower()] or not site[n.essid]))
+					and n.essid or nil,
 			}
 		end
 	end
 	return entries
 end
 
--- BSSIDs of the other APs usteer knows (its remote nodes), lowercase keys.
--- usteer is how openUF APs already find each other for band steering and
--- Roaming Assistant; a node's bssid is the BSS it announces.
-function M.sibling_bssids()
-	local out = M._popen("ubus call usteer remote_info 2>/dev/null") or ""
-	local set = {}
-	for b in out:gmatch('"bssid":%s*"(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)"') do
-		set[b:lower()] = true
+-- ─── Scheduling ──────────────────────────────────────────────────────────────
+
+-- Matches merge_into's own cutoff, which exists because the controller's
+-- rogue-AP ingestion silently drops any entry with age >= 30.
+M.MAX_AGE = 30
+
+-- Start the inform heartbeat loop (blocks forever).
+-- cfg, ufhw: passed through to build_json()
+-- One cycle of the client-assisted enrichment: keep the notification
+-- collector alive, fold in whatever clients have reported since last time,
+-- expire what the controller would discard anyway, and -- at most every
+-- RRM_REQUEST_INTERVAL -- ask one more station to go and look.
+--
+-- Everything here is pcall-wrapped and best-effort: no hostapd, no ubus, no
+-- capable client and no answer are all ordinary outcomes, and none of them may
+-- interrupt an inform.
+function M.tick(ctx, cfg)
+	local rrm = ctx._rrmscan
+	if not rrm then return false end
+	if not (cfg and cfg.config and cfg.config.rrm_enrichment) then
+		-- Enrichment is off, but a collector from an earlier run with it ON may
+		-- still be alive: it is a detached `ubus subscribe` child reparented to
+		-- init, so it outlives both the config change and the daemon. Nothing
+		-- below this line runs any more, and harvest() is the ONLY thing that
+		-- truncates the notification file -- so left alone the child appends to
+		-- /tmp/openuf-rrm.jsonl forever with no reader and no cap. /tmp is a
+		-- RAM disk on these boards; the debug-dump cap above exists because
+		-- 31.7 MB there was measured starving state.json writes and apk.
+		--
+		-- Rate-limited on the collector's own liveness clock rather than run
+		-- every tick: this is a pgrep, and there is nothing to catch between
+		-- checks once the child is gone.
+		local now = ctx._time()
+		if now >= ctx._rrm_collector_next then
+			ctx._rrm_collector_next = now + ctx.RRM_COLLECTOR_CHECK_INTERVAL
+			local ok_r, running = pcall(rrm.collector_running)
+			if ok_r and running then pcall(rrm.collector_stop) end
+			pcall(rrm.monitors_stop)
+		end
+		return false
 	end
-	return set
+
+	-- On ctx._time(), the seam the rest of the timed paths use, so the gate below
+	-- is testable. Note this is also the clock the age-out compares against,
+	-- and n.seen_at comes from rrmscan's own ctx._now -- a test that stubs one
+	-- must stub the other, or "freshness" is measured between two clocks.
+	local now = ctx._time()
+	if now >= ctx._rrm_collector_next then
+		ctx._rrm_collector_next = now + ctx.RRM_COLLECTOR_CHECK_INTERVAL
+		pcall(rrm.collector_ensure)
+		-- The control-socket half: the beacon body reaches only hostapd's
+		-- control socket (BEACON-RESP-RX), not its ubus notification.
+		pcall(rrm.monitors_ensure)
+	end
+
+	local ok, fresh, reporters = pcall(rrm.harvest)
+	if ok then
+		-- A station that answered is off the bench, whatever it reported.
+		for mac in pairs(reporters or {}) do ctx._rrm_asked[mac] = nil end
+		for _, n in ipairs(fresh or {}) do
+			-- Keyed by BSSID so a neighbour two clients both saw is carried
+			-- once, at whichever sighting is freshest.
+			local prev = ctx._rrm_cache[n.bssid]
+			if not prev or n.seen_at >= prev.seen_at then
+				-- hostapd emits each report twice: on the control socket with
+				-- the neighbour's beacon body, then over ubus without. The two
+				-- reach the event file through different processes and land in
+				-- different drains often enough (upstream, live 2026-10-13:
+				-- every row of one report went out unnamed, on the 80 MHz centre
+				-- channel 42 at 20 MHz). A bodiless copy keeps what the body
+				-- proved about the same BSS instead of erasing it.
+				if prev and prev.body and not n.body and prev.band == n.band then
+					n.essid, n.security, n.bw = prev.essid, prev.security, prev.bw
+					n.channel, n.body = prev.channel, true
+				end
+				ctx._rrm_cache[n.bssid] = n
+			end
+		end
+	end
+
+	local live = {}
+	for bssid, n in pairs(ctx._rrm_cache) do
+		if now - n.seen_at < M.MAX_AGE then
+			live[#live + 1] = n
+		else
+			ctx._rrm_cache[bssid] = nil
+		end
+	end
+	table.sort(live, function(a, b) return a.bssid < b.bssid end)
+	ctx._rrm_neighbours = live
+
+	if now < ctx._rrm_next_request then return true end
+	ctx._rrm_next_request = now +
+		(tonumber(cfg.config.rrm_request_interval) or ctx.RRM_REQUEST_INTERVAL)
+
+	-- Round-robin across every capable station on every BSS, one per
+	-- interval. Asking them all at once would take every 802.11k-capable
+	-- client in the house off-channel simultaneously.
+	local cands = {}
+	local ok_o, objs = pcall(rrm.hostapd_objects)
+	for _, obj in ipairs(ok_o and objs or {}) do
+		local ifname = obj:match("^hostapd%.(.+)$")
+		local ok_s, stas, modes = pcall(rrm.capable_stations, ifname)
+		for _, sta in ipairs(ok_s and stas or {}) do
+			local key   = tostring(sta):lower()
+			local asked = ctx._rrm_asked[key]
+			local spent = asked and asked.n >= ctx.RRM_MAX_UNANSWERED
+			if spent and (now - asked.at) >= ctx.RRM_BENCH_SECONDS then
+				ctx._rrm_asked[key] = nil   -- bench over: one more try, clean count
+				spent = false
+			end
+			if not spent then
+				cands[#cands + 1] = {ifname = ifname, sta = sta,
+					mode = modes and modes[sta] or M.MODE_ACTIVE}
+			end
+		end
+	end
+	if #cands == 0 then return true end
+	ctx._rrm_rr = (ctx._rrm_rr % #cands) + 1
+	local c = cands[ctx._rrm_rr]
+	local key = tostring(c.sta):lower()
+	local asked = ctx._rrm_asked[key] or {n = 0}
+	asked.n, asked.at = asked.n + 1, now
+	ctx._rrm_asked[key] = asked
+	if asked.n == ctx.RRM_MAX_UNANSWERED then
+		io.stderr:write(string.format(
+			"openuf: rrm: %s on %s advertises beacon measurement but has answered none "
+			.. "of %d requests -- not asking again for %d h\n",
+			c.sta, c.ifname, asked.n - 1, math.floor(ctx.RRM_BENCH_SECONDS / 3600)))
+	end
+	-- The operating class has to be one the CLIENT can measure. Asking every
+	-- station for class 115 (5 GHz U-NII-1) works for a dual-band client --
+	-- they ignore the band restriction and answer for 2.4 GHz too -- but a
+	-- 2.4 GHz-only station answers it with report mode 0x02, "incapable", and
+	-- an all-zero BSSID, which is nothing at all. So a station on a 2.4 GHz
+	-- BSS is asked for class 81 (2.4 GHz, channels 1-13) instead; the band
+	-- comes from that BSS's live channel.
+	local op_class = 115
+	local ok_c, caps = pcall(ctx._sysinfo.radio_caps, c.ifname)
+	if ok_c and type(caps) == "table" and caps.channel and caps.channel <= 14 then
+		op_class = 81
+	end
+	if c.mode == M.MODE_TABLE then
+		-- What its cache holds, every band: the form a table-only client
+		-- answered live (op_class 0, channel 0, no measurement duration).
+		pcall(rrm.request, c.ifname, c.sta,
+			{mode = M.MODE_TABLE, op_class = 0, channel = 0, duration = 0})
+	else
+		pcall(rrm.request, c.ifname, c.sta, {op_class = op_class})
+	end
+	return true
 end
 
 return M

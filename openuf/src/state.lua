@@ -8,9 +8,8 @@
 	-- so a field added by a caller and not added here is written to disk,
 	looks persisted in the file, and comes back nil on the next start. Ten of
 	them had accumulated that way, and the failures were all silent:
-	  • swvlan_backup, the per-port VLAN reversibility ledger -- so unticking
-	    Port VLAN after any restart restored nothing and left the switch on
-	    openUF's config for good;
+	  • the per-port VLAN reversibility ledger -- so unticking Port VLAN
+	    after any restart restored nothing and left openUF's config for good;
 	  • led_enabled, so the controller's Manage > LED toggle forgot itself on
 	    every reboot while the controller went on believing it took;
 	  • locating, so a Locate could never be cleaned up by a later start;
@@ -39,12 +38,8 @@ M.DEFAULT_KEY = "ba86f2bbe107c7c57eb5f2690775c712"
 M._state_file = "/etc/openuf/state.json"
 
 -- Inform URL used when state.json does not carry one -- a first boot, or the
--- state after a factory reset. conf.lua's config.inform_url overrides this at
--- startup (see inform.lua's entry point), which is what makes that documented
--- option real: before, conf.lua's value was read by nothing and this constant
--- was the only URL a fresh device ever used, while install.sh went on parsing
--- conf.lua for "the URL openUF will really use" to decide whether to install
--- luasec for an https:// controller.
+-- state after a factory reset. The inform_url option (UCI) overrides this at
+-- startup (see inform.lua's entry point).
 M.DEFAULT_INFORM_URL = "http://unifi:8080/inform"
 
 local function defaults()
@@ -75,13 +70,26 @@ M.FIELDS = {
 	upgrade_requested_version = "string",
 	upgrade_requested_url     = "string",
 	blocked_stas              = "table",
+	-- Lock to Access Point: the clients the controller denies here because
+	-- they are locked to another AP (sorted, lowercase; the macacl lock2ap
+	-- entries of the last WiFi push). The sibling exchange announces it.
+	lock2ap                   = "table",
+	-- SNMP Monitoring (openwrt/snmp.lua): openUF rewrote /etc/config/snmpd
+	-- (the original is in /etc/openuf/snmpd.orig), a SHA-256 of the push it
+	-- applied (never the community or password), and whether snmpd was
+	-- enabled before, so SNMP off restores and an unchanged push restarts
+	-- nothing.
+	snmp_owned                = "boolean",
+	snmp_applied              = "string",
+	snmp_was_enabled          = "boolean",
 	-- Identity, re-derived at startup by inform's _populate_net_info. Kept
 	-- here so the PREVIOUS run's values are still readable at that moment:
-	-- M.run compares the loaded mac against the live one to catch a modelmap
+	-- M.run compares the loaded mac against the live one to catch a layout
 	-- change that silently re-identifies an adopted device.
 	mac                       = "string",
 	ip                        = "string",
 	hostname                  = "string",
+	netmask                   = "string",
 	-- Controller-pushed IP settings. ip_mode is the "was I static before?"
 	-- guard on the DHCP path, which must not flush a working lease just
 	-- because a steady-state push reaffirmed DHCP.
@@ -91,32 +99,45 @@ M.FIELDS = {
 	static_gateway            = "string",
 	static_dns                = "table",
 	-- Live kernel state, not UCI, so it is reapplied from here at startup the
-	-- way the blocked-client rules are.
+	-- way the blocked-client rules are. What the LEDs were doing before openUF
+	-- touched them is not kept here: it only holds until the next reboot, so
+	-- it lives in tmpfs (led.lua). led_scheme marks a device whose LEDs were
+	-- once driven by the single-LED scheme and have been handed back (2).
 	led_enabled               = "boolean",
-	-- mgmt_cfg's capability list asked for STA_ASSOC_TRACKER notifs. Only
-	-- carried by setparam, so it has to outlive a restart.
-	notif_assoc_stat          = "boolean",
-	-- mgmt_cfg's stun_url, the controller's STUN server (stun.lua). Only
-	-- carried by setparam, likewise.
-	stun_url                  = "string",
 	locating                  = "boolean",
-	locate_prev_trigger       = "string",
-	-- The per-port VLAN reversibility ledger: the stock `ports` strings of
-	-- every switch_vlan section openUF overwrote. Without it restore() has
-	-- nothing to put back and the board keeps openUF's VLAN config forever.
-	swvlan_backup             = "table",
-	-- The DSA counterpart: br-lan's port list exactly as the board shipped
-	-- it, before per-port VLAN moved any socket out of it. Same job, and the
-	-- same "only record of what to put back".
+	led_scheme                = "number",
+	-- The per-port VLAN reversibility ledger: br-lan's port list exactly as
+	-- the board shipped it, before per-port VLAN moved any socket out of it.
+	-- Without it restore() has nothing to put back and the board keeps
+	-- openUF's VLAN config forever.
 	dsa_brlan_ports           = "table",
-	-- The controller's ebtables.* intent ({bpdu, tagdrop, ifnames}), so the
-	-- nft rules l2guard builds from it come back after a reboot like the
-	-- blocklist does.
+	-- netmodel.lua (vlan_filtering backend). pending is the rollback window
+	-- of the last applied network plan -- it must survive a restart, or a
+	-- plan that strands the AP right before a reboot is never rolled back.
+	-- failed remembers the fingerprint of a plan that lost the controller so
+	-- the same push is not applied again; parked lists interfaces a takeover
+	-- disabled because their socket became a bridge port.
+	netmodel_pending          = "table",
+	netmodel_applied          = "string",
+	netmodel_failed           = "string",
+	netmodel_failed_logged    = "string",
+	netmodel_parked           = "table",
+	-- The controller's STUN service (mgmt_cfg stun_url), for the wake-up
+	-- channel in stun.lua. Pushed with every mgmt_cfg, kept across restarts
+	-- so the channel is up before the first push after a reboot.
+	stun_url                  = "string",
+	-- The catalogue firmware version learned from the controller's own
+	-- `upgrade` commands, reported instead of the identity's (upgrade.lua).
+	fw_version                = "string",
+	-- The controller's ebtables.* hardening intent ({bpdu, tagdrop, ifnames}),
+	-- so the nft rules l2guard builds from it come back after a reboot.
 	l2guard                   = "table",
-	-- Airtime Fairness (atf.mode): a debugfs flag, back on after a reboot.
-	atf_enabled               = "boolean",
+	-- The controller's guest-network restrictions (unifi/guest.lua's spec
+	-- plus the VAP netdevs), so guestguard's nft table comes back after a
+	-- reboot.
+	guest                     = "table",
 	-- Guest portal: the WLANs that need it ({wlanconf_id = true}, from the
-	-- last system_cfg) and the guests the controller authorized
+	-- last full system_cfg) and the guests the controller authorized
 	-- ({mac = epoch s}, from authorize-guest). Only carried by pushes and
 	-- one-shot cmds, so both have to outlive a restart.
 	guest_wlans               = "table",
@@ -124,20 +145,35 @@ M.FIELDS = {
 	-- Per-client WiFi Speed Limits from rate-update ({mac = {up=, down=}}
 	-- kbps, -1 = none), one association each (inform._shaper_resync).
 	sta_rates                 = "table",
-	-- The portal's enforcement facts (guestportal.parse) while it is on;
-	-- the nft tables are rebuilt from it at startup.
-	guest_portal              = "table",
 	-- mgmt_cfg selfrun_guest_mode: "pass" lets guests through while the
 	-- controller is unreachable, "off" takes the guest WLANs down.
 	guest_selfrun             = "string",
-	-- The guest VAP ifnames selfrun_guest_mode=off took down, until they
-	-- are brought back up (also after a restart in between).
+	-- The guest VAP netdevs selfrun_guest_mode=off took down, until they
+	-- are back on the air (also after a restart in between).
 	guest_vaps_down           = "table",
-	-- The VAP ifnames a WiFi Blackout Schedule took down (wlansched.lua),
-	-- likewise until they are brought back up.
-	sched_vaps_down           = "table",
-	-- Reported as guest_token while the portal is on (32 hex).
+	-- Reported as guest_token while the portal is enforced (32 hex).
 	guest_token               = "string",
+	-- Interfaces netmodel deleted when it took the network over (own_config).
+	netmodel_removed          = "table",
+	-- inform.lua _reprovision_on_settings_change: the provisioning-relevant
+	-- settings at the last start, so a change asks for a fresh push.
+	provision_sig             = "string",
+	-- cfgversion_effective: the last config this device applied without an
+	-- error, and the one-push retry bookkeeping (see inform.lua).
+	cfgversion_effective      = "string",
+	cfg_retry                 = "table",
+	-- Airtime Fairness (atf.mode, airtime.lua): a debugfs flag, back on after
+	-- a reboot, so it is reapplied from here at startup.
+	atf_enabled               = "boolean",
+	-- The wireless uplink (openwrt/backhaul.lua): the uplink in use
+	-- ("wired" | "wireless"), so a restart neither flaps the radio nor
+	-- writes a station that is up as disabled; the wired socket the gateway
+	-- was last seen behind, whose link the policy watches; and the parent the
+	-- controller's last push named (mesh.serial1), "" for none -- a device
+	-- that boots straight onto the air with a matching cfgversion gets no push.
+	backhaul_mode             = "string",
+	backhaul_wired_port       = "string",
+	backhaul_parent           = "string",
 }
 
 -- Load state from disk. Missing file returns defaults. Applies security
@@ -204,31 +240,52 @@ end
 -- A side effect worth knowing: the bootstrap account now needs write
 -- permission on the DIRECTORY, not on the previous file.
 --
--- M.last_written keeps the exact bytes, so inform's change detection can tell
--- this process's own write from syswrapper's: without it every save was read
--- back on the next heartbeat as an out-of-process change, and the full reload
--- rebuilt the firewall's nft table each time.
+-- The write and the close are checked: on a full overlay the write fails
+-- (or, buffered, only the close does), and renaming that empty or short
+-- temp file over a good state.json would lose the adoption just the same.
+-- The temp name carries the process id, because syswrapper.lua (set-adopt,
+-- over SSH) saves through this same module while the daemon runs.
+-- M.last_written is the text this process last wrote, so the daemon can
+-- tell its own save from an external one (inform._reload_if_changed).
+M._open = io.open
 M.last_written = nil
+
+local pid_cache
+local function pid()
+	if pid_cache then return pid_cache end
+	local f = io.open("/proc/self/stat", "r")
+	local p = f and (f:read("*l") or ""):match("^(%d+)")
+	if f then f:close() end
+	-- No procfs (a dev box): the address of a fresh table is unique per
+	-- process just as well.
+	pid_cache = p or tostring({}):match("0x(%x+)") or tostring(os.time())
+	return pid_cache
+end
+
 function M.save(st)
-	local tmp = M._state_file .. ".tmp"
-	local f = io.open(tmp, "w")
+	local text = cjson.encode(st)
+	local tmp = M._state_file .. ".tmp." .. pid()
+	local f = M._open(tmp, "w")
 	if not f then
 		local dir = M._state_file:match("^(.*)/[^/]+$")
 		if dir then os.execute("mkdir -p '" .. dir .. "'") end
-		f = io.open(tmp, "w")
+		f = M._open(tmp, "w")
 		if not f then
 			error("state.save: cannot write to " .. tmp)
 		end
 	end
-	local body = cjson.encode(st)
-	f:write(body)
-	f:close()
+	local wrote, werr = f:write(text)
+	local closed, cerr = f:close()
+	if not wrote or not closed then
+		os.remove(tmp)
+		error("state.save: cannot write " .. tmp .. ": " .. tostring(werr or cerr))
+	end
 	local ok, err = os.rename(tmp, M._state_file)
 	if not ok then
 		os.remove(tmp)
 		error("state.save: cannot replace " .. M._state_file .. ": " .. tostring(err))
 	end
-	M.last_written = body
+	M.last_written = text
 end
 
 -- Reset state to defaults and persist immediately.

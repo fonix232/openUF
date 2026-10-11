@@ -3,11 +3,10 @@
 -- Run from project root: lua tests/run_tests.lua
 
 OPENUF_TEST_MODE = true
-dofile("openuf/lib/lib.lua")
 
 local cjson  = require("cjson")
-local state  = dofile("openuf/state.lua")
-local inform = dofile("openuf/inform.lua")
+local state  = dofile("src/state.lua")
+local inform = dofile("src/inform.lua")
 
 local function fixture(name)
 	local f = io.open("tests/fixtures/" .. name, "r")
@@ -27,6 +26,10 @@ end
 -- with_radio_caps: when true, radio_caps()'s `iw dev ... info` / `iw phy ...
 -- info` sources return a real 5GHz (VHT+HE+DFS+160MHz) fixture instead of
 -- empty.
+-- The text sysinfo.sibling_bssids() reads (announce.lua's sibling table), or
+-- nil for none. Set by a test, which resets it.
+local siblings_json = nil
+
 local function inject_sysinfo(with_clients, with_wired, with_scan, with_radio_caps)
 	-- Caches whose whole point is to outlive a heartbeat: swapping the
 	-- fixtures underneath them is exactly what they are not built for, so each
@@ -34,34 +37,22 @@ local function inject_sysinfo(with_clients, with_wired, with_scan, with_radio_ca
 	-- the same, on the way in and out.)
 	inform._sysinfo._phy_info_cache = {}
 	inform._sysinfo._uplink_cache   = {}
-	inform._sysinfo._ps_phy_cache   = {}
 	inform._sysinfo._peer_cache     = {}
-	inform._sysinfo._akm_cache      = {}
 	inform._sysinfo.end_pass()
+	-- Capability probes read the host otherwise (airtime lists debugfs); a
+	-- test that wants a bit claimed says so.
+	inform._airtime._supported_cache = false
+	inform._sysinfo._ppsk_supported_cache = false
+	inform._sysinfo._hs20_supported_cache = false
+	inform._snmp._cache = {}
+	inform._snmp._read_file = function() return nil end
 	inform._sysinfo._read_file = function(path)
 		if path:find("uptime")  then return fixture("proc_uptime.txt")  end
-		-- mac80211 debugfs: a radio that tracks power save itself (no
-		-- AP_LINK_PS), the first client dozing.
-		if with_clients and path == "/sys/class/net/wlan0/phy80211/name" then return "phy0\n" end
-		if with_clients and path == "/sys/kernel/debug/ieee80211/phy0/hwflags" then
-			return "SIGNAL_DBM\nAMPDU_AGGREGATION\nMFP_CAPABLE\n"
-		end
-		if with_clients and path == "/sys/kernel/debug/ieee80211/phy0/netdev:wlan0/stations/aa:bb:cc:dd:ee:ff/flags" then
-			return "AUTH\nASSOC\nPS_STA\nAUTHORIZED\n"
-		end
-		if with_clients and path == "/sys/kernel/debug/ieee80211/phy0/netdev:wlan0/stations/11:22:33:44:55:66/flags" then
-			return "AUTH\nASSOC\nAUTHORIZED\n"
-		end
-		-- An ath9k radio's interrupt counts (sysinfo.radio_timeouts).
-		if with_clients and path == "/sys/kernel/debug/ieee80211/phy0/ath9k/interrupt" then
-			return "                 SWBA:  468345888\n                  CST:     263611\n"
-				.. "                  GTT:     312203\n"
-		end
 		if path:find("meminfo") then return fixture("proc_meminfo.txt") end
-		if path == "/proc/loadavg" then return "0.42 0.17 0.05 1/63 1234\n" end
 		if path:find("net/dev") then return fixture("proc_net_dev.txt") end
 		if with_wired and path:find("net/arp")     then return fixture("proc_net_arp.txt") end
 		if with_wired and path:find("dhcp.leases") then return fixture("dhcp_leases.txt")  end
+		if siblings_json and path:find("openuf-siblings", 1, true) then return siblings_json end
 		return ""
 	end
 	inform._sysinfo._run_cmd = function(cmd)
@@ -74,11 +65,6 @@ local function inject_sysinfo(with_clients, with_wired, with_scan, with_radio_ca
 			return fixture("iw_station_dump.txt")
 		end
 		if cmd:find("station dump") then return "" end
-		-- hostapd: the first client on FT-SAE, the second on plain PSK.
-		if with_clients and cmd:find("hostapd_cli -i $b all_sta", 1, true) and cmd:find(" wlan0", 1, true) then
-			return "aa:bb:cc:dd:ee:ff\nflags=[AUTH][ASSOC][AUTHORIZED]\nAKMSuiteSelector=00-0f-ac-9\n"
-				.. "11:22:33:44:55:66\nflags=[AUTH][ASSOC][AUTHORIZED]\nAKMSuiteSelector=00-0f-ac-2\n"
-		end
 		if with_clients and cmd:find("survey dump") then
 			return fixture("iw_survey_dump.txt")
 		end
@@ -94,7 +80,7 @@ local function inject_sysinfo(with_clients, with_wired, with_scan, with_radio_ca
 		if with_radio_caps and cmd:find("dev wlan0 info") then
 			return fixture("iw_dev_info.txt")
 		end
-		if with_radio_caps and cmd:find("phy phy0 info") then
+		if with_radio_caps and cmd:find("phy#0 info", 1, true) then
 			return fixture("iw_phy_info_5g.txt")
 		end
 		return ""
@@ -167,12 +153,13 @@ local ufhw = {
 local function build(opts)
 	inject_sysinfo(opts and opts.with_clients, opts and opts.with_wired, opts and opts.with_scan,
 		opts and opts.with_radio_caps)
+	local cfg = opts and opts.cfg or nil
 	if opts and opts.with_uci then inject_ucihelper() end
 	-- vap_id: the wlanconf id the fixture vap echoes (get_vap_table's `id`).
 	if opts and opts.vap_id then
 		local get = inform._ucihelper.get_vap_table
-		inform._ucihelper.get_vap_table = function()
-			local vaps = get()
+		inform._ucihelper.get_vap_table = function(...)
+			local vaps = get(...)
 			for _, v in ipairs(vaps) do v.id, v.wlanconf_id = opts.vap_id, opts.vap_id end
 			return vaps
 		end
@@ -180,8 +167,8 @@ local function build(opts)
 	-- vap_patch: edit the fixture vaps in place (bssid, essid, ...).
 	if opts and opts.vap_patch then
 		local get = inform._ucihelper.get_vap_table
-		inform._ucihelper.get_vap_table = function()
-			local vaps = get()
+		inform._ucihelper.get_vap_table = function(...)
+			local vaps = get(...)
 			opts.vap_patch(vaps)
 			return vaps
 		end
@@ -197,65 +184,12 @@ local function build(opts)
 		locating   = opts and opts.locating,
 	}
 	for k, v in pairs(opts and opts.st or {}) do st[k] = v end
-	local json_str = inform.build_json(st, nil, ufhw)
+	local json_str = inform.build_json(st, cfg, ufhw)
 	return cjson.decode(json_str), st
 end
 
--- A socket-shaped modelmap: one port_idx per physical switch socket, and no
--- static uplink flag -- which socket the cable is in is detected from the
--- switch's ARL table. `map` is the board's swconfig port numbering.
-local function switch_cfg(map)
-	local ports = {}
-	for i, label in ipairs({"lan1", "lan2", "lan3", "lan4", "wan"}) do
-		if map[label] then ports[#ports + 1] = {idx = i, swport = label} end
-	end
-	return {
-		net  = {lan_cpueth = "eth1", lan_vlanid = 1, ports = ports},
-		vlan = {cpu_lan = 0, ports = map},
-	}
-end
-
--- WDR3500 as cabled today: four LAN sockets on physical 1-4, uplink in 4.
-local WDR_MAP    = {lan1 = 1, lan2 = 2, lan3 = 3, lan4 = 4}
--- Archer C5: the WAN socket is physical 1 and the LAN sockets are 2-5, with
--- the uplink in physical 2 -- a different socket, same detection.
-local ARCHER_MAP = {lan1 = 2, lan2 = 3, lan3 = 4, lan4 = 5, wan = 1}
-
--- build() for a board with a switch: same payload, plus the swconfig capture,
--- default route and ARP table that per-socket reporting reads.
-local function build_switch(opts)
-	opts = opts or {}
-	inject_sysinfo(opts.with_clients, false, false, false)
-	local base_read = inform._sysinfo._read_file
-	local base_cmd  = inform._sysinfo._run_cmd
-	inform._sysinfo._read_file = function(path)
-		if path:find("net/arp") then
-			return opts.arp or fixture("proc_net_arp_switch.txt")
-		end
-		return base_read(path)
-	end
-	inform._sysinfo._run_cmd = function(cmd)
-		if cmd:find("swconfig") then return opts.swconfig or "" end
-		if cmd:find("ip route") then
-			return "default via " .. (opts.gateway or "10.0.0.1") .. " dev br-lan \n"
-		end
-		return base_cmd(cmd)
-	end
-	local st = {
-		authkey    = state.DEFAULT_KEY,
-		adopted    = true,
-		cfgversion = "",
-		inform_url = "http://10.0.0.1:8080/inform",
-		mac        = opts.mac or "aa:bb:cc:00:11:22",
-		ip         = "10.0.0.2",
-		hostname   = "testap",
-	}
-	return cjson.decode(inform.build_json(st, opts.cfg, ufhw))
-end
-
--- A DSA board's modelmap: no switch map at all (there is no swconfig switch
--- to map), one netdev per socket, and no static uplink flag -- the uplink is
--- detected from the bridge FDB. Modelled on the Xiaomi AX3000T, whose four
+-- A DSA board's port list: one netdev per socket, and no static uplink flag
+-- -- the uplink is detected from the bridge FDB. Modelled on the Xiaomi AX3000T, whose four
 -- sockets are wan/lan2/lan3/lan4 in br-lan.
 local DSA_CFG = {
 	net = {
@@ -269,8 +203,8 @@ local DSA_CFG = {
 	},
 }
 
--- build() for a DSA board: no swconfig output at all (there is no such
--- binary), so everything comes from sysfs per socket plus the bridge FDB.
+-- build() for a DSA board: everything comes from sysfs per socket plus the
+-- bridge FDB.
 -- opts.fdb overrides the captured `bridge fdb show br br-lan`.
 -- opts.master maps an ifname to the bridge it is enslaved to, for the one case
 -- where they are not all in br-lan: a socket openUF has moved into a VLAN
@@ -289,16 +223,19 @@ local function build_dsa(opts)
 	inform._sysinfo._read_file = function(path)
 		if path:find("net/arp") then return fixture("proc_net_arp_dsa.txt") end
 		if path == "/proc/uptime" then dsa_forks.uptime = dsa_forks.uptime + 1 end
-		local m = path:match("^/sys/class/net/([^/]+)/master/uevent$")
-		if m then
-			return "INTERFACE=" .. ((opts.master or {})[m] or "br-lan") .. "\n"
-		end
 		return base_read(path)
 	end
 	inform._sysinfo._run_cmd = function(cmd)
-		if cmd:find("swconfig") then return "" end   -- no such binary on DSA
 		if cmd:find("ip route") then
 			return "default via 192.0.2.1 dev br-lan \n"
+		end
+		local rl = cmd:match("readlink /sys/class/net/(%S+)/master")
+		if rl then
+			local br = (opts.master or {})[rl] or "br-lan"
+			return "../../../../../../../../virtual/net/" .. br .. "\n"
+		end
+		if cmd:find("readlink") then
+			return "../../../../../../../../virtual/net/br-lan\n"
 		end
 		local fdb = opts.fdb or fixture("bridge_fdb_br_dsa.txt")
 		local br = cmd:match("bridge fdb show br (%S+)")
@@ -404,7 +341,7 @@ return {
 			-- Not model-prefixed: the controller compares this against its
 			-- firmware catalog's own bare "version" field with strict string
 			-- equality, so a "U6IW."-prefixed value never matches even when
-			-- the numeric version is identical (see openuf/inform.lua).
+			-- the numeric version is identical (see src/inform.lua).
 			local d = build()
 			assert_eq(d.version, "6.6.55", "version is bare fw.ver")
 		end
@@ -435,7 +372,108 @@ return {
 		fn = function()
 			local d = build()
 			assert_eq(d.mem_total, 131072 * 1024, "mem_total bytes")
-			assert_eq(d.mem_used, (131072 - 65536) * 1024, "mem_used = (total - free) bytes")
+			assert_eq(d.mem_used, (131072 - 72000) * 1024, "mem_used = (total - available) bytes")
+		end
+	},
+	{
+		name = "inform json: debug_caps and debug_payload_extra override the payload, and warn",
+		fn = function()
+			local d = build({cfg = {config = {debug_caps = {wifi_caps = 0x40, fw_caps = 0x111},
+				debug_payload_extra = {uplink = {type = "wireless"}}}}})
+			assert_eq(d.wifi_caps, 0x40, "wifi_caps claimed only on request")
+			assert_eq(d.fw_caps, 0x111, "fw_caps overridden")
+			local plain = build()
+			-- Against the shipped payload, not a literal: the claimed bits are
+			-- pinned by the wifi_caps2 test below.
+			assert_eq(d.wifi_caps2, plain.wifi_caps2, "unset masks keep their shipped value")
+			assert_eq(d.uplink.type, "wireless", "extra field merged")
+			assert_true(plain.wifi_caps ~= 0x40, "the override replaces the shipped wifi_caps")
+			assert_eq(plain.wifi_caps, 0x100101C, "only what the device can do without the override")
+			local said = ""
+			local real = io.stderr
+			io.stderr = {write = function(_, m) said = said .. m end}
+			local warned = inform._warn_debug_overrides({config = {debug_caps = {wifi_caps = 0x40}}})
+			io.stderr = real
+			assert_true(warned, "warned")
+			assert_true(said:find("wifi_caps=0x40", 1, true) ~= nil, "naming the override")
+			assert_false(inform._warn_debug_overrides({config = {}}), "silent without")
+		end
+	},
+	{
+		name = "inform json: sys_stats carries load averages and memory (10.6 device shape)",
+		fn = function()
+			local d = build()
+			local ss = d.sys_stats
+			assert_not_nil(ss, "sys_stats present")
+			assert_eq(ss.mem_total, 131072 * 1024, "mem_total bytes")
+			-- total - MemFree, as the firmware's sysinfo() totalram - freeram
+			-- gives it (not MemAvailable, which system-stats' percentage uses).
+			assert_eq(ss.mem_used, (131072 - 65536) * 1024, "mem_used bytes")
+			assert_eq(ss.mem_buffer, 2048 * 1024, "mem_buffer bytes")
+		end
+	},
+	{
+		-- The controller logs "Possible interference" when athstats.ast_txto
+		-- or ast_cst rises faster than 10/s; it diffs the raw counts itself.
+		name = "inform json: athstats carries ath9k's tx and carrier-sense timeout counts",
+		fn = function()
+			local orig = inform._sysinfo.radio_timeouts
+			local asked
+			inform._sysinfo.radio_timeouts = function(ifname) asked = ifname; return 312203, 263611 end
+			local d = build({with_uci = true, with_clients = true})
+			local radio = d.radio_table[1]
+			assert_eq(asked, "wlan0", "read per radio netdev")
+			assert_eq(radio.athstats.ast_txto, 312203, "ast_txto = GTT")
+			assert_eq(radio.athstats.ast_cst, 263611, "ast_cst = CST")
+			assert_nil(radio.athstats.ast_be_xmit, "no beacon count: no source")
+			-- Not ath9k (or no debugfs): absent, never a made-up 0.
+			inform._sysinfo.radio_timeouts = function() return nil end
+			d = build({with_uci = true, with_clients = true})
+			inform._sysinfo.radio_timeouts = orig
+			assert_nil(d.radio_table[1].athstats.ast_txto, "no counter: no ast_txto")
+			assert_nil(d.radio_table[1].athstats.ast_cst, "no counter: no ast_cst")
+			assert_not_nil(d.radio_table[1].athstats.cu_total, "the rest of athstats unchanged")
+		end
+	},
+	{
+		name = "inform json: a 40 MHz vap reports its secondary channel side as extchannel",
+		fn = function()
+			local d = build({with_uci = true, with_radio_caps = true})
+			assert_nil(d.vap_table[1].extchannel, "20 MHz: no secondary channel, and it is left out")
+			assert_nil(d.radio_table[1].extchannel, "extchannel is a vap field only")
+			-- HT40- on channel 11: the secondary 20 MHz is channel 7, below.
+			-- The UI centres the channel at channel + 2 * extchannel = 9.
+			inject_sysinfo(false, false, false, true)
+			local run = inform._sysinfo._run_cmd
+			inform._sysinfo._run_cmd = function(cmd)
+				local out = run(cmd)
+				if cmd:find("dev wlan0 info", 1, true) then
+					out = (out:gsub("channel 6 %\(2437 MHz%\), width: 20 MHz, center1: 2437 MHz",
+						"channel 11 (2462 MHz), width: 40 MHz, center1: 2452 MHz"))
+				end
+				return out
+			end
+			inject_ucihelper()
+			local st = {authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://192.0.2.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+				ip = "192.0.2.100", hostname = "testap"}
+			local d2 = cjson.decode(inform.build_json(st, nil, ufhw))
+			inform._sysinfo._run_cmd = run
+			assert_eq(d2.vap_table[1].extchannel, -1, "secondary below the primary")
+			assert_nil(d2.radio_table[1].extchannel, "not a radio_table field")
+		end
+	},
+	{
+		name = "inform json: inform_ip is the inform URL's literal host",
+		fn = function()
+			local d = build()
+			-- build() adopts with a literal-IP URL or the default; either way a
+			-- literal host must come back verbatim and a name is resolved.
+			local inform = dofile("src/inform.lua")
+			assert_eq(inform._inform_ip("http://192.0.2.10:8080/inform"), "192.0.2.10", "literal")
+			assert_nil(inform._inform_ip("not a url"), "garbage")
+			assert_true(d.inform_ip == nil or d.inform_ip:match("^%d+%.%d+%.%d+%.%d+$") ~= nil,
+				"inform_ip is omitted or an IPv4 literal")
 		end
 	},
 	{
@@ -536,54 +574,14 @@ return {
 		fn = function()
 			local d = build()
 			-- Real devices report this under the hyphenated key "system-stats"
-			-- (verified against a real captured USG payload).
+			-- (verified against a real captured USG payload) -- not "sys_stats".
 			local stats = d["system-stats"]
 			assert_not_nil(stats, "system-stats present")
 			assert_not_nil(stats.cpu, "cpu field present")
 			assert_not_nil(stats.uptime, "uptime field present")
-			-- meminfo fixture: total=131072kB, free=65536kB -> 50% used
-			assert_eq(stats.mem, "50", "mem percent computed from meminfo fixture")
-		end
-	},
-	{
-		name = "inform json: sys_stats carries load averages and memory bytes as the firmware sends them",
-		fn = function()
-			local d = build()
-			local ss = d.sys_stats
-			assert_not_nil(ss, "sys_stats present beside system-stats")
-			-- /proc/loadavg's own strings: the UI parses and rounds them.
-			assert_eq(ss.loadavg_1, "0.42", "1 min")
-			assert_eq(ss.loadavg_5, "0.17", "5 min")
-			assert_eq(ss.loadavg_15, "0.05", "15 min")
-			-- meminfo fixture, in bytes: total 131072 kB, free 65536 kB,
-			-- buffers 2048 kB. Used is total - free, as sysinfo() gives it.
-			assert_eq(ss.mem_total, 134217728, "mem_total")
-			assert_eq(ss.mem_used, 67108864, "mem_used")
-			assert_eq(ss.mem_buffer, 2097152, "mem_buffer")
-		end
-	},
-	{
-		name = "inform json: connect_request_ip/port are the STUN mapping, as strings, only while it runs",
-		fn = function()
-			local real = inform._stun_c
-			inform._stun_c = nil
-			local d = build()
-			assert_eq(d.connect_request_ip, nil, "no STUN client: no ip")
-			assert_eq(d.connect_request_port, nil, "no STUN client: no port")
-			-- A running client without a response yet.
-			inform._stun_c = {sock = {}}
-			d = build()
-			assert_eq(d.connect_request_port, nil, "no mapping yet")
-			inform._stun_c = {sock = {}, mapped_ip = "192.0.2.3", mapped_port = 41234}
-			local ok, err = pcall(function()
-				d = build()
-				assert_eq(d.connect_request_ip, "192.0.2.3", "ip")
-				-- The firmware sends both as JSON strings; the controller
-				-- parses either (getInt).
-				assert_eq(d.connect_request_port, "41234", "port, a string")
-			end)
-			inform._stun_c = real
-			if not ok then error(err, 0) end
+			-- meminfo fixture: total=131072kB, available=72000kB -> 45% used
+			-- (page cache is reclaimable: MemAvailable, not MemFree)
+			assert_eq(stats.mem, "45", "mem percent computed from meminfo fixture")
 		end
 	},
 	{
@@ -705,26 +703,48 @@ return {
 			-- Transition mode is one section and two netdevs: OWE-capable
 			-- clients sit on the hidden OWE BSS, the rest on the open one.
 			local orig_sta = inform._sysinfo.sta_table
-			inform._sysinfo.sta_table = function(ifname)
-				if ifname == "wlan0" then
-					return {{mac = "aa:bb:cc:dd:ee:01", signal = -50, tx_packets = 1}}
-				end
-				if ifname == "wlan0-2" then
-					return {{mac = "aa:bb:cc:dd:ee:02", signal = -60, tx_packets = 1}}
-				end
-				return {}
-			end
 			ifnames_override = function(radio, ssid)
 				if radio == "radio0" and ssid == "test" then return {"wlan0", "wlan0-2"} end
 				return {}
 			end
 			local ok, err = pcall(function()
-				local d = build({with_uci = true, with_clients = true})
+				inject_sysinfo(true)
+				inform._sysinfo.sta_table = function(ifname)
+					if ifname == "wlan0" then
+						return {{mac = "00:00:5e:00:53:01", signal = -50, tx_packets = 1}}
+					end
+					if ifname == "wlan0-2" then
+						return {{mac = "00:00:5e:00:53:02", signal = -80, tx_packets = 1}}
+					end
+					return {}
+				end
+				inject_ucihelper()
+				-- Minimum RSSI at -70 dBm, so the open BSS's weak client is
+				-- kicked -- on ITS netdev, not the section's own.
+				inform._ucihelper.get_radio_table = function()
+					return {{name = "radio0", radio = "ng", channel = "6",
+						min_rssi_enabled = true, min_rssi_raw = 25}}
+				end
+				local kicked = {}
+				-- Every station has been below Minimum RSSI for longer than its hold.
+				inform._minrssi._low_since = setmetatable({}, {__index = function() return -math.huge end})
+				inform._ucihelper.kick_station = function(ifname, mac)
+					kicked[#kicked + 1] = {ifname = ifname, mac = mac}
+				end
+				local d = cjson.decode(inform.build_json({
+					authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+					inform_url = "http://192.0.2.1:8080/inform", mac = "00:00:5e:00:53:0a",
+					ip = "192.0.2.100", hostname = "testap",
+				}, nil, ufhw))
 				local vap
 				for _, v in ipairs(d.vap_table) do if v.essid == "test" then vap = v end end
 				assert_not_nil(vap, "fixture sanity: the vap exists")
 				assert_eq(vap.num_sta, 2, "one client per BSS, both counted")
 				assert_eq(#vap.sta_table, 2, "and both listed")
+				assert_eq(#kicked, 1, "only the weak client is kicked")
+				assert_eq(kicked[1].ifname, "wlan0-2", "on the open BSS it is associated to")
+				assert_eq(inform._last_vap_by_ifname["wlan0-2"], vap.name,
+					"station events on the open BSS are filed under the vap")
 			end)
 			inform._sysinfo.sta_table, ifnames_override = orig_sta, nil
 			if not ok then error(err, 0) end
@@ -817,6 +837,42 @@ return {
 		end
 	},
 	{
+		name = "inform json: sta chwidth is the controller's code for the wider of tx/rx",
+		fn = function()
+			inform._sta_stats_cache = {}
+			inject_sysinfo(true)
+			inject_ucihelper()
+			local run = inform._sysinfo._run_cmd
+			inform._sysinfo._run_cmd = function(cmd)
+				local out = run(cmd)
+				if cmd:find("dev wlan0 station dump", 1, true) then
+					-- First station: 80 MHz tx, 20 MHz rx. Second: 160 MHz rx.
+					out = out:gsub("(tx bitrate:%s+144%.4 MBit/s MCS 15)", "%1 80MHz", 1)
+					out = out:gsub("(rx bitrate:%s+54%.0 MBit/s MCS 5)", "%1 160MHz", 1)
+				end
+				return out
+			end
+			local d = cjson.decode(inform.build_json({
+				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+				ip = "192.0.2.100", hostname = "testap",
+			}, nil, ufhw))
+			local sta_table = d.vap_table[1].sta_table
+			assert_eq(sta_table[1].chwidth, 2, "80 MHz tx -> code 2")
+			assert_eq(sta_table[2].chwidth, 3, "160 MHz rx -> code 3")
+		end
+	},
+	{
+		name = "inform json: guest_token is reported only while the portal is enforced",
+		fn = function()
+			local d = build({st = {guest_token = "00112233445566778899aabbccddeeff",
+				guest = {enabled = true, portal_url = "http://192.0.2.2/"}}})
+			assert_eq(d.guest_token, "00112233445566778899aabbccddeeff", "portal enforced")
+			d = build({st = {guest_token = "00112233445566778899aabbccddeeff", guest = {enabled = true}}})
+			assert_nil(d.guest_token, "restrictions only: no token")
+		end
+	},
+	{
 		name = "inform json: sta authorized follows the guest ledger on a portal WLAN only",
 		fn = function()
 			-- The controller unauthorizes any station on a portal WLAN that
@@ -840,15 +896,127 @@ return {
 		end
 	},
 	{
-		name = "inform json: guest_token is reported while the portal is on, only",
+		name = "inform json: sta_table carries each client's ip, hostname and ipv6_addresses",
 		fn = function()
-			-- Without it the controller refuses every portal login on this AP
-			-- ("Missing Guest Token in AP[..] during guest authorization").
-			local tok = string.rep("ab", 16)
-			local on = build({st = {guest_portal = {enabled = true}, guest_token = tok}})
-			assert_eq(on.guest_token, tok, "portal on")
-			local off = build({st = {guest_token = tok}})
-			assert_eq(off.guest_token, nil, "portal off: not reported")
+			-- The controller keeps these as the client's last_ip, hostname
+			-- and last_ipv6 (devmgr URbVkSXx); sta_table had none of them.
+			-- Station 1 is in the ARP cache, the lease file and the IPv6
+			-- neighbour cache; station 2 in none -- its keys are left out.
+			inform._sta_stats_cache = {}
+			inject_sysinfo(true)
+			inject_ucihelper()
+			local read, run = inform._sysinfo._read_file, inform._sysinfo._run_cmd
+			local neigh_forks = 0
+			inform._sysinfo._read_file = function(path)
+				if path:find("net/arp") then
+					return "IP address       HW type     Flags       HW address            Mask     Device\n"
+						.. "192.0.2.50       0x1         0x2         aa:bb:cc:dd:ee:ff     *        br-lan\n"
+				end
+				if path:find("dhcp.leases") then
+					return "1735689600 aa:bb:cc:dd:ee:ff 192.0.2.50 pixel-7 01:aa:bb:cc:dd:ee:ff\n"
+				end
+				return read(path)
+			end
+			inform._sysinfo._run_cmd = function(cmd)
+				if cmd:find("ip -6 neigh", 1, true) then
+					neigh_forks = neigh_forks + 1
+					return fixture("ip_6_neigh.txt")
+				end
+				return run(cmd)
+			end
+			local st = {
+				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://192.0.2.1:8080/inform", mac = "aa:bb:cc:00:00:99",
+				ip = "192.0.2.100", hostname = "testap",
+			}
+			local d = cjson.decode(inform.build_json(st, nil, ufhw))
+			local sta = d.vap_table[1].sta_table
+			assert_eq(sta[1].mac, "aa:bb:cc:dd:ee:ff", "station 1")
+			assert_eq(sta[1].ip, "192.0.2.50", "ip from the ARP cache")
+			assert_eq(sta[1].hostname, "pixel-7", "hostname from the DHCP lease")
+			assert_eq(type(sta[1].ipv6_addresses), "table", "ipv6_addresses is a list")
+			assert_eq(#sta[1].ipv6_addresses, 1, "its ULA, not its link-local")
+			assert_eq(sta[1].ipv6_addresses[1], "fd00:db8:77::20", "the neighbour cache's address")
+			assert_eq(sta[2].mac, "11:22:33:44:55:66", "station 2")
+			assert_nil(sta[2].ip, "no ARP entry: ip left out, never 0.0.0.0")
+			assert_nil(sta[2].hostname, "no lease: hostname left out")
+			assert_nil(sta[2].ipv6_addresses, "no neighbour: no empty list either")
+			assert_eq(neigh_forks, 1, "one `ip -6 neigh` for both stations")
+
+			-- No connected client: no fork at all.
+			neigh_forks = 0
+			local orig_ifnames = ifnames_override
+			ifnames_override = function() return {} end
+			inform.build_json(st, nil, ufhw)
+			ifnames_override = orig_ifnames
+			assert_eq(neigh_forks, 0, "no station, no `ip -6 neigh`")
+			inform._sysinfo._read_file, inform._sysinfo._run_cmd = read, run
+		end
+	},
+	{
+		name = "inform json: sta is_11r from the negotiated AKM, state 0x10 from mac80211 power save",
+		fn = function()
+			local st = {
+				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://192.0.2.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+				ip = "192.0.2.100", hostname = "testap",
+			}
+			local function build_with(all_sta, files)
+				inform._sta_stats_cache = {}
+				inform._sysinfo._sta_flags_cache = {}  -- each build is a new association
+				inject_sysinfo(true)
+				inject_ucihelper()
+				local run, read = inform._sysinfo._run_cmd, inform._sysinfo._read_file
+				local forks = 0
+				inform._sysinfo._run_cmd = function(cmd)
+					if cmd:find("all_sta", 1, true) then
+						forks = forks + 1
+						return all_sta
+					end
+					return run(cmd)
+				end
+				inform._sysinfo._read_file = function(path)
+					if files[path] then return files[path] end
+					return read(path)
+				end
+				local d = cjson.decode(inform.build_json(st, nil, ufhw))
+				return d.vap_table[1].sta_table, forks
+			end
+			-- First station on FT-SAE and dozing, second on plain SAE and awake.
+			local all_sta = "aa:bb:cc:dd:ee:ff\nflags=[AUTH][ASSOC][AUTHORIZED][WMM][MFP][HT]\n"
+				.. "wpa=2\nAKMSuiteSelector=00-0f-ac-9\n"
+				.. "11:22:33:44:55:66\nflags=[AUTH][ASSOC][AUTHORIZED][WMM][MFP][HT]\n"
+				.. "wpa=2\nAKMSuiteSelector=00-0f-ac-8\n"
+			local dir = "/sys/kernel/debug/ieee80211/phy0/netdev:wlan0/stations/"
+			inform._sysinfo._ps_phy_ok = {}
+			local files = {
+				["/sys/class/net/wlan0/phy80211/name"] = "phy0\n",
+				["/sys/kernel/debug/ieee80211/phy0/hwflags"] = "SIGNAL_DBM\n",
+				[dir .. "aa:bb:cc:dd:ee:ff/flags"] = "AUTH\nASSOC\nPS_STA\nAUTHORIZED\nWME\n",
+				[dir .. "11:22:33:44:55:66/flags"] = "AUTH\nASSOC\nAUTHORIZED\nWME\n",
+			}
+			local t, forks = build_with(all_sta, files)
+			assert_eq(forks, 1, "one all_sta read per BSS")
+			assert_eq(t[1].is_11r, true, "FT-SAE is 802.11r")
+			assert_true(t[2].is_11r == nil, "plain SAE: left out, as the firmware sends it")
+			assert_eq(t[1].state, 16, "power save is the controller's state bit 0x10")
+			assert_eq(t[2].state, 0, "awake: no bit")
+			-- No source: both left out, which the controller reads as false.
+			t = build_with("", {})
+			assert_true(t[1].is_11r == nil, "no hostapd record: no is_11r")
+			assert_true(t[1].state == nil, "no debugfs: no state")
+			-- The same association on the next heartbeat: hostapd is not asked again.
+			t, forks = build_with(all_sta, files)
+			local prev_run = inform._sysinfo._run_cmd
+			inform._sysinfo._run_cmd = function(cmd)
+				if cmd:find("all_sta", 1, true) then forks = forks + 1; return "" end
+				return prev_run(cmd)
+			end
+			local d = cjson.decode(inform.build_json(st, nil, ufhw))
+			assert_eq(forks, 1, "a known association reuses its answer")
+			assert_eq(d.vap_table[1].sta_table[1].is_11r, true, "and keeps its is_11r")
+			inform._sysinfo._sta_flags_cache = {}
+			inform._sta_stats_cache = {}
 		end
 	},
 	{
@@ -867,18 +1035,12 @@ return {
 			assert_eq(sta_table[1].radio, "ng", "radio from vap (the band, matching vap.radio)")
 			assert_true(sta_table[1].active, "active true for a station iw actually lists")
 			assert_eq(sta_table[1].signal, -62, "signal from station dump")
-			-- rssi is the SNR over the in-use survey noise, as the firmware
-			-- sends it; noise is that floor.
-			assert_eq(sta_table[1].rssi, 33, "rssi = signal - noise (-62 - -95)")
-			assert_eq(sta_table[1].noise, -95, "noise from the in-use survey entry")
-			assert_eq(sta_table[1].state, 0x10, "dozing station: state bit 0x10")
-			assert_eq(sta_table[2].state, 0, "awake station: state 0")
-			assert_eq(sta_table[1].is_11r, true, "FT-SAE AKM: is_11r")
-			assert_eq(sta_table[2].is_11r, nil, "PSK AKM: is_11r absent, as the firmware omits it")
-			-- UniFi firmware sends none of these, and the controller reads
-			-- them only off a mesh uplink's entry: absent, not invented.
+			assert_eq(sta_table[1].rssi, 33, "rssi is the SNR in dB (-62 over the -95 floor), as the firmware sends it")
+			assert_eq(sta_table[1].noise, -95, "noise is the radio's in-use survey noise floor")
+			assert_eq(sta_table[1].chwidth, 0, "chwidth 0 (20 MHz): no width token on either rate")
+			-- UniFi firmware sends none of these; they were invented.
 			for _, k in ipairs({"capacity", "throughput", "linkscore", "multicast"}) do
-				assert_eq(sta_table[1][k], nil, k .. " is not sent")
+				assert_nil(sta_table[1][k], k .. " is not sent")
 			end
 			-- Cumulative per-client counters -- confirmed real field names via
 			-- the decompiled vapInformProcessor (com.ubnt.service.devmgr.c.
@@ -929,7 +1091,7 @@ return {
 			assert_true(math.abs(st.wifi_tx_retries_percentage
 				- 4 * 100 / (287 + 4 + st.wifi_tx_dropped)) < 1e-10,
 				"wifi_tx_retries_percentage = retries / (retries + attempts + dropped)")
-			-- satisfaction (satisfaction.lua): signal avg -63 dBm is far
+			-- satisfaction (unifi/satisfaction.lua): signal avg -63 dBm is far
 			-- above the noise floor (100), the mean of 144.4 and 72.2
 			-- Mbit/s is 108300 kbps (90), and the retry window has no
 			-- minute yet (100).
@@ -940,72 +1102,22 @@ return {
 		end
 	},
 	{
-		name = "inform json: build_json closes a ucihelper pass it opened, never one it joined",
+		-- Listed, a client that roamed away makes 10.6's roam fallback record
+		-- the move a second time, without tags (upstream ea0b5d6).
+		name = "inform json: a client that roamed away is left out of sta_table until hostapd drops it",
 		fn = function()
-			-- _tick holds one pass from its first resync to the payload; the
-			-- payload closing it would leave the rest of the cycle uncached.
-			local open, ends = false, 0
-			local function pass_mock()
-				inject_ucihelper()
-				inform._ucihelper.begin_pass = function()
-					if open then return false end
-					open = true
-					return true
-				end
-				inform._ucihelper.end_pass = function() open = false; ends = ends + 1 end
-			end
-			pass_mock()
-			open = true
-			build({})
-			assert_true(open, "a joined pass is still open after the payload")
-			assert_eq(ends, 0, "and build_json never ended it")
-			open = false
-			pass_mock()
-			build({})
-			assert_false(open, "called on its own, it closes the pass it opened")
-			assert_eq(ends, 1, "once")
-		end
-	},
-	{
-		name = "inform json: a steady station's AKM is asked of hostapd once, not every heartbeat",
-		fn = function()
-			inform._sta_stats_cache = {}
-			local d, st = build({with_uci = true, with_clients = true})
-			local runs = 0
-			local base = inform._sysinfo._run_cmd
-			inform._sysinfo._run_cmd = function(cmd)
-				if cmd:find("hostapd_cli", 1, true) then runs = runs + 1 end
-				return base(cmd)
-			end
-			inform._sysinfo.end_pass()
-			local d2 = cjson.decode(inform.build_json(st, nil, ufhw))
-			inform._sysinfo._run_cmd = base
-			assert_eq(runs, 0, "second heartbeat: no hostapd_cli")
-			local t1, t2 = d.vap_table[1].sta_table, d2.vap_table[1].sta_table
-			assert_eq(t2[1].is_11r, true, "FT-SAE still reported from the cache")
-			assert_eq(t2[2].is_11r, t1[2].is_11r, "PSK unchanged")
-		end
-	},
-	{
-		name = "inform json: sta state, is_11r and noise are left out when nothing can say",
-		fn = function()
-			inform._sta_stats_cache = {}
-			local si = inform._sysinfo
-			local orig_ps, orig_akms, orig_rs = si.sta_powersave, si.sta_akms, si.radio_stats
-			-- A radio that tracks power save in the driver (AP_LINK_PS), no
-			-- hostapd_cli, and no survey reading.
-			si.sta_powersave = function() return nil end
-			si.sta_akms      = function() return {} end
-			si.radio_stats   = function() return {} end
-			local ok, err = pcall(function()
-				local s = build({with_uci = true, with_clients = true}).vap_table[1].sta_table[1]
-				assert_eq(s.state, nil, "no power-save reading: state absent, not 0")
-				assert_eq(s.is_11r, nil, "no AKM: is_11r absent")
-				assert_eq(s.noise, nil, "no survey: noise absent")
-				assert_eq(s.rssi, 34, "rssi over the -96 floor the firmware clamps to (-62 - -96)")
-			end)
-			si.sta_powersave, si.sta_akms, si.radio_stats = orig_ps, orig_akms, orig_rs
-			if not ok then error(err, 0) end
+			local ev = inform._staevents
+			ev._reset()
+			ev._roamed["aa:bb:cc:dd:ee:ff"] = 1e9
+			local d = build({with_uci = true, with_clients = true})
+			local macs = {}
+			for _, s in ipairs(d.vap_table[1].sta_table) do macs[#macs + 1] = s.mac end
+			assert_eq(table.concat(macs, ","), "11:22:33:44:55:66", "only the other client")
+			assert_eq(d.vap_table[1].num_sta, 1, "and not counted")
+			local listed = {}
+			for _, o in ipairs(inform._last_here_obs) do listed[#listed + 1] = o.mac end
+			assert_eq(#listed, 2, "roam_observe still sees both, so the mark survives")
+			ev._reset()
 		end
 	},
 	{
@@ -1040,12 +1152,12 @@ return {
 		end
 	},
 	{
-		name = "inform json: the per-station cache forgets a station that left",
+		name = "inform json: the station cache forgets a station that left",
 		fn = function()
 			-- _sta_stats_cache is keyed by CLIENT MAC and was never emptied,
 			-- so on a daemon that runs for months in a place with transient
 			-- clients it only ever grew. A station back after the window is a
-			-- fresh association and starts a fresh WiFi Experience window.
+			-- fresh association.
 			inform._sta_stats_cache = {}
 			local orig_time = inform._time
 			inform._time = function() return 1000 end
@@ -1075,22 +1187,15 @@ return {
 			inform._time = function() return t end
 			local st = {
 				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
-				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
-				ip = "192.168.1.100", hostname = "testap",
+				inform_url = "http://192.0.2.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+				ip = "192.0.2.100", hostname = "testap",
 			}
 			local last_vap
-			local base_read = inform._sysinfo._read_file
 			-- One inform, ten seconds after the last: c = {signal, avg,
 			-- noise, tx/rx rate, lifetime tx packets/retries/failed, driver}.
 			local function inform_once(c)
 				inject_ucihelper()
 				inform._sysinfo._phy_info_cache = {}
-				inform._sysinfo._read_file = function(path)
-					if path:find("/device/uevent", 1, true) then
-						return "DRIVER=" .. c.driver .. "\n"
-					end
-					return base_read(path)
-				end
 				inform._sysinfo._run_cmd = function(cmd)
 					if cmd:find("station dump") then
 						return "Station 00:00:5e:00:53:01 (on wlan0)\n" ..
@@ -1106,8 +1211,11 @@ return {
 						return "Survey data from wlan0\n\tfrequency:\t5180 MHz [in use]\n" ..
 							"\tnoise:\t" .. c.noise .. " dBm\n"
 					end
+					if cmd:find("readlink", 1, true) and cmd:find("device/driver", 1, true) then
+						return "../../../bus/drivers/" .. c.driver .. "\n"
+					end
 					if cmd:find("dev wlan0 info") then return fixture("iw_dev_info.txt") end
-					if cmd:find("phy phy0 info") then return fixture("iw_phy_info_5g.txt") end
+					if cmd:find("phy#0 info", 1, true) then return fixture("iw_phy_info_5g.txt") end
 					return ""
 				end
 				t = t + 10
@@ -1188,30 +1296,6 @@ return {
 		end
 	},
 	{
-		name = "inform json: radio_table_stats derived from survey dump",
-		fn = function()
-			local d = build({with_uci = true, with_clients = true})
-			assert_eq(#d.radio_table_stats, 1, "one radio_table_stats entry")
-			assert_eq(d.radio_table_stats[1].name, "radio0", "keyed by radio name")
-			assert_eq(d.radio_table_stats[1].cu_total, 37, "cu_total = busy/total*100")
-			assert_eq(d.radio_table_stats[1].cu_self_rx, 18, "cu_self_rx = channel_time_rx/total*100")
-			assert_eq(d.radio_table_stats[1].cu_self_tx, 9, "cu_self_tx = channel_time_tx/total*100")
-			assert_eq(d.radio_table_stats[1].cu_interf, 10, "cu_interf = cu_total - cu_self_rx - cu_self_tx")
-		end
-	},
-	{
-		name = "inform json: radio_table entries carry a nested athstats object for the stat archiver",
-		fn = function()
-			local d = build({with_uci = true, with_clients = true})
-			local radio = d.radio_table[1]
-			assert_not_nil(radio.athstats, "radio_table entry has athstats")
-			assert_eq(radio.athstats.cu_total, 37, "athstats.cu_total matches radio_table_stats")
-			assert_eq(radio.athstats.cu_self_rx, 18, "athstats.cu_self_rx matches radio_table_stats")
-			assert_eq(radio.athstats.cu_self_tx, 9, "athstats.cu_self_tx matches radio_table_stats")
-			assert_eq(radio.athstats.cu_interf, 10, "athstats.cu_interf matches radio_table_stats")
-		end
-	},
-	{
 		-- A UniFi AP reports utilisation over its last ~1 s (umac.ko diffs the
 		-- MIB counters every 10 beacons), not since the radio came up.
 		name = "inform json: channel utilisation is the delta since the previous inform",
@@ -1252,23 +1336,94 @@ return {
 		end
 	},
 	{
-		-- The controller logs "Possible interference" when athstats.ast_txto
-		-- or ast_cst rises faster than 10/s; it diffs the raw counts itself.
-		name = "inform json: athstats carries ath9k's tx and carrier-sense timeout counts",
+		name = "inform json: radio_table_stats derived from survey dump",
+		fn = function()
+			local d = build({with_uci = true, with_clients = true})
+			assert_eq(#d.radio_table_stats, 1, "one radio_table_stats entry")
+			assert_eq(d.radio_table_stats[1].name, "radio0", "keyed by radio name")
+			assert_eq(d.radio_table_stats[1].cu_total, 37, "cu_total = busy/total*100")
+			assert_eq(d.radio_table_stats[1].cu_self_rx, 18, "cu_self_rx = channel_time_rx/total*100")
+			assert_eq(d.radio_table_stats[1].cu_self_tx, 9, "cu_self_tx = channel_time_tx/total*100")
+			assert_eq(d.radio_table_stats[1].cu_interf, 10, "cu_interf = cu_total - cu_self_rx - cu_self_tx")
+		end
+	},
+	{
+		name = "inform json: radio_table entries carry a nested athstats object for the stat archiver",
 		fn = function()
 			local d = build({with_uci = true, with_clients = true})
 			local radio = d.radio_table[1]
-			assert_eq(radio.athstats.ast_txto, 312203, "ast_txto = GTT")
-			assert_eq(radio.athstats.ast_cst, 263611, "ast_cst = CST")
-			assert_nil(radio.athstats.ast_be_xmit, "no beacon count: no source")
-			-- Not ath9k (or no debugfs): absent, never a made-up 0.
-			local orig = inform._sysinfo.radio_timeouts
-			inform._sysinfo.radio_timeouts = function() return nil end
-			d = build({with_uci = true, with_clients = true})
-			inform._sysinfo.radio_timeouts = orig
-			assert_nil(d.radio_table[1].athstats.ast_txto, "no counter: no ast_txto")
-			assert_nil(d.radio_table[1].athstats.ast_cst, "no counter: no ast_cst")
-			assert_eq(d.radio_table[1].athstats.cu_total, 37, "the rest of athstats unchanged")
+			assert_not_nil(radio.athstats, "radio_table entry has athstats")
+			assert_eq(radio.athstats.cu_total, 37, "athstats.cu_total matches radio_table_stats")
+			assert_eq(radio.athstats.cu_self_rx, 18, "athstats.cu_self_rx matches radio_table_stats")
+			assert_eq(radio.athstats.cu_self_tx, 9, "athstats.cu_self_tx matches radio_table_stats")
+			assert_eq(radio.athstats.cu_interf, 10, "athstats.cu_interf matches radio_table_stats")
+			-- No faithful source for the interference event counters: they
+			-- stay off the wire rather than being made up.
+			assert_true(radio.athstats.ast_txto == nil, "no ast_txto")
+			assert_true(radio.athstats.ast_cst == nil, "no ast_cst")
+			assert_true(radio.athstats.ast_be_xmit == nil, "no ast_be_xmit")
+		end
+	},
+	{
+		-- The controller stores athstats.getInt("satisfaction", -1) as the
+		-- radio's score, and the archiver (service.system.v.fdwW) archives it
+		-- unless it is -1 -- with the field absent, getInt()'s default 0 was
+		-- archived for every radio.
+		name = "inform json: athstats.satisfaction is the radio's client mean, -1 without clients",
+		fn = function()
+			local d = build({with_uci = true, with_clients = true})
+			local vap = d.vap_table[1]
+			local sum, n = 0, 0
+			for _, s in ipairs(vap.sta_table) do sum, n = sum + s.satisfaction, n + 1 end
+			assert_true(n > 0, "fixture has clients")
+			assert_eq(d.radio_table[1].athstats.satisfaction, math.floor(sum / n),
+				"radio score = mean of its clients, truncated")
+
+			-- Two radios, clients on radio0 only (the fixture answers station
+			-- dump for wlan0 alone): radio1 must carry the sentinel, not the
+			-- device-wide mean.
+			inform._ucihelper.get_radio_table = function()
+				return {
+					{ name = "radio0", radio = "ng", channel = 6, ht = "HT20", tx_power = "20",
+					  disabled = false, max_txpower = 20 },
+					{ name = "radio1", radio = "na", channel = 36, ht = "VHT80", tx_power = "20",
+					  disabled = false, max_txpower = 20 },
+				}
+			end
+			inform._ucihelper.get_vap_table = function()
+				return {
+					{ name = "openuf_test", essid = "test", radio = "ng", radio_name = "radio0",
+					  encryption = "psk2", disabled = false, bssid = "00:00:5e:00:53:01",
+					  channel = 6, tx_power = "20", usage = "user" },
+					{ name = "openuf_test5", essid = "test", radio = "na", radio_name = "radio1",
+					  encryption = "psk2", disabled = false, bssid = "00:00:5e:00:53:02",
+					  channel = 36, tx_power = "20", usage = "user" },
+				}
+			end
+			inform._ucihelper.get_ifname_for_radio = function(r)
+				return ({radio0 = "wlan0", radio1 = "wlan1"})[r]
+			end
+			inform._ucihelper.get_ifnames_for_vap = function(r)
+				return {({radio0 = "wlan0", radio1 = "wlan1"})[r]}
+			end
+			inject_sysinfo(true)
+			local st = {authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://192.0.2.1:8080/inform", mac = "00:00:5e:00:53:03",
+				ip = "192.0.2.100", hostname = "testap"}
+			local d2 = cjson.decode(inform.build_json(st, nil, ufhw))
+			inject_ucihelper()  -- the one-radio mock back for later tests
+			local by = {}
+			for _, r in ipairs(d2.radio_table) do by[r.name] = r end
+			assert_not_nil(by.radio1.athstats, "radio1 has athstats (survey present)")
+			assert_eq(by.radio1.athstats.satisfaction, -1, "no clients: controller's -1 sentinel")
+			assert_eq(by.radio0.athstats.satisfaction, math.floor(sum / n),
+				"radio0 keeps its own clients' mean")
+
+			-- And with nothing connected anywhere, -1 rather than absent or 0.
+			local d3 = build({with_uci = true, with_clients = false})
+			if d3.radio_table[1].athstats then
+				assert_eq(d3.radio_table[1].athstats.satisfaction, -1, "-1 without clients")
+			end
 		end
 	},
 	{
@@ -1388,36 +1543,8 @@ return {
 				assert_eq(#kicked, 1, "30 s below: exactly one station kicked")
 				assert_eq(kicked[1].mac, "11:22:33:44:55:66", "the -75 dBm station (below -70 threshold) is kicked")
 				assert_eq(kicked[1].ifname, "wlan0", "kicked on the resolved live ifname")
-				local k = inform._assoctrack._kicks["11:22:33:44:55:66"]
-				assert_true(k ~= nil and k.bits == 16, "its departure will carry assoc_status 16 (Minimum RSSI)")
-				assert_nil(inform._assoctrack._kicks["aa:bb:cc:dd:ee:ff"], "not the station left alone")
 			end)
 			inform._time = orig_time
-			if not ok then error(err, 0) end
-		end
-	},
-	{
-		-- A station reported as roamed away (sta_roam) is left out of the
-		-- heartbeat while hostapd still lists it: listed, the controller sees
-		-- it move back and away again, and 10.6 writes that as a second,
-		-- tag-less roam (seen live, 2026-10-14).
-		name = "inform json: a station that roamed away is not reported while hostapd still lists it",
-		fn = function()
-			local at = inform._assoctrack
-			local o_roamed = at._roamed
-			local ok, err = pcall(function()
-				-- Marked later than any frame the fixture reports: not heard since.
-				at._roamed = {["11:22:33:44:55:66"] = 1e12}
-				local d = build({with_clients = true, with_uci = true})
-				local macs = {}
-				for _, v in ipairs(d.vap_table) do
-					for _, sta in ipairs(v.sta_table or {}) do macs[sta.mac] = true end
-				end
-				assert_nil(macs["11:22:33:44:55:66"], "the roamed station is left out")
-				assert_true(macs["aa:bb:cc:dd:ee:ff"], "the other one is reported")
-				assert_true(at._roamed["11:22:33:44:55:66"] ~= nil, "still marked: hostapd still lists it")
-			end)
-			at._roamed = o_roamed
 			if not ok then error(err, 0) end
 		end
 	},
@@ -1492,15 +1619,14 @@ return {
 			local orig_sta = inform._sysinfo.sta_table
 			inform._sysinfo.sta_table = function(ifname)
 				if ifname == "wlan0" then
-					return {{mac = "aa:bb:cc:dd:ee:01", signal = -50, tx_packets = 1}}
+					return {{mac = "00:00:5e:00:53:01", signal = -50, tx_packets = 1}}
 				end
 				if ifname == "wlan0-20" then
-					-- Its last frame was loud; its average is what counts.
-					return {{mac = "aa:bb:cc:dd:ee:02", signal = -65, signal_avg = -80, tx_packets = 1}}
+					return {{mac = "00:00:5e:00:53:02", signal = -80, tx_packets = 1}}
 				end
 				return {}
 			end
-			ifnames_override = function(radio, ssid)
+			inform._ucihelper.get_ifnames_for_vap = function(radio, ssid)
 				if radio == "radio0" and ssid == "test" then return {"wlan0", "wlan0-20"} end
 				return {}
 			end
@@ -1512,112 +1638,75 @@ return {
 					min_rssi_enabled = true, min_rssi_raw = 25}}  -- -70 dBm
 			end
 			local kicked = {}
+			-- Every station has been below Minimum RSSI for longer than its hold.
+			inform._minrssi._low_since = setmetatable({}, {__index = function() return -math.huge end})
 			inform._ucihelper.kick_station = function(ifname, mac)
 				kicked[#kicked + 1] = {ifname = ifname, mac = mac}
 			end
-			inform._minrssi._low_since = {["aa:bb:cc:dd:ee:02"] = os.time() - 60}  -- below for a minute
 			local ok, err = pcall(function()
 				local st = {
 					authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
-					inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
-					ip = "192.168.1.100", hostname = "testap",
+					inform_url = "http://192.0.2.1:8080/inform", mac = "00:00:5e:00:53:10",
+					ip = "192.0.2.100", hostname = "testap",
 				}
 				local d = cjson.decode(inform.build_json(st, nil, ufhw))
 				local vap
 				for _, v in ipairs(d.vap_table) do if v.essid == "test" then vap = v end end
 				assert_eq(vap.num_sta, 2, "the VLAN client is counted")
-				assert_eq(#kicked, 1, "the VLAN client's -80 dBm average is below -70")
-				assert_eq(kicked[1].mac, "aa:bb:cc:dd:ee:02", "that one")
+				assert_eq(#vap.sta_table, 2, "and listed")
+				assert_eq(#kicked, 1, "the -80 dBm VLAN client is below -70")
+				assert_eq(kicked[1].mac, "00:00:5e:00:53:02", "that one")
 				assert_eq(kicked[1].ifname, "wlan0", "through the VAP's hostapd, not wlan0-20")
+				assert_eq(inform._last_vap_by_ifname["wlan0"], "openuf_test",
+					"hostapd's events name the VAP")
+				assert_nil(inform._last_vap_by_ifname["wlan0-20"], "never the VLAN netdev")
 			end)
-			inform._sysinfo.sta_table, ifnames_override = orig_sta, nil
+			inform._sysinfo.sta_table = orig_sta
 			if not ok then error(err, 0) end
 		end
 	},
 	{
-		name = "inform json: Roaming Assistant gets one observation per station of its vap, and the threshold never leaks",
+		name = "inform json: Roaming Assistant watches a client on a key's VLAN through the VAP's hostapd",
 		fn = function()
-			inject_sysinfo(true)  -- aa:bb:cc:dd:ee:ff at -62 dBm (3600 s), 11:22:33:44:55:66 at -75 dBm (42 s)
+			-- usteer and hostapd know the BSS, not the VLAN netdev: an
+			-- observation filed under wlan0-20 would find no local node and
+			-- no ubus object to send the BSS Transition request to.
+			inject_sysinfo(true)
 			inject_ucihelper()
+			local orig_sta = inform._sysinfo.sta_table
+			inform._sysinfo.sta_table = function(ifname)
+				if ifname == "wlan0-20" then
+					return {{mac = "00:00:5e:00:53:02", signal = -80, connected_sec = 90, tx_packets = 1}}
+				end
+				return {}
+			end
+			inform._ucihelper.get_ifnames_for_vap = function(radio, ssid)
+				if radio == "radio0" and ssid == "test" then return {"wlan0", "wlan0-20"} end
+				return {}
+			end
+			inform._ucihelper.bss_ifname = function(ifname)
+				return ifname == "wlan0-20" and "wlan0" or ifname
+			end
 			local base = inform._ucihelper.get_vap_table
 			inform._ucihelper.get_vap_table = function()
 				local v = base()
 				v[1].roam_assist_rssi = -70
 				return v
 			end
-			local seen, seen_now, seen_opts
-			local orig = inform._roamassist
-			inform._roamassist = {tick = function(o, now, opts) seen, seen_now, seen_opts = o, now, opts end}
-			local st = {
-				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
-				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
-				ip = "192.168.1.100", hostname = "testap",
-			}
-			local d = cjson.decode(inform.build_json(st, {config = {roam_assist_diff_db = 6}}, ufhw))
-			inform._roamassist = orig
-			assert_eq(#seen, 2, "both stations observed")
-			local by_mac = {}
-			for _, o in ipairs(seen) do by_mac[o.mac] = o end
-			local o = by_mac["11:22:33:44:55:66"]
-			assert_eq(o.ifname, "wlan0", "live ifname")
-			assert_eq(o.ssid, "test", "vap essid")
-			assert_eq(o.signal, -75, "signal")
-			assert_eq(o.connected_sec, 42, "connected time")
-			assert_eq(o.threshold, -70, "the vap's threshold")
-			assert_true(type(seen_now) == "number", "a clock")
-			assert_eq(seen_opts.diff_db, 6, "conf override passed through")
-			assert_nil(d.vap_table[1].roam_assist_rssi, "internal threshold stripped from the payload")
-		end
-	},
-	{
-		name = "inform json: a station below Minimum RSSI is not also handed to Roaming Assistant",
-		fn = function()
-			inject_sysinfo(true)  -- aa:bb:cc:dd:ee:ff at -62 dBm, 11:22:33:44:55:66 at -75 dBm
-			inject_ucihelper()
-			inform._minrssi._low_since = {}
-			local base = inform._ucihelper.get_vap_table
-			inform._ucihelper.get_vap_table = function()
-				local v = base()
-				v[1].roam_assist_rssi = -60
-				return v
-			end
-			inform._ucihelper.get_radio_table = function()
-				return {{name = "radio0", radio = "ng", channel = "6",
-					min_rssi_enabled = true, min_rssi_raw = 25}}  -- -70 dBm
-			end
-			local seen
-			local orig = inform._roamassist
-			inform._roamassist = {tick = function(o) seen = o end}
-			local st = {
-				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
-				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
-				ip = "192.168.1.100", hostname = "testap",
-			}
-			local ok, err = pcall(inform.build_json, st, nil, ufhw)
-			inform._roamassist = orig
+			local ok, err = pcall(function()
+				local st = {
+					authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+					inform_url = "http://192.0.2.1:8080/inform", mac = "00:00:5e:00:53:10",
+					ip = "192.0.2.100", hostname = "testap",
+				}
+				inform.build_json(st, nil, ufhw)
+				assert_eq(#inform._roam_obs, 1, "the VLAN client is observed")
+				assert_eq(inform._roam_obs[1].mac, "00:00:5e:00:53:02", "that one")
+				assert_eq(inform._roam_obs[1].ifname, "wlan0", "under the VAP's BSS, not wlan0-20")
+			end)
+			inform._sysinfo.sta_table = orig_sta
+			inform._roam_obs = nil
 			if not ok then error(err, 0) end
-			assert_eq(#seen, 1, "only the station above Minimum RSSI")
-			assert_eq(seen[1].mac, "aa:bb:cc:dd:ee:ff", "the -62 dBm one")
-			assert_eq(inform._minrssi._low_since["11:22:33:44:55:66"] ~= nil, true,
-				"the -75 dBm one is Minimum RSSI's")
-		end
-	},
-	{
-		name = "inform json: no Roaming Assistant pass when no vap has it on",
-		fn = function()
-			inject_sysinfo(true)
-			inject_ucihelper()
-			local called = false
-			local orig = inform._roamassist
-			inform._roamassist = {tick = function() called = true end}
-			local st = {
-				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
-				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
-				ip = "192.168.1.100", hostname = "testap",
-			}
-			inform.build_json(st, nil, ufhw)
-			inform._roamassist = orig
-			assert_false(called, "tick not called")
 		end
 	},
 	{
@@ -1636,6 +1725,102 @@ return {
 			}
 			inform.build_json(st, nil, ufhw)
 			assert_eq(#kicked, 0, "no stations kicked when minrssi is not enabled")
+		end
+	},
+	{
+		name = "inform json: Roaming Assistant gets one observation per station of its vap, and the threshold never leaks",
+		fn = function()
+			inject_sysinfo(true)  -- two stations on wlan0: -62 dBm (3600 s) and -75 dBm (42 s)
+			inject_ucihelper()
+			local base = inform._ucihelper.get_vap_table
+			inform._ucihelper.get_vap_table = function()
+				local v = base()
+				v[1].roam_assist_rssi = -70
+				return v
+			end
+			local st = {
+				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://192.0.2.1:8080/inform", mac = "00:00:5e:00:53:10",
+				ip = "192.0.2.100", hostname = "testap",
+			}
+			local cfg = {config = {roam_assist_diff_db = 6}}
+			local d = cjson.decode(inform.build_json(st, cfg, ufhw))
+			local seen = inform._roam_obs
+			assert_eq(#seen, 2, "both stations observed")
+			local o
+			for _, x in ipairs(seen) do if x.signal == -75 then o = x end end
+			assert_true(o ~= nil, "the -75 dBm station is among them")
+			assert_eq(o.ifname, "wlan0", "live ifname")
+			assert_eq(o.ssid, "test", "vap essid")
+			assert_eq(o.connected_sec, 42, "connected time")
+			assert_eq(o.threshold, -70, "the vap's threshold")
+			assert_nil(d.vap_table[1].roam_assist_rssi, "internal threshold stripped from the payload")
+
+			-- The loop's pass hands them over once, with the configured margin.
+			local got, got_now, got_opts
+			local orig = inform._roamassist
+			inform._roamassist = {tick = function(obs, now, opts)
+				got, got_now, got_opts = obs, now, opts
+				return 0
+			end}
+			inform._roamassist_tick(cfg)
+			local again = false
+			inform._roamassist.tick = function() again = true end
+			inform._roamassist_tick(cfg)
+			inform._roamassist = orig
+			assert_eq(got, seen, "this heartbeat's observations")
+			assert_true(type(got_now) == "number", "a clock")
+			assert_eq(got_opts.diff_db, 6, "roam_assist_diff_db passed through")
+			assert_false(again, "consumed: a second pass without a new build does nothing")
+		end
+	},
+	{
+		name = "inform json: a station minrssi kicks is not also a Roaming Assistant observation",
+		fn = function()
+			inject_sysinfo(true)
+			inject_ucihelper()
+			inform._ucihelper.get_radio_table = function()
+				return {
+					{ name = "radio0", radio = "ng", channel = "6",
+					  min_rssi_enabled = true, min_rssi_raw = 25 },  -- -70 dBm
+				}
+			end
+			inform._ucihelper.kick_station = function() end
+			local base = inform._ucihelper.get_vap_table
+			inform._ucihelper.get_vap_table = function()
+				local v = base()
+				v[1].roam_assist_rssi = -70
+				return v
+			end
+			local st = {
+				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://192.0.2.1:8080/inform", mac = "00:00:5e:00:53:10",
+				ip = "192.0.2.100", hostname = "testap",
+			}
+			inform.build_json(st, nil, ufhw)
+			assert_eq(#inform._roam_obs, 1, "only the station minrssi left alone")
+			assert_eq(inform._roam_obs[1].signal, -62, "the -62 dBm one")
+			inform._roam_obs = nil
+		end
+	},
+	{
+		name = "inform json: no Roaming Assistant pass when no vap has it on",
+		fn = function()
+			inject_sysinfo(true)
+			inject_ucihelper()
+			local st = {
+				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://192.0.2.1:8080/inform", mac = "00:00:5e:00:53:10",
+				ip = "192.0.2.100", hostname = "testap",
+			}
+			inform.build_json(st, nil, ufhw)
+			assert_eq(#inform._roam_obs, 0, "nothing observed")
+			local called = false
+			local orig = inform._roamassist
+			inform._roamassist = {tick = function() called = true end}
+			inform._roamassist_tick(nil)
+			inform._roamassist = orig
+			assert_false(called, "tick not called")
 		end
 	},
 	{
@@ -1684,22 +1869,6 @@ return {
 			assert_eq(inform._fix_empty_arrays(hostile),
 				'{"ssid":"evil\\"sta_table\\":{}","sta_table":[]}',
 				"escaped quotes inside string values never match")
-			assert_eq(inform._fix_empty_arrays(
-				'{"other":{},"my_sta_table":{},"sta_tables":{},"sta_table":{"a":{}}}'),
-				'{"other":{},"my_sta_table":{},"sta_tables":{},"sta_table":{"a":{}}}',
-				"other empty objects and look-alike keys keep their braces")
-			local long = '{"a_very_long_field_name_ending_in_sta_table":{},"radio_table_stats":{}}'
-			assert_eq(inform._fix_empty_arrays(long),
-				'{"a_very_long_field_name_ending_in_sta_table":{},"radio_table_stats":[]}',
-				"a long look-alike keeps its braces, the longest listed name is rewritten")
-			local same = '{"x":{},"y":1}'
-			assert_eq(inform._fix_empty_arrays(same), same, "nothing to rewrite")
-			for _, f in ipairs({"if_table", "radio_table", "radio_table_stats",
-					"vap_table", "scan_radio_table", "port_table", "lldp_table",
-					"sta_table", "mac_table", "scan_table"}) do
-				assert_eq(inform._fix_empty_arrays('{"' .. f .. '":{}}'),
-					'{"' .. f .. '":[]}', f .. " is a list")
-			end
 		end
 	},
 	{
@@ -1740,7 +1909,7 @@ return {
 			-- live iw fixture has negotiated channel 6, which must win.
 			-- Pre-fix the payload reported this 2.4GHz radio as "na" (5GHz).
 			inject_sysinfo(false, false, false, true)  -- with_radio_caps
-			local real_uci = dofile("openuf/ucihelper.lua")
+			local real_uci = dofile("src/openwrt/ucihelper.lua")
 			local sections = {
 				{[".name"] = "radio0", [".type"] = "wifi-device", channel = "auto"},
 				{[".name"] = "openuf_radio0_test", [".type"] = "wifi-iface",
@@ -1782,69 +1951,10 @@ return {
 			-- the literal string "auto" here, and used to go out as-is.
 			assert_eq(d.vap_table[1].channel, 6, "vap channel overridden with the live value")
 			assert_eq(d.vap_table[1].radio, "ng", "vap band matches the corrected radio band")
-			-- 20 MHz: no secondary channel, and the firmware leaves it out.
-			assert_nil(d.vap_table[1].extchannel, "no extchannel at 20 MHz")
-			assert_nil(d.radio_table[1].extchannel, "extchannel is a vap field only")
 			-- tx_power has the same UCI-echo problem: the option is absent
 			-- while Transmit Power is Auto, so both copies stayed nil.
 			assert_eq(d.radio_table[1].tx_power, 20, "radio reports the live driver TX power")
 			assert_eq(d.vap_table[1].tx_power, 20, "and the vap inherits the same correction")
-		end
-	},
-	{
-		name = "inform json: a 40 MHz 2.4GHz vap reports its secondary channel side as extchannel",
-		fn = function()
-			-- HT40- on channel 11: the secondary 20 MHz is channel 7, below.
-			-- The UI centres the channel at channel + 2 * extchannel = 9.
-			inject_sysinfo(false, false, false, true)
-			inform._sysinfo._run_cmd = function(cmd)
-				if cmd:find("dev wlan0 info") then
-					return (fixture("iw_dev_info.txt"):gsub(
-						"channel 6 %(2437 MHz%), width: 20 MHz, center1: 2437 MHz",
-						"channel 11 (2462 MHz), width: 40 MHz, center1: 2452 MHz"))
-				end
-				if cmd:find("phy phy0 info") then return fixture("iw_phy_info_2g.txt") end
-				return ""
-			end
-			local real_uci = dofile("openuf/ucihelper.lua")
-			local sections = {
-				{[".name"] = "radio0", [".type"] = "wifi-device", channel = "11"},
-				{[".name"] = "openuf_radio0_test", [".type"] = "wifi-iface",
-				 device = "radio0", ssid = "test", encryption = "psk2"},
-			}
-			real_uci._uci = {cursor = function() return {
-				foreach = function(_, config, stype, fn)
-					if config ~= "wireless" then return end
-					for _, s in ipairs(sections) do
-						if s[".type"] == stype then fn(s) end
-					end
-				end,
-				get = function() return nil end,
-				set = function() end,
-				delete = function() end,
-				commit = function() end,
-			} end}
-			real_uci._popen = function(cmd)
-				if cmd:find("network.wireless", 1, true) then
-					return '{"radio0":{"interfaces":[{"ifname":"wlan0"}]}}'
-				end
-				return ""
-			end
-			real_uci._read_file = function() return nil end
-			real_uci._run_cmd = function() return true end
-
-			local orig = inform._ucihelper
-			inform._ucihelper = real_uci
-			local st = {
-				authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
-				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
-				ip = "192.168.1.100", hostname = "testap",
-			}
-			local d = cjson.decode(inform.build_json(st, nil, ufhw))
-			inform._ucihelper = orig
-			assert_eq(d.vap_table[1].channel, 11, "live channel")
-			assert_eq(d.vap_table[1].extchannel, -1, "secondary below the primary")
-			assert_nil(d.radio_table[1].extchannel, "not a radio_table field")
 		end
 	},
 	{
@@ -1857,10 +1967,10 @@ return {
 			inject_sysinfo(false, false, false, true)
 			inform._sysinfo._run_cmd = function(cmd)
 				if cmd:find("dev wlan0 info") then return fixture("iw_dev_info_5g.txt") end
-				if cmd:find("phy phy0 info") then return fixture("iw_phy_info_5g.txt") end
+				if cmd:find("phy#0 info", 1, true) then return fixture("iw_phy_info_5g.txt") end
 				return ""
 			end
-			local real_uci = dofile("openuf/ucihelper.lua")
+			local real_uci = dofile("src/openwrt/ucihelper.lua")
 			local sections = {
 				{[".name"] = "radio1", [".type"] = "wifi-device", channel = "auto"},
 			}
@@ -1899,36 +2009,82 @@ return {
 		end
 	},
 	{
-		name = "inform json: radio_table carries spectrum_table when cached from a prior spectrum-scan cmd",
+		name = "inform json: radio_table carries spectrum_table, one entry per width, and its age",
 		fn = function()
+			local orig_time = inform._time
+			inform._time = function() return 1111 end
 			inform._spectrum_cache = {
 				radio0 = {
-					table = { { channel = 6, center_freq = 2437, width = 20, utilization = 37, interference = -95 } },
-					table_time = os.time() - 90,
+					table = { { channel = 6, center_freq = 2437, utilization = 37, interference = -95 } },
+					table_time = 1000,
 				},
 			}
 			local d = build({with_uci = true, with_clients = true})
-			-- On radio_table, beside athstats: the controller builds its own
-			-- radio_table_stats from radio_table and drops it anywhere else.
-			local rts = d.radio_table[1]
-			assert_eq(rts.name, "radio0", "radio_table entry for the cached radio")
-			assert_true(d.radio_table_stats[1].spectrum_table == nil, "not in radio_table_stats")
-			-- spectrum_scanning is device-level, not per-radio. The
-			-- controller sets it on queuing the scan and clears it from this.
-			assert_eq(d.spectrum_scanning, false, "spectrum_scanning false once results are cached")
-			inform._spectrum_pending = true
-			local d_pending = build({with_uci = true, with_clients = true})
-			inform._spectrum_pending = false
-			assert_eq(d_pending.spectrum_scanning, true, "true while a scan is pending")
-			assert_true(d.spectrum_scan_timestamp == nil,
-				"spectrum_scan_timestamp is the controller's own (ms, quick-scan)")
-			-- The controller stores now - spectrum_table_time and the UI
-			-- reads that as the scan's epoch: the AP sends the AGE.
-			assert_true(rts.spectrum_table_time >= 90 and rts.spectrum_table_time <= 92,
-				"spectrum_table_time is the age in seconds, got " .. tostring(rts.spectrum_table_time))
-			assert_eq(#rts.spectrum_table, 1, "one spectrum_table entry")
-			assert_eq(rts.spectrum_table[1].channel, 6, "spectrum_table entry channel")
+			inform._time = orig_time
 			inform._spectrum_cache = {}
+			local r = d.radio_table[1]
+			-- The controller builds radio_table_stats from radio_table and
+			-- reads spectrum_table there; in radio_table_stats it is dropped.
+			assert_nil(d.radio_table_stats[1].spectrum_table, "not on radio_table_stats")
+			assert_eq(d.spectrum_scanning, false, "spectrum_scanning false once results are cached")
+			assert_nil(d.spectrum_scan_timestamp, "the controller stamps the scan itself")
+			assert_eq(r.spectrum_table_time, 111, "spectrum_table_time is the scan's age in seconds")
+			local widths = {}
+			for _, e in ipairs(r.spectrum_table) do
+				assert_eq(e.channel, 6, "every entry is the channel's reading")
+				assert_eq(e.utilization, 37, "with its utilization")
+				widths[#widths + 1] = e.width
+			end
+			local want = r.radio == "ng" and "20,40" or "20,40,80"
+			assert_eq(table.concat(widths, ","):sub(1, #want), want, "one entry per width the band offers")
+		end
+	},
+	{
+		name = "payload: spectrum_table lists each reading at every width up to the radio's",
+		fn = function()
+			local ufp = require("unifi.payload")
+			local function widths(band, w)
+				local out = {}
+				for _, e in ipairs(ufp.spectrum_table({{channel = 36}}, band, w)) do out[#out + 1] = e.width end
+				return table.concat(out, ",")
+			end
+			assert_eq(widths("ng", 20), "20,40", "2.4 GHz: 20 and 40")
+			assert_eq(widths("ng", 40), "20,40", "2.4 GHz at HT40 adds nothing")
+			assert_eq(widths("na", 20), "20,40,80", "5 GHz: 20/40/80 whatever the radio runs")
+			assert_eq(widths("na", 160), "20,40,80,160", "up to a wider configured width")
+			assert_eq(widths("6e", 320), "20,40,80,160,320", "6 GHz at 320")
+			assert_eq(#ufp.spectrum_table(nil, "na", 80), 0, "no rows, no entries")
+		end
+	},
+	{
+		name = "inform json: quickscan_scanning is true exactly while a quick-scan is pending",
+		fn = function()
+			-- devmgr.kDxteQiUX reads the top-level flag on every inform and
+			-- takes absent as false: the scan is over the moment it is.
+			local orig = inform._quickscan_pending
+			inform._quickscan_pending = nil
+			local idle = build({with_uci = true})
+			inform._quickscan_pending = {band = "ng"}
+			local busy = build({with_uci = true})
+			inform._quickscan_pending = orig
+			assert_eq(idle.quickscan_scanning, false, "no scan: false")
+			assert_eq(busy.quickscan_scanning, true, "pending scan: true")
+		end
+	},
+	{
+		name = "inform json: spectrum_scanning is true exactly while a spectrum-scan sweep has chunks left",
+		fn = function()
+			local orig = inform._scan_jobs
+			inform._scan_jobs = {}
+			local idle = build({with_uci = true})
+			inform._scan_jobs = {{who = "quick-scan", radio = {name = "radio0"}}}
+			local other = build({with_uci = true})
+			inform._scan_jobs = {{who = "spectrum-scan", radio = {name = "radio0"}}}
+			local busy = build({with_uci = true})
+			inform._scan_jobs = orig
+			assert_eq(idle.spectrum_scanning, false, "no sweep: false")
+			assert_eq(other.spectrum_scanning, false, "a quick-scan's sweep is not a spectrum-scan")
+			assert_eq(busy.spectrum_scanning, true, "spectrum-scan sweep queued: true")
 		end
 	},
 	{
@@ -1936,7 +2092,7 @@ return {
 		fn = function()
 			inform._spectrum_cache = {}
 			local d = build({with_uci = true, with_clients = true})
-			assert_true(d.radio_table[1].spectrum_table == nil and d.radio_table[1].spectrum_table_time == nil,
+			assert_true(d.radio_table[1].spectrum_table == nil,
 				"no spectrum_table until a spectrum-scan cmd has run")
 		end
 	},
@@ -2056,6 +2212,7 @@ return {
 			for _, r in ipairs(d2.radio_table) do
 				assert_eq(r.radio_caps2, 0,
 					"no SAE: the bit is NOT claimed, so no unrunnable config is pushed")
+				assert_eq(r.owe_supported, false, "no OWE: owe_supported stays false")
 			end
 
 			-- Bit 0x8 is Enhanced Open, probed on its own: without it an OWE
@@ -2066,6 +2223,7 @@ return {
 			local d3 = build({with_uci = true, with_radio_caps = true})
 			for _, r in ipairs(d3.radio_table) do
 				assert_eq(r.radio_caps2, 0xB, "SAE + OWE: 0x1 | 0x2 | 0x8")
+				assert_eq(r.owe_supported, true, "owe_supported follows the same probe")
 			end
 			inform._sysinfo._sae_supported_cache = false
 			local d4 = build({with_uci = true, with_radio_caps = true})
@@ -2089,6 +2247,30 @@ return {
 			assert_eq(st[1].serialno, "00:00:5e:00:53:20", "resolved by its identity MAC, not its BSSID")
 			assert_eq(st[2].is_unifi, nil, "no IE of ours: left for the controller's rogue check")
 			assert_eq(st[2].serialno, nil, "...with no serialno")
+		end
+	},
+	{
+		name = "inform json: a BSSID a sibling announced on the LAN is tagged without its IE",
+		fn = function()
+			-- An 802.11k-reported entry carries only a BSSID, never the
+			-- vendor element; the BSSIDs siblings broadcast (siblings.lua)
+			-- are what identify it. Stale announcements must not count.
+			local now = os.time()
+			siblings_json = cjson.encode({
+				["11:22:33:44:55:66"] = {mac = "00:00:5e:00:53:21", seen = now - 10,
+					model = "U6PRO", model_display = "U6-Pro"},
+				["aa:bb:cc:dd:ee:01"] = {mac = "00:00:5e:00:53:22", seen = now - 3600},
+			})
+			local ok, d = pcall(build, {with_uci = true, with_scan = true})
+			siblings_json = nil
+			assert_true(ok, tostring(d))
+			local st = d.scan_radio_table[1].scan_table
+			assert_eq(st[2].bssid, "11:22:33:44:55:66", "fixture order")
+			assert_eq(st[2].is_unifi, true, "announced BSSID is a sibling's")
+			assert_eq(st[2].serialno, "00:00:5e:00:53:21", "serialno is the sibling's identity MAC")
+			assert_eq(st[2].model, "U6PRO", "the sibling's model, for the controller's sighting")
+			assert_eq(st[2].model_display, "U6-Pro", "and its display name")
+			assert_eq(st[1].is_unifi, nil, "an announcement an hour old is forgotten")
 		end
 	},
 	{
@@ -2176,13 +2358,12 @@ return {
 	},
 	{
 		-- A client reports the AP it sits on and its sibling APs like any
-		-- other BSS. Listed, the AP showed up as its own neighbour, and a
-		-- sibling carrying the site's SSID -- untagged, since the tag is in a
-		-- vendor element past where a report's frame body is cut -- is what
-		-- the controller flags as an impersonating rogue.
-		name = "inform json: beacon reports of this AP and its siblings are skipped",
+		-- other BSS. Listed, the AP showed up as its own neighbour. A sibling
+		-- is tagged from the BSSIDs siblings announce; any other BSS carrying
+		-- the site's SSID would be flagged as an impersonating rogue.
+		name = "inform json: beacon reports of this AP are skipped; siblings are tagged and keep their SSID",
 		fn = function()
-			local prev_n, prev_sib = inform._rrm_neighbours, inform._rrmscan.sibling_bssids
+			local prev_n, prev_sib = inform._rrm_neighbours, inform._sysinfo.sibling_bssids
 			inform._rrm_neighbours = {
 				{bssid = "00:00:5e:00:53:01", channel = 1, band = "ng", signal = -11,
 				 seen_at = os.time(), essid = "SiteNet", security = "wpa2"},
@@ -2193,18 +2374,21 @@ return {
 				{bssid = "00:00:5e:00:53:04", channel = 6, band = "ng", signal = -80,
 				 seen_at = os.time(), essid = "Elsewhere", security = "wpa2", bw = 40},
 			}
-			inform._rrmscan.sibling_bssids = function()
-				return {["00:00:5e:00:53:02"] = true}
+			inform._sysinfo.sibling_bssids = function()
+				return {["00:00:5e:00:53:02"] = "00:00:5e:00:53:20"}, {}
 			end
 			local ok, d = pcall(build, {with_uci = true, vap_patch = function(vaps)
 				vaps[1].bssid, vaps[1].essid = "00:00:5E:00:53:01", "SiteNet"
 			end})
-			inform._rrm_neighbours, inform._rrmscan.sibling_bssids = prev_n, prev_sib
+			inform._rrm_neighbours, inform._sysinfo.sibling_bssids = prev_n, prev_sib
 			assert_true(ok, "build_json survives: " .. tostring(d))
 			local seen = {}
 			for _, e in ipairs(d.scan_radio_table[1].scan_table) do seen[e.bssid] = e end
 			assert_nil(seen["00:00:5e:00:53:01"], "this AP's own BSSID is skipped")
-			assert_nil(seen["00:00:5e:00:53:02"], "a usteer sibling is skipped")
+			local sib = seen["00:00:5e:00:53:02"]
+			assert_true(sib and sib.is_unifi == true, "a sibling is tagged is_unifi")
+			assert_eq(sib.serialno, "00:00:5e:00:53:20", "with its device MAC")
+			assert_eq(sib.essid, "SiteNet", "and keeps the site's SSID")
 			assert_not_nil(seen["00:00:5e:00:53:03"], "an unknown BSS is still listed")
 			assert_nil(seen["00:00:5e:00:53:03"].essid, "but not with the site's SSID")
 			assert_eq(seen["00:00:5e:00:53:04"].essid, "Elsewhere", "a foreign SSID is carried")
@@ -2237,7 +2421,7 @@ return {
 		end
 	},
 	{
-		name = "inform json: fw_caps sets the QCA-switch, OWRT-switch and multi-block schedule bits (0x1110)",
+		name = "inform json: fw_caps sets the QCA-switch and OWRT-switch bits (0x110)",
 		fn = function()
 			-- Confirmed via decompiled controller 10.4.57: Device.hasQCASwitch()
 			-- is hasFirmwareCapability(16) (gates the Ports view's projection
@@ -2245,75 +2429,154 @@ return {
 			-- hasFirmwareCapability(256) (without it, the REST API's per-port
 			-- VLAN validator rejects any port assignment with
 			-- api.err.VlanTaggingUnsupportedByDevice -- see PROTOCOL-VALIDATION.md
-			-- section 18). supportMultiBlockWlanSchedule() is
-			-- hasFirmwareCapability(4096): a day's schedule blocks as
-			-- schedule_<day>.<i> (wlansched.lua); schedule_invert (0x400000)
-			-- stays unclaimed.
+			-- section 18).
 			local d = build()
-			assert_eq(d.fw_caps, 0x1110, "fw_caps bits 0x10 | 0x100 | 0x1000 set")
+			assert_eq(d.fw_caps, 0x100110 + 0x1000 + 0x400000 + 0x20000000,
+				"fw_caps bits 0x10 | 0x100, 0x100000 (RADIUS DAS), the WLAN Schedule "
+				.. "pair 0x1000 | 0x400000 and 0x20000000 (RADIUS Filter-Id)")
 		end
 	},
 	{
-		name = "inform json: wifi_caps2 claims exactly advertise-name (0x40) and assisted roaming (0x20)",
+		name = "inform json: fw_caps claims Hotspot 2.0, SNMPv3 and MAC-based VLANs only where the device has them",
 		fn = function()
-			-- Confirmed via decompiling the controller: Device.
-			-- supportAdvertisingDeviceNameInBeacon() is hasWifiCapability2(64)
-			-- -- a SEPARATE bitmask from fw_caps/wifi_caps -- and gates whether
-			-- wireless.<n>.advertise_ap_name is ever pushed to system_cfg at
-			-- all for "Show Access Point Name in Beacon". supportsAssistedRoaming()
-			-- is hasWifiCapability2(32) and gates wireless.<n>.btm_disassoc
-			-- (Roaming Assistant). No other bit is claimed (see
-			-- PROTOCOL-VALIDATION.md for the ones this device does not implement).
-			local d = build()
-			assert_eq(d.wifi_caps2, 0x60, "wifi_caps2 is exactly 0x40|0x20")
-		end
-	},
-	{
-		-- supportsRoamTopologyStats() is hasWifiCapability2(8192) (10.6.106).
-		-- With it the controller takes roams only from this AP's roam reports,
-		-- so it is claimed exactly while those are sent: when the controller
-		-- asked for connection notifs and conf.lua has not vetoed them.
-		name = "inform json: wifi_caps2 adds 0x2000 only while roam reports are sent",
-		fn = function()
-			assert_eq(build().wifi_caps2, 0x60, "not asked: no claim")
-			assert_eq(build({st = {notif_assoc_stat = true}}).wifi_caps2, 0x2060, "asked: claimed")
+			local base = 0x100110 + 0x1000 + 0x400000 + 0x20000000
 			inject_sysinfo()
-			local st = {authkey = state.DEFAULT_KEY, inform_url = "http://10.0.0.1:8080/inform",
-				mac = "aa:bb:cc:dd:ee:ff", notif_assoc_stat = true}
-			local d = cjson.decode(inform.build_json(st, {config = {assoc_tracker = false}}, ufhw))
-			assert_eq(d.wifi_caps2, 0x60, "assoc_tracker = false: no claim")
+			inform._sysinfo._hs20_supported_cache = true
+			local caps = inform._report.fw_caps(inform, nil)
+			assert_eq(caps, base + 0x800000, "0x800000 with hostapd -vhs20")
+			inform._sysinfo._hs20_supported_cache = false
+			inform._snmp._cache = {}
+			inform._snmp._read_file = function(path)
+				if path == "/etc/init.d/snmpd" then return "#!/bin/sh /etc/rc.common\n" end
+				if path == "/lib/apk/db/installed" then return "P:libnetsnmp-ssl\nV:5.9.4-r6\n\nP:snmpd-ssl\n" end
+			end
+			assert_eq(inform._report.fw_caps(inform, nil), base + 0x4000, "0x4000 with snmpd-ssl")
+			inform._snmp._cache = {}
+			inform._snmp._read_file = function(path)
+				if path == "/etc/init.d/snmpd" then return "x" end
+				if path == "/lib/apk/db/installed" then return "P:snmpd-nossl\n" end
+			end
+			assert_eq(inform._report.fw_caps(inform, nil), base, "no 0x4000 with snmpd-nossl (no privacy)")
+			inform._snmp._cache = {}
+			inform._snmp._read_file = function() return nil end
+			inform._sysinfo._ppsk_supported_cache = true
+			local signed = inform._report.fw_caps(inform, nil)
+			assert_eq(signed, base + 0x80000000 - 4294967296,
+				"bit 31 goes out as the Java int's negative value")
+			assert_true(signed < 0, "negative on the wire")
+			-- The JSON the controller parses carries it as a plain integer.
+			local d = build()
+			inform._sysinfo._ppsk_supported_cache = true
+			local d2 = cjson.decode(inform.build_json({authkey = state.DEFAULT_KEY, adopted = false,
+				cfgversion = "", inform_url = "http://192.0.2.1:8080/inform", mac = "00:00:5e:00:53:0f",
+				ip = "192.0.2.100", hostname = "t"}, nil, ufhw))
+			assert_eq(d2.fw_caps, signed, "build_json sends the signed value")
+			assert_eq(d.fw_caps, base, "and nothing of it without the VLAN probe")
+			assert_eq(inform._report.signed32(0x7fffffff), 0x7fffffff, "bit 31 clear: unchanged")
+			inform._sysinfo._ppsk_supported_cache = false
 		end
 	},
 	{
-		name = "inform json: wifi_caps claims band steering (0x4), per-VAP pairs (0x8), spectrum scan (0x10), ATF (0x20), PPSK (0x100000)",
+		name = "inform json: wifi_caps2 claims exactly the bits openUF implements",
+		fn = function()
+			-- A SEPARATE bitmask from fw_caps/wifi_caps; each bit gates a
+			-- feature the controller will only push to a device claiming it.
+			-- See PROTOCOL-VALIDATION.md for the bits this device does not
+			-- implement and must not claim. One line per claimed bit:
+			local claimed = {
+				-- supportAdvertisingDeviceNameInBeacon() = hasWifiCapability2(64):
+				-- wireless.<n>.advertise_ap_name ("Show AP Name in Beacon")
+				0x40,
+				-- supportsAssistedRoaming() = hasWifiCapability2(32):
+				-- wireless.<n>.btm_disassoc.* (Roaming Assistant)
+				0x20,
+				-- supportsAcsDfs() = hasWifiCapability2(16):
+				-- radio.<n>.blklst / radio.<n>.acsdfs (Auto-channel inputs)
+				0x10,
+				-- supportQuickScan() = hasWifiCapability2(128): `quick-scan`
+				0x80,
+				-- supportsMulticastSuppressor() = hasWifiCapability2(0x400000):
+				-- wireless.<n>.multicast.suppressor
+				0x400000,
+				-- supportsRoamTopologyStats() = hasWifiCapability2(8192):
+				-- sta_roam fed to the roaming detector, `success` no longer
+				0x2000,
+			}
+			local want = 0
+			for _, bit in ipairs(claimed) do want = want + bit end
+			local d = build()
+			assert_eq(d.wifi_caps2, want, "wifi_caps2 is exactly the claimed bits")
+			-- supportNeighbourInScan() = hasWifiCapability2(512): only while a
+			-- sibling-sighting scan is configured.
+			local s = build({cfg = {config = {sibling_scan_interval = 1800}}})
+			assert_eq(s.wifi_caps2, want + 0x200, "0x200 with sibling scans on")
+			local i = build({cfg = {config = {idle_scan_interval = 1800, sibling_scan_interval = 0}}})
+			assert_eq(i.wifi_caps2, want + 0x200, "0x200 with idle sweeps on")
+			local x = build({cfg = {config = {sibling_scan_interval = 1800, idle_scan_interval = 0,
+				sibling_exchange = false}}})
+			assert_eq(x.wifi_caps2, want, "sibling scans without the exchange have nothing to listen for")
+			-- No connection events, no roam topology.
+			local n = build({cfg = {config = {sta_events = false}}})
+			assert_eq(n.wifi_caps2, want - 0x2000, "0x2000 off with sta_events off")
+		end
+	},
+	{
+		name = "inform json: wifi_caps claims band steering (0x4) and per-VAP pairs (0x8)",
 		fn = function()
 			-- Device.supportBandsteering() is hasWifiCapability(4): without it
 			-- the device-level bandsteering.* block is never emitted.
 			-- supportVapBasedBandsteering() (8) keeps it on when some WLAN has
-			-- no 2.4/5 GHz pair. The other wifi_caps bits gate features openUF
-			-- does not implement (PROTOCOL-VALIDATION.md, Capability bitmasks).
-			local o = inform._airtime.supported
-			local o_ppsk = inform._sysinfo._ppsk_supported_cache
-			inform._sysinfo._ppsk_supported_cache = false
-			inform._airtime.supported = function() return false end
+			-- no 2.4/5 GHz pair. Checked bit by bit: other bits are claimed
+			-- for other features, each with its own test.
 			local d = build()
+			assert_eq(type(d.wifi_caps), "number", "wifi_caps sent")
+			assert_eq(math.floor(d.wifi_caps / 0x4) % 2, 1, "bit 0x4 set")
+			assert_eq(math.floor(d.wifi_caps / 0x8) % 2, 1, "bit 0x8 set")
+		end
+	},
+	{
+		name = "inform json: wifi_caps claims Lock to Access Point (0x1000000)",
+		fn = function()
+			-- Device.supportLockAp() is hasWifiCapability(0x1000000); the site
+			-- offers the client setting only while every wireless device has
+			-- it. The lock arrives as macacl entries hostapd enforces.
+			local d = build()
+			assert_eq(math.floor(d.wifi_caps / 0x1000000) % 2, 1, "bit 0x1000000 set")
+		end
+	},
+	{
+		name = "inform json: wifi_caps claims Airtime Fairness (0x20) only where airtime_flags can be switched",
+		fn = function()
+			-- supportATFConfig() is hasWifiCapability(32): without it the
+			-- controller sends no atf.* block at all. The other wifi_caps bits
+			-- gate features openUF does not implement (PROTOCOL-VALIDATION.md,
+			-- Capability bitmasks).
+			local off = build()
+			local orig = inform._airtime.supported
 			inform._airtime.supported = function() return true end
-			local d2 = build()
-			inform._sysinfo._ppsk_supported_cache = true
-			local d3 = build()
-			inform._airtime.supported = function() return false end
-			local d4 = build()
-			inform._airtime.supported = o
-			inform._sysinfo._ppsk_supported_cache = o_ppsk
-			-- supportSpectrumScan() is hasWifiCapability(16): without it the
-			-- controller refuses spectrum-scan and stat/spectrum-scan skips the AP.
-			assert_eq(d.wifi_caps, 0x1C, "wifi_caps is exactly 0x4|0x8|0x10")
-			-- supportATFConfig() is hasWifiCapability(32): the atf.* block.
-			assert_eq(d2.wifi_caps, 0x3C, "plus 0x20 where airtime_flags can be switched")
+			local ok, on = pcall(build)
+			inform._airtime.supported = orig
+			if not ok then error(on, 0) end
+			assert_eq(off.wifi_caps % 0x40 - off.wifi_caps % 0x20, 0, "no debugfs switch: 0x20 clear")
+			assert_eq(on.wifi_caps % 0x40 - on.wifi_caps % 0x20, 0x20, "airtime_flags present: 0x20 set")
+			assert_eq(on.wifi_caps - off.wifi_caps, 0x20, "and nothing else moves with it")
+		end
+	},
+	{
+		name = "inform json: wifi_caps claims Private Pre-Shared Keys (0x100000) only where hostapd can do per-key VLANs",
+		fn = function()
 			-- supportWpaPpsk() is hasWifiCapability(0x100000): without it a
 			-- WLAN with Private Pre-Shared Keys is skipped entirely.
-			assert_eq(d3.wifi_caps, 0x10003C, "plus 0x100000 where hostapd can do per-key VLANs")
-			assert_eq(d4.wifi_caps, 0x10001C, "PPSK does not depend on airtime")
+			local off = build()
+			local orig = inform._sysinfo.ppsk_supported
+			inform._sysinfo.ppsk_supported = function() return true end
+			local ok, on = pcall(build)
+			inform._sysinfo.ppsk_supported = orig
+			if not ok then error(on, 0) end
+			local function bit(v) return v % 0x200000 - v % 0x100000 end
+			assert_eq(bit(off.wifi_caps), 0, "no VLAN-capable hostapd: 0x100000 clear")
+			assert_eq(bit(on.wifi_caps), 0x100000, "0x100000 set where it can")
+			assert_eq(on.wifi_caps - off.wifi_caps, 0x100000, "independent of the other bits")
 		end
 	},
 	{
@@ -2356,57 +2619,9 @@ return {
 		end
 	},
 	{
-		name = "inform json: port_table reports one entry per socket, at the socket's own speed",
-		fn = function()
-			-- The board has four sockets behind a switch and two CPU netdevs.
-			-- Reporting a netdev as "the port" reported the internal
-			-- SoC<->switch link -- always 1000/full -- so a WDR3500 whose
-			-- uplink socket had negotiated 100baseT told the controller GbE,
-			-- contradicting the gateway's own view of the same cable.
-			local d = build_switch({
-				cfg = switch_cfg(WDR_MAP),
-				swconfig = fixture("swconfig_show_ar9344.txt"),
-			})
-			assert_eq(#d.port_table, 4, "one entry per socket, not one per netdev")
-			local p = by_idx(d.port_table)
-			assert_eq(p[4].speed, 100, "the uplink socket's real 100baseT link")
-			assert_true(p[4].full_duplex, "and its duplex")
-			assert_eq(p[3].speed, 100, "a downstream socket reports its own speed")
-			assert_false(p[1].up, "an empty socket has no link")
-			assert_eq(p[1].speed, 0, "and no speed, rather than the 1000 fallback")
-		end
-	},
-	{
-		name = "inform json: is_uplink follows the cable, not the modelmap",
-		fn = function()
-			-- Same code, same network, two boards with the cable in different
-			-- sockets. Nothing in either modelmap names an uplink: getting it
-			-- wrong would either hide the real uplink's traffic or report the
-			-- whole LAN segment as hosts plugged into the AP.
-			local d = build_switch({
-				cfg = switch_cfg(WDR_MAP),
-				swconfig = fixture("swconfig_show_ar9344.txt"),
-			})
-			local p = by_idx(d.port_table)
-			assert_true(p[4].is_uplink, "physical 4 carries the gateway here")
-			assert_false(p[3].is_uplink, "and no other socket claims to")
-
-			local d2 = build_switch({
-				cfg = switch_cfg(ARCHER_MAP),
-				swconfig = fixture("swconfig_show_ar8327.txt"),
-			})
-			local p2 = by_idx(d2.port_table)
-			assert_eq(#d2.port_table, 5, "four LAN sockets plus the WAN socket")
-			assert_true(p2[1].is_uplink, "lan1 (physical 2) carries the gateway on this board")
-			assert_false(p2[4].is_uplink, "not the socket the other board used")
-		end
-	},
-	{
 		name = "inform json: a DSA board reports each socket from its own netdev",
 		fn = function()
-			-- No swconfig, no ARL, and none needed: on DSA every socket is a
-			-- netdev, so sysfs is already per-socket rather than describing
-			-- the internal CPU link the way it does on ath79.
+			-- Every socket is a netdev, so sysfs is already per-socket.
 			local d = build_dsa()
 			assert_eq(#d.port_table, 4, "one entry per socket")
 			local p = by_idx(d.port_table)
@@ -2420,8 +2635,7 @@ return {
 	{
 		name = "inform json: is_uplink follows the cable on DSA too",
 		fn = function()
-			-- The same discipline the swconfig path established, on the only
-			-- source a DSA board has for it. A modelmap constant would be
+			-- A board constant would be
 			-- wrong the moment the cable moves, and the socket wrongly
 			-- treated as downstream reports the whole LAN as plugged into it.
 			local d = build_dsa()
@@ -2566,165 +2780,6 @@ return {
 			-- function -- measuring a real heartbeat on hardware is what caught
 			-- it still being read twice.
 			assert_eq(dsa_forks.uptime, 1, "and /proc/uptime is read once for the payload")
-		end
-	},
-	{
-		name = "inform json: wired hosts are reported on the socket they are actually on",
-		fn = function()
-			-- The bridge FDB puts every wired host behind the one CPU netdev;
-			-- only the switch's ARL table says which socket each is on. Until
-			-- this, hosts plugged into an AP were reported by nobody and the
-			-- controller attributed them to the gateway's port instead.
-			local d = build_switch({
-				cfg = switch_cfg(WDR_MAP),
-				swconfig = fixture("swconfig_show_ar9344.txt"),
-			})
-			local p = by_idx(d.port_table)
-			assert_eq(#p[3].mac_table, 1, "the host on socket 3")
-			assert_eq(p[3].mac_table[1].mac, "aa:bb:cc:dd:ee:0c", "its mac")
-			assert_eq(p[3].mac_table[1].ip, "10.0.0.50", "its ip, joined from arp")
-			assert_eq(#p[2].mac_table, 0, "a socket with nothing on it reports no hosts")
-			-- The uplink socket has learned the entire LAN, gateway included.
-			assert_true(p[4].mac_table == nil,
-				"the uplink reports no hosts -- everything there is on the far side")
-		end
-	},
-	{
-		name = "inform json: hosts on a socket outside the management VLAN are not reported",
-		fn = function()
-			-- The Archer C5's WAN socket is live and has learned a host, but
-			-- sits on VLAN 2 with its CPU port down: that host is not on the
-			-- LAN it would be listed in.
-			local d = build_switch({
-				cfg = switch_cfg(ARCHER_MAP),
-				swconfig = fixture("swconfig_show_ar8327.txt"),
-			})
-			local p = by_idx(d.port_table)
-			assert_true(p[5].up, "the WAN socket has link and is reported")
-			assert_true(p[5].mac_table == nil, "but its host is not a client of this LAN")
-			assert_eq(p[5].is_uplink, false, "and it is not the uplink")
-		end
-	},
-	{
-		name = "inform json: a socket's own MACs and wireless stations are never wired hosts",
-		fn = function()
-			-- A wireless client bridged into br-lan is learned by the switch
-			-- on the CPU port, but a station that roamed or a device's own MAC
-			-- appearing on a socket must not turn into a wired client of it.
-			local capture = table.concat({
-				"Global attributes:",
-				"\tarl_table: address resolution table",
-				"Port 0: MAC aa:bb:cc:00:00:01",
-				"Port 3: MAC aa:bb:cc:dd:ee:ff",   -- a connected station
-				"Port 3: MAC aa:bb:cc:00:11:22",   -- this device's own mac
-				"Port 3: MAC aa:bb:cc:dd:ee:0c",   -- an actual wired host
-				"Port 4: MAC aa:bb:cc:00:00:01",   -- the gateway
-				"",
-				"Port 3:",
-				"\tpvid: 1",
-				"\tlink: port:3 link:up speed:1000baseT full-duplex auto",
-				"Port 4:",
-				"\tpvid: 1",
-				"\tlink: port:4 link:up speed:1000baseT full-duplex auto",
-				"",
-			}, "\n")
-			local d = build_switch({
-				cfg = switch_cfg(WDR_MAP),
-				swconfig = capture,
-				with_clients = true,
-				with_uci = true,
-				gateway = "10.0.0.1",
-				arp = "IP address       HW type     Flags       HW address            Mask     Device\n"
-					.. "10.0.0.1         0x1         0x2         aa:bb:cc:00:00:01     *        br-lan\n",
-			})
-			local p = by_idx(d.port_table)
-			assert_eq(#p[3].mac_table, 1, "only the real wired host survives")
-			assert_eq(p[3].mac_table[1].mac, "aa:bb:cc:dd:ee:0c", "the wired host")
-		end
-	},
-	{
-		name = "inform json: port counters come from the switch, falling back to the CPU netdev",
-		fn = function()
-			-- Per-port MIB counters where the driver exposes them (AR9344).
-			local d = build_switch({
-				cfg = switch_cfg(WDR_MAP),
-				swconfig = fixture("swconfig_show_ar9344.txt"),
-			})
-			local p = by_idx(d.port_table)
-			assert_eq(p[3].rx_bytes, 45338209, "socket 3's own RxGoodByte")
-			assert_eq(p[3].tx_bytes, 1183354521, "socket 3's own TxByte")
-
-			-- An AR8327 with MIB polling off has none. The uplink falls back
-			-- to the CPU netdev, whose totals all crossed that one socket; a
-			-- downstream socket has no honest stand-in and reports 0.
-			local d2 = build_switch({
-				cfg = switch_cfg(ARCHER_MAP),
-				swconfig = fixture("swconfig_show_ar8327.txt"),
-			})
-			local p2 = by_idx(d2.port_table)
-			assert_eq(p2[1].rx_bytes, 1024, "the uplink borrows eth1's counters")
-			assert_eq(p2[1].tx_packets, 8, "including packets")
-			assert_eq(p2[3].rx_bytes, 0, "a downstream socket reports 0, not the CPU total")
-			assert_eq(p2[3].tx_bytes, 0, "in both directions")
-		end
-	},
-	{
-		name = "inform json: a socket with its own PHY is reported alongside the switch's",
-		fn = function()
-			-- Not every socket is behind the switch. The TL-WDR3500's four LAN
-			-- sockets are, but its WAN socket has its own MAC and PHY and
-			-- shows up only as a netdev (`eth1`) -- so the board's five
-			-- sockets need a mixed modelmap, and reporting four of them made
-			-- the Ports view disagree with the panel.
-			local cfg = switch_cfg(WDR_MAP)
-			cfg.net.ports[#cfg.net.ports + 1] = {idx = 5, ifname = "eth0"}
-			local orig = inform._read_file
-			inform._read_file = function(path)
-				-- Its own PHY, so sysfs is the socket's real link here -- not
-				-- the CPU's, which is what sysfs answers on a switch port.
-				if path == "/sys/class/net/eth0/carrier" then return "1\n" end
-				if path == "/sys/class/net/eth0/speed"   then return "100\n" end
-				if path == "/sys/class/net/eth0/duplex"  then return "full\n" end
-				return nil
-			end
-			local ok, err = pcall(function()
-				local d = build_switch({
-					cfg = cfg,
-					swconfig = fixture("swconfig_show_ar9344.txt"),
-				})
-				assert_eq(#d.port_table, 5, "four switch sockets plus the PHY-direct one")
-				local p = by_idx(d.port_table)
-				assert_eq(p[5].speed, 100, "its own negotiated speed, from sysfs")
-				assert_true(p[5].up, "and its own link state")
-				assert_eq(p[5].rx_bytes, 9876543, "counters from its netdev")
-				assert_false(p[5].is_uplink, "the uplink is still the socket the cable is in")
-				assert_true(p[4].is_uplink, "which the switch found")
-			end)
-			inform._read_file = orig
-			if not ok then error(err, 0) end
-		end
-	},
-	{
-		name = "inform json: without a readable switch the netdev port shape is unchanged",
-		fn = function()
-			-- No swconfig (a DSA board, a missing binary, a container): the
-			-- modelmap's ifname entries and everything read from sysfs behave
-			-- exactly as before, rather than a socket list built on guesses.
-			local d = build_switch({
-				cfg = {
-					net = {lan_cpueth = "eth1", ports = {
-						{idx = 1, ifname = "eth0", uplink = true},
-						{idx = 2, ifname = "eth1", swport = "lan1"},
-					}},
-					vlan = {cpu_lan = 0, ports = {lan1 = 1}},
-				},
-				swconfig = "",
-			})
-			assert_eq(#d.port_table, 2, "the modelmap's netdev ports")
-			local p = by_idx(d.port_table)
-			assert_true(p[1].is_uplink, "the statically flagged uplink is honoured")
-			assert_eq(p[2].rx_bytes, 1024, "counters from eth1 in /proc/net/dev")
-			assert_not_nil(p[2].mac_table, "downstream ports still carry a mac_table")
 		end
 	},
 	{
@@ -2898,22 +2953,96 @@ return {
 		end
 	},
 	{
-		-- A connection event names its BSS by the hostapd netdev; the
-		-- controller resolves it against vap_table `name`. build_json is the
-		-- one place that knows both, so it records the mapping -- and the
-		-- device identity every notif inform repeats.
-		name = "build_json: records the BSS -> vap name map and the notif identity",
+		name = "inform json: Minimum RSSI never kicks a client locked to this AP",
 		fn = function()
-			inform._vap_by_ifname, inform._notif_identity = {}, nil
-			local p = build({with_uci = true, with_clients = true, adopted = true})
-			assert_eq(inform._vap_by_ifname["wlan0"], "openuf_test", "wlan0 is the vap named openuf_test")
-			local id = inform._notif_identity
-			assert_true(type(id) == "table", "identity captured")
-			assert_eq(id.mac, p.mac, "same mac as the state inform")
-			assert_eq(id.model, p.model, "model")
-			assert_eq(id.version, p.version, "firmware version")
-			assert_eq(id.cfgversion, p.cfgversion, "cfgversion")
-			assert_eq(id.serial, p.serial, "serial")
+			inject_sysinfo(true)  -- 11:22:33:44:55:66 at -75 dBm
+			inject_ucihelper()
+			inform._ucihelper.get_radio_table = function()
+				return {{name = "radio0", radio = "ng", channel = "6",
+					min_rssi_enabled = true, min_rssi_raw = 25}}  -- -70 dBm
+			end
+			local kicked = {}
+			inform._ucihelper.kick_station = function(_, mac) kicked[#kicked + 1] = mac end
+			local orig = inform._lockap.here
+			inform._lockap.here = {["11:22:33:44:55:66"] = true}
+			local st = {authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+				ip = "192.168.1.100", hostname = "testap"}
+			local ok, err = pcall(inform.build_json, st, nil, ufhw)
+			inform._lockap.here = orig
+			assert_true(ok, tostring(err))
+			assert_eq(#kicked, 0, "the locked client stays, whatever its signal")
+		end
+	},
+	{
+		name = "inform json: radio_table_stats holds exactly one entry per radio, unique by name",
+		fn = function()
+			inject_sysinfo(true)
+			inject_ucihelper()
+			local rt = inform._ucihelper.get_radio_table
+			inform._ucihelper.get_radio_table = function()
+				local t = rt()
+				local copy = {}
+				for _, r in ipairs(t) do copy[#copy + 1] = r end
+				local dup = {}
+				for k, v in pairs(t[1]) do dup[k] = v end
+				copy[#copy + 1] = dup           -- the same radio listed twice
+				return copy
+			end
+			local st = {authkey = state.DEFAULT_KEY, adopted = false, cfgversion = "",
+				inform_url = "http://10.0.0.1:8080/inform", mac = "aa:bb:cc:dd:ee:ff",
+				ip = "192.168.1.100", hostname = "testap"}
+			local d = cjson.decode(inform.build_json(st, nil, ufhw))
+			inform._ucihelper.get_radio_table = rt
+			local seen, n = {}, 0
+			for _, e in ipairs(d.radio_table_stats) do
+				assert_nil(seen[e.name], "no second entry for " .. tostring(e.name))
+				seen[e.name] = true
+				n = n + 1
+			end
+			assert_true(n >= 1, "the radio is there once")
+		end
+	},
+	{
+		name = "inform json: a debug_caps override with bit 31 goes out as a Java int",
+		fn = function()
+			local d = build({cfg = {config = {debug_caps = {fw_caps = 0x80000000, wifi_caps = 0x80000010}}}})
+			assert_eq(d.fw_caps, -2147483648, "0x80000000 as a signed 32-bit value")
+			assert_eq(d.wifi_caps, -2147483632, "0x80000010 too")
+		end
+	},
+	{
+		name = "inform json: every probed capability bit drops when its probe fails, and the payload still builds",
+		fn = function()
+			local si, sn, at = inform._sysinfo, inform._snmp, inform._airtime
+			local orig = {hs = si.hs20_supported, pp = si.ppsk_supported, v3 = sn.v3_capable,
+				atf = at.supported}
+			local function set(fn)
+				si.hs20_supported, si.ppsk_supported, sn.v3_capable, at.supported = fn, fn, fn, fn
+			end
+			set(function() return true end)
+			local on = build({cfg = {config = {sibling_scan_interval = 1800}}})
+			set(function() error("probe exploded") end)
+			local ok, raised = pcall(build, {cfg = {config = {sibling_scan_interval = 0,
+				idle_scan_interval = 0}}})
+			set(function() return nil end)
+			local silent = build()
+			si.hs20_supported, si.ppsk_supported, sn.v3_capable, at.supported =
+				orig.hs, orig.pp, orig.v3, orig.atf
+			local function has(v, bit) return v % (bit * 2) >= bit end
+			local function fw(v) return v < 0 and v + 4294967296 or v end
+			assert_true(has(fw(on.fw_caps), 0x800000) and has(fw(on.fw_caps), 0x4000)
+				and has(fw(on.fw_caps), 0x80000000), "all claimed while the probes say yes")
+			assert_true(has(on.wifi_caps, 0x100000) and has(on.wifi_caps, 0x20), "PPSK and ATF claimed")
+			assert_true(has(on.wifi_caps2, 0x200), "neighbour scan claimed with sibling scans on")
+			assert_true(ok, "a raising probe does not break the payload: " .. tostring(raised))
+			for _, bit in ipairs({0x800000, 0x4000, 0x80000000}) do
+				assert_false(has(fw(raised.fw_caps), bit), ("fw_caps 0x%x dropped"):format(bit))
+				assert_false(has(fw(silent.fw_caps), bit), ("fw_caps 0x%x dropped on nil"):format(bit))
+			end
+			assert_false(has(raised.wifi_caps, 0x100000), "PPSK (wifi_caps 0x100000) dropped")
+			assert_false(has(raised.wifi_caps, 0x20), "Airtime Fairness (wifi_caps 0x20) dropped")
+			assert_false(has(raised.wifi_caps2, 0x200), "neighbour scan dropped with no scan configured")
 		end
 	},
 }

@@ -5,7 +5,12 @@
 # install.sh). Permits exactly one command shape and nothing else, whether
 # invoked interactively or non-interactively over SSH:
 #
-#   syswrapper.sh set-adopt <url> <key32hex>
+#   [/usr/bin/]syswrapper.sh set-adopt <url> <key32hex> [<mac>]
+#
+# 10.6 sends the absolute path, and on some builds appends the device's MAC
+# (devmgr VtWV); a MAC that is not this AP's is refused. TCP forwarding is off
+# while this account is usable (hook/ssh-forwarding.sh), since a forced shell
+# does not stop `ssh -N -L`.
 #
 # Any other input -- including a plain interactive login attempt -- is
 # refused. This is the actual security boundary for the bootstrap account:
@@ -27,7 +32,7 @@ deny() {
 cmd=$2
 
 case "$cmd" in
-	"syswrapper.sh set-adopt "*) ;;
+	"syswrapper.sh set-adopt "*|"/usr/bin/syswrapper.sh set-adopt "*) ;;
 	*) deny "command not permitted" ;;
 esac
 
@@ -37,10 +42,10 @@ esac
 # against files in the current directory.
 set -f
 set -- $cmd
-[ "$#" -eq 4 ] || deny "malformed command"
+[ "$#" -eq 4 ] || [ "$#" -eq 5 ] || deny "malformed command"
 
-bin=$1; sub=$2; url=$3; key=$4
-[ "$bin" = "syswrapper.sh" ] || deny "malformed command"
+bin=$1; sub=$2; url=$3; key=$4; mac=${5:-}
+[ "$bin" = "syswrapper.sh" ] || [ "$bin" = "/usr/bin/syswrapper.sh" ] || deny "malformed command"
 [ "$sub" = "set-adopt" ]     || deny "malformed command"
 
 case "$url" in
@@ -53,4 +58,14 @@ case "$key" in
 esac
 [ "${#key}" -eq 32 ] || deny "invalid key length"
 
-exec /usr/bin/syswrapper.sh set-adopt "$url" "$key"
+if [ -n "$mac" ]; then
+	case "$mac" in
+		*[!0-9a-fA-F:]*) deny "invalid mac" ;;
+	esac
+	own=$(sed -n 's/.*"mac":"\([0-9a-fA-F:]*\)".*/\1/p' "${OPENUF_STATE:-/etc/openuf/state.json}" 2>/dev/null)
+	if [ -n "$own" ] && [ "$(echo "$mac" | tr 'A-F' 'a-f')" != "$(echo "$own" | tr 'A-F' 'a-f')" ]; then
+		deny "not this device"
+	fi
+fi
+
+exec "${OPENUF_SYSWRAPPER:-/usr/bin/syswrapper.sh}" set-adopt "$url" "$key"

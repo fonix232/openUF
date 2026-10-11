@@ -68,7 +68,7 @@ moment before the controller container comes up healthy.
 Sections 2–4 describe the UI path. **None of it needs a browser** — the entire
 setup, adoption and config-push flow is the controller's own REST API, which is
 far faster and is what you want when a `down -v` reset is part of the loop.
-Verified end to end against 10.4.57 on 2026-09-10 and 10.6.106 on 2026-10-14.
+Verified end to end against 10.4.57 on 2026-09-10; upstream moved the lab to 10.6.106 on 2026-10-14.
 
 ```sh
 J=/tmp/uc.jar                      # cookie jar
@@ -104,9 +104,9 @@ curl -sk -b $J -X PUT $B/api/s/default/set/setting/mgmt/$MG \
 #    By IP: a freshly adopted AP that informs to the hostname is refused with
 #    "invalid inform_ip controller" (HTTP 400) on 10.6.106.
 docker exec openuf-validation-ap sh -c \
-  "sed -i 's|http://unifi:8080/inform|http://$CIP:8080/inform|' /opt/openuf/conf.lua"
-docker exec -d openuf-validation-ap sh -c 'cd /opt/openuf && exec lua announce.lua > /tmp/announce.log 2>&1'
-docker exec -d openuf-validation-ap sh -c 'cd /opt/openuf && exec lua inform.lua   > /tmp/inform.log   2>&1'
+  'echo "{\"config\": {\"debug_dump_file\": \"/var/log/openuf-informs.log\", \"inform_url\": \"http://controller:8080/inform\"}}" > /etc/openuf/local.json'
+docker exec -d openuf-validation-ap sh -c 'cd /usr/share/openuf && exec lua announce.lua > /tmp/announce.log 2>&1'
+docker exec -d openuf-validation-ap sh -c 'cd /usr/share/openuf && exec lua inform.lua   > /tmp/inform.log   2>&1'
 
 # 5b. Mark the controller as set up. This REST path never writes is_default=false,
 #     so without this line the controller treats its next restart as a factory
@@ -217,7 +217,7 @@ needed for any of that.
 
 ```sh
 docker exec -it openuf-validation-ap sh
-cd /opt/openuf
+cd /usr/share/openuf
 
 # Broadcast discovery (real UDP broadcast on port 10001 -- works genuinely in
 # this Docker bridge network as of the announce.lua socket-creation-order fix):
@@ -301,10 +301,9 @@ Start and adopt `ap2` exactly like `ap` (step 5 with `openuf-validation-ap2`,
 then step 6), and give the site a WLAN so both APs carry a `vap_table`.
 Hand-made `STA_ASSOC_TRACKER` notifs can then be posted from either
 container with openUF's own `build_packet`/`http_post`. Build the payload's
-identity the way `inform.lua`'s entry point does: `dofile("conf.lua")`, then
-`dev.conf` with `.config` and `.uap` merged in, plus the `ufmodel` as `ufhw`.
-A bare `conf.lua` reports a different firmware version (6.6.55 instead of
-6.8.2.15592), and the controller takes each such notif for a firmware change
+identity the way `inform.lua`'s entry point does (the loaded config plus the
+presented UniFi identity), not by hand: a payload reporting another firmware
+version makes the controller take each notif for a firmware change
 (`device_upgraded=true`, visible with `debug.device=debug` in
 `/config/data/system.properties`).
 
@@ -321,7 +320,7 @@ A bare `conf.lua` reports a different firmware version (6.6.55 instead of
 2. Start `ap2` (command above), then inside it start **announce only** — the new
    device must be *detected* (announcing unadopted); do **not** adopt it in the UI:
    ```sh
-   docker exec -it openuf-validation-ap2 sh -c 'cd /opt/openuf && lua announce.lua'
+   docker exec -it openuf-validation-ap2 sh -c 'cd /usr/share/openuf && lua announce.lua'
    ```
 3. Get AP2's MAC:
    ```sh
@@ -332,7 +331,7 @@ A bare `conf.lua` reports a different firmware version (6.6.55 instead of
 5. Take AP1 offline (`docker stop openuf-validation-ap`) and start AP2's inform
    loop in another shell:
    ```sh
-   docker exec -it openuf-validation-ap2 sh -c 'cd /opt/openuf && lua inform.lua'
+   docker exec -it openuf-validation-ap2 sh -c 'cd /usr/share/openuf && lua inform.lua'
    ```
 6. Once the controller marks AP1 offline, it auto-adopts AP2 (real SSH
    `set-adopt`, no "Click to Adopt" needed) and provisions it with AP1's cloned

@@ -1,0 +1,19 @@
+{
+  "dev": {
+    "conf": {
+      "net": {
+        "lan_name": "lan",
+        "lan_cpueth": "wan",
+        "lan_vlanid": 1,
+        "wan_cpueth": "wan",
+        "identity_mac": null,
+        "ports": [
+          {"idx": 1, "ifname": "lan1"},
+          {"idx": 2, "ifname": "lan2"},
+          {"idx": 5, "ifname": "wan"}
+        ]
+      },
+      "led": null
+    }
+  }
+}

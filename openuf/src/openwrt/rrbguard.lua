@@ -9,7 +9,8 @@
 	pull or push fails with ENXIO ("l2_packet_send - send: No such device or
 	address"): cross-AP fast roaming silently falls back to full
 	authentication until hostapd restarts. Seen once on the office AP after
-	weeks of uptime (PROTOCOL-VALIDATION.md, 802.11r key holders).
+	weeks of uptime (PROTOCOL-VALIDATION.md, 802.11r key holders); in this
+	fork netmodel rebuilds bridges itself, which is one more way to get there.
 
 	Restarting wpad is the only repair, and it costs every BSS on the AP
 	~10 s, plus a 60 s CAC on a DFS channel, while a stale socket only makes
@@ -23,8 +24,6 @@
 ]]
 
 local M = {}
-local util = package.loaded["openuf.util"]
-	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
 M.CHECK_INTERVAL = 60
 -- Consecutive stale readings before acting, so a socket caught mid-reload
@@ -33,14 +32,26 @@ M.CONFIRM        = 2
 M.REPAIR_GAP     = 6 * 3600
 M.NIGHT_HOUR     = 4
 -- `wifi up` after the restart: the wpad init script restarts the daemons,
--- but netifd has to hand them their BSSes again (CLAUDE.local.md).
+-- but netifd has to hand them their BSSes again.
 M.REPAIR_CMD     = "/etc/init.d/wpad restart; sleep 6; wifi up"
 M.STA_COUNT_CMD  = "for i in $(iw dev 2>/dev/null | awk '$1==\"Interface\"{print $2}'); do "
 	.. "iw dev \"$i\" station dump 2>/dev/null; done | grep -c '^Station'"
 
 -- Injectable seams.
-M._read = util.read_file
-M._popen = util.popen
+M._read = function(path)
+	local f = io.open(path, "r")
+	if not f then return nil end
+	local s = f:read("*a")
+	f:close()
+	return s
+end
+M._popen = function(cmd)
+	local p = io.popen(cmd)
+	if not p then return nil end
+	local s = p:read("*a")
+	p:close()
+	return s
+end
 M._exec = os.execute
 M._log  = function(msg) io.stderr:write("openuf: rrbguard: " .. msg .. "\n") end
 
