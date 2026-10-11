@@ -1,0 +1,160 @@
+{#
+ luci-theme-openuf
+ Structure follows luci-theme-bootstrap:
+   Copyright 2008 Steven Barth <steven@midlink.org>
+   Copyright 2012 David Menting <david@nut-bolt.nl>
+   Copyright 2008-2022 Jo-Philipp Wich <jo@mein.io>
+ Licensed to the public under the Apache License 2.0.
+-#}
+
+{%
+	import { getuid, getspnam } from 'luci.core';
+
+	const boardinfo = ubus.call('system', 'board');
+	const hostname = boardinfo?.hostname ?? '?';
+	const darkpref = (theme == 'openuf-dark' ? 'true' : (theme == 'openuf-light' ? 'false' : null));
+	const user = ctx.authuser ?? '';
+
+	/* The Interfaces and Wireless designs and the Port Manager, from
+	 * System > openUF Theme (luci.openuf_theme); anything unknown is the default. */
+	const designs = [ 'list', 'settings', 'cards' ];
+	const design = (v) => (type(v) == 'string' && index(designs, v) > -1) ? v : 'list';
+	const uf = {
+		interfaces: design(uci.get('luci', 'openuf_theme', 'interfaces')),
+		wireless: design(uci.get('luci', 'openuf_theme', 'wireless')),
+		port_manager: (uci.get('luci', 'openuf_theme', 'port_manager') == '0') ? '0' : '1'
+	};
+	const route = join('/', slice(ctx.path ?? [], 0, 3));
+
+	http.prepare_content('text/html; charset=UTF-8');
+-%}
+
+<!DOCTYPE html>
+<html lang="{{ dispatcher.lang }}" {{ darkpref ? `data-darkmode="${darkpref}" data-scheme-locked="true"` : '' }} data-uf-interfaces="{{ uf.interfaces }}" data-uf-wireless="{{ uf.wireless }}" data-uf-port-manager="{{ uf.port_manager }}">
+	<head>
+		<meta charset="utf-8">
+		<title>{{ striptags(`${hostname}${dispatched?.title ? ` | ${_(dispatched.title)}` : ''}`) }}</title>
+		<script>
+			/* Runs before first paint, so a remembered scheme or layout never flashes. */
+			(function(root) {
+				var locked = {{ darkpref ? `'${darkpref}'` : 'null' }};
+				var mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+				var pref = function(k) {
+					try { return window.localStorage.getItem('luci-theme-openuf.' + k); } catch (e) { return null; }
+				};
+
+				window.ufApplyScheme = function() {
+					var scheme = locked ? (locked == 'true' ? 'dark' : 'light') : (pref('scheme') || 'auto');
+					var dark = (scheme == 'dark') || (scheme == 'auto' && !!mq && mq.matches);
+
+					root.setAttribute('data-darkmode', dark ? 'true' : 'false');
+					root.setAttribute('data-scheme', scheme);
+				};
+
+				if (mq && !locked)
+					(mq.addEventListener ? mq.addEventListener('change', window.ufApplyScheme) : mq.addListener(window.ufApplyScheme));
+
+				if (pref('rail') == 'expanded')
+					root.classList.add('uf-rail-expanded');
+
+				if (pref('subnav') == 'collapsed')
+					root.classList.add('uf-subnav-collapsed');
+
+				window.ufApplyScheme();
+			})(document.documentElement);
+		</script>
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<meta name="darkreader-lock">
+		<meta name="color-scheme" content="{{ darkpref ? (darkpref == 'true' ? 'dark' : 'light') : 'light dark' }}">
+		<link rel="stylesheet" href="{{ media }}/cascade.css">
+		{% if (route == 'admin/network/network'): %}
+		<link rel="stylesheet" href="{{ media }}/network/interfaces-{{ uf.interfaces }}.css">
+		{% elif (route == 'admin/network/wireless'): %}
+		<link rel="stylesheet" href="{{ media }}/network/wireless-{{ uf.wireless }}.css">
+		{% endif %}
+		<link rel="icon" href="{{ media }}/logo.svg" sizes="any">
+		{% if (node?.css): %}
+		<link rel="stylesheet" href="{{ resource }}/{{ node.css }}">
+		{% endif %}
+		{% if (css): %}
+		<style title="text/css">{{ css }}</style>
+		{% endif %}
+		<script src="{{ dispatcher.build_url('admin/translations', dispatcher.lang) }}"></script>
+		<script src="{{ resource }}/cbi.js"></script>
+	</head>
+
+	<body class="lang_{{ dispatcher.lang }} {{ blank_page ? 'uf-blank' : 'uf-app' }} {{ entityencode(striptags(node?.title ?? ''), true) }}" data-page="{{ entityencode(join('-', ctx.path), true) }}">
+		{% if (!blank_page): %}
+		<header class="uf-topbar">
+			<button type="button" class="uf-iconbtn uf-burger" aria-label="{{ _('Menu') }}" aria-controls="mainmenu" aria-expanded="false"></button>
+
+			<nav class="uf-apps" aria-label="{{ _('Applications') }}">
+				<a class="uf-console" href="{{ dispatcher.build_url() }}" title="{{ entityencode(boardinfo?.model ?? hostname, true) }}">
+					<span class="uf-console-dot" aria-hidden="true"></span>
+					<span class="uf-console-name">{{ striptags(hostname) }}</span>
+				</a>
+				<ul class="uf-apptabs" id="modemenu" style="display:none"></ul>
+			</nav>
+
+			<a class="uf-wordmark" href="{{ dispatcher.build_url() }}" aria-hidden="true" tabindex="-1">{{ striptags(version.distname ?? 'OpenWrt') }}</a>
+
+			<div class="uf-tools">
+				<div id="indicators"></div>
+				{% if (!darkpref): %}
+				<button type="button" class="uf-iconbtn uf-scheme" aria-label="{{ _('Colour scheme') }}"></button>
+				{% endif %}
+				{% if (user): %}
+				<div class="uf-user">
+					<button type="button" class="uf-avatar" aria-haspopup="true" aria-expanded="false" aria-label="{{ entityencode(user, true) }}">{{ entityencode(uc(substr(user, 0, 1)), true) }}</button>
+					<div class="uf-user-menu" role="menu">
+						<div class="uf-user-name">{{ entityencode(user, true) }}</div>
+						<div class="uf-user-host">{{ striptags(hostname) }}</div>
+						{% if (dispatcher.lookup('admin/system/openuf-theme')): %}
+						<a role="menuitem" href="{{ dispatcher.build_url('admin/system/openuf-theme') }}">{{ _('Theme settings') }}</a>
+						{% endif %}
+						{% if (dispatcher.lookup('admin/system/admin')): %}
+						<a role="menuitem" href="{{ dispatcher.build_url('admin/system/admin') }}">{{ _('Router Password') }}</a>
+						{% endif %}
+						<a role="menuitem" class="uf-signout" href="{{ dispatcher.build_url('admin/logout') }}">{{ _('Log out') }}</a>
+					</div>
+				</div>
+				{% endif %}
+			</div>
+		</header>
+
+		<div class="uf-shell">
+			<nav class="uf-rail" id="mainmenu" aria-label="{{ _('Main menu') }}" style="display:none"></nav>
+			<nav class="uf-subnav" id="submenu" style="display:none"></nav>
+			<div class="uf-scrim" aria-hidden="true"></div>
+
+			<main class="uf-main" id="maincontent">
+				<div class="uf-page">
+				{% if (getuid() == 0 && getspnam('root')?.pwdp === ''): %}
+					<div class="alert-message warning">
+						<h4>{{ _('No password set!') }}</h4>
+						<p>{{ _('There is no password set on this router. Please configure a root password to protect the web interface.') }}</p>
+						{% if (dispatcher.lookup("admin/system/admin")): %}
+						  <div class="right"><a class="btn" href="{{ dispatcher.build_url("admin/system/admin") }}">{{ _('Go to password configuration...') }}</a></div>
+						{% endif %}
+					</div>
+				{% endif %}
+
+				{% if (boardinfo?.rootfs_type == "initramfs"): %}
+					<div class="alert-message warning">
+						<h4>{{ _('System running in recovery (initramfs) mode.') }}</h4>
+						<p>{{ _('No changes to settings will be stored and are lost after rebooting. This mode should only be used to install a firmware upgrade') }}</p>
+						{% if (dispatcher.lookup("admin/system/flash")): %}
+						  <div class="right"><a class="btn" href="{{ dispatcher.build_url("admin/system/flash") }}">{{ _('Go to firmware upgrade...') }}</a></div>
+						{% endif %}
+					</div>
+				{% endif %}
+
+				<noscript>
+					<div class="alert-message warning">
+						<h4>{{ _('JavaScript required!') }}</h4>
+						<p>{{ _('You must enable JavaScript in your browser or LuCI will not work properly.') }}</p>
+					</div>
+				</noscript>
+
+				<div id="tabmenu" style="display:none"></div>
+		{% endif %}

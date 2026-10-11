@@ -1,0 +1,103 @@
+@use '../abstracts' as *;
+
+#tabmenu { margin-bottom: 20px; }
+
+.tabs, .cbi-tabmenu {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0 24px;
+	margin: 0 0 20px;
+	padding: 0;
+	list-style: none;
+	box-shadow: inset 0 -1px 0 var(--uf-border);
+}
+
+#tabmenu .tabs {
+	margin-bottom: 0;
+	& + .tabs {
+		margin-top: 4px;
+		gap: 0 20px;
+		box-shadow: none;
+		> li > a { font-size: 12px; }
+	}
+}
+
+.tabs > li, .cbi-tabmenu > li {
+	@include row;
+	min-width: 0;
+	margin: 0;
+	color: var(--uf-text-2);
+	> a {
+		display: block;
+		padding: 10px 0 9px;
+		border-bottom: 2px solid transparent;
+		color: inherit;
+		font-weight: 500;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		text-decoration: none;
+		outline: none;
+		&:hover { color: var(--uf-text-1); }
+		&:focus-visible { color: var(--uf-blue); }
+	}
+}
+
+.tabs > li.active > a, .cbi-tabmenu > li.cbi-tab > a {
+	color: var(--uf-text-1);
+	border-bottom-color: var(--uf-blue);
+}
+
+.cbi-tabmenu {
+	// A tab hiding invalid fields says how many, as a small red count.
+	> li[data-errors] > a { color: var(--uf-red-text); }
+	> li.cbi-tab[data-errors] > a { border-bottom-color: var(--uf-red); }
+	> li[data-errors]::after {
+		content: attr(data-errors);
+		@include center(inline-flex);
+		min-width: 16px;
+		height: 16px;
+		margin-left: 6px;
+		padding: 0 4px;
+		border-radius: 8px;
+		background: var(--uf-red-fill);
+		color: var(--uf-on-accent);
+		font-size: 11px;
+		font-weight: 600;
+	}
+	&.map { margin-top: 4px; }
+	&.map > li > a { font-size: 14px; }
+}
+
+// A tab bar inside another section's tab pane is a second level (DNS
+// records by type, a DHCP server's IPv4 and IPv6 settings): the lighter
+// row UniFi draws, as the second row of #tabmenu is.
+.cbi-section-node-tabbed [data-tab-title] .cbi-tabmenu {
+	gap: 0 20px;
+	margin-bottom: 14px;
+	box-shadow: none;
+	> li > a { padding: 6px 0 5px; font-size: 12px; }
+}
+
+.cbi-tab-descr { margin: -8px 0 16px; color: var(--uf-text-2); }
+
+.tab-content {
+	> .tab-pane, > div { display: none; }
+	> .active { display: block; }
+}
+
+[data-tab-title] {
+	height: 0;
+	opacity: 0;
+	overflow: hidden;
+	// A hidden pane that is also a card would still leave its padding,
+	// border and margin behind, as an empty gap under the visible one.
+	&:not([data-tab-active="true"]) { margin: 0; padding: 0; border-width: 0; }
+}
+
+[data-tab-active="true"] {
+	opacity: 1;
+	height: auto;
+	overflow: visible;
+	transition: opacity .2s ease-in;
+}

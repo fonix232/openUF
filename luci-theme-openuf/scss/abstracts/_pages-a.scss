@@ -1,0 +1,27 @@
+// Helpers shared by the dashboard, status, network and firewall pages.
+@use 'mixins' as *;
+
+// A white card on the canvas, as the pages' own sections are drawn: for
+// what LuCI renders bare (a table, a log, a ruleset chain, a note).
+@mixin surface-card($padding) {
+	padding: $padding;
+	background: var(--uf-surface);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+}
+
+// UniFi's tertiary small type: captions, legends, secondary figures.
+@mixin small-caption($line-height: null) {
+	color: var(--uf-text-3);
+	font-size: 12px;
+	line-height: $line-height;
+}
+
+// A pseudo-element drawn as an icon: the image masks a block of the colour.
+@mixin glyph($image, $color, $width, $height: $width) {
+	content: "";
+	width: $width;
+	height: $height;
+	background: $color;
+	@include mask($image center / contain no-repeat);
+}

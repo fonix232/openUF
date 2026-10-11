@@ -1,0 +1,137 @@
+// System > openUF Theme (view/openuf-theme/settings.js): the theme's own
+// settings. Each choice is a card, as UniFi offers a layout: a schematic of it
+// (an SVG the view draws, coloured here by class), its name and a line about
+// it, the radio beside the name. LuCI's radio widget is underneath.
+@use '../abstracts' as *;
+@use '../abstracts/pages-b' as *;
+
+// The schematics' parts, in the page's scheme; a scheme's own preview takes
+// its palette from .uf-scheme-light or .uf-scheme-dark (Tokens).
+.uf-choice-preview {
+	.uf-pv-card { fill: var(--uf-surface); stroke: var(--uf-border-strong); stroke-width: .75; }
+
+	// Part: token. Colour names are quoted, or Sass reads them as colours.
+	@each $part, $token in (
+		canvas: canvas, bar: topbar, rail: surface, text: text-2, line: border-strong, rule: border,
+		'icon, .uf-pv-muted': text-4, 'green': 'green', 'orange': 'orange', 'red': 'red',
+		'cyan': 'cyan', 'purple': 'purple', accent: blue-fill, chip: border, chip-off: border-strong
+	) {
+		.uf-pv-#{$part} { fill: var(--uf-#{$token}); }
+	}
+
+	.uf-pv-chip-on, .uf-pv-zone { fill: rgba(var(--uf-green-rgb), .35); }
+	.uf-pv-tile { fill: rgba(var(--uf-blue-rgb), .2); }
+	.uf-pv-tile-alt { fill: rgba(var(--uf-red-rgb), .22); }
+}
+
+body[data-page="admin-system-openuf-theme"] {
+	// The title heads the row of cards, not their middle.
+	.cbi-value:has(.uf-choices) { align-items: flex-start; }
+
+	// As many cards to a row as fit, the field's full width.
+	.cbi-value-field > .uf-choices {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+		gap: 12px;
+		max-width: 640px;
+		padding: 4px 0;
+	}
+
+	.uf-choices > br { display: none; }
+
+	// A card: the schematic on top, the radio and the name under it, then
+	// the line about it.
+	.cbi-value-field > .uf-choices > .cbi-radio {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		grid-template-rows: auto auto 1fr;
+		align-items: center;
+		gap: 4px 8px;
+		height: auto;
+		min-height: 0;
+		margin: 0;
+		padding: 8px 10px 10px;
+		background: var(--uf-surface);
+		border: 1px solid var(--uf-border-strong);
+		border-radius: var(--uf-radius);
+		transition: border-color .15s, box-shadow .15s;
+	}
+
+	.uf-choices > .cbi-radio {
+		&:hover { border-color: var(--uf-blue-line); }
+
+		&:has(> input:checked) {
+			border-color: var(--uf-blue);
+			box-shadow: 0 0 0 1px var(--uf-blue);
+		}
+
+		// The ring goes round the card, not the small radio in it.
+		&:has(> input:focus-visible) {
+			outline: 2px solid rgba(var(--uf-blue-rgb), .45);
+			outline-offset: 2px;
+		}
+
+		> input:focus-visible { outline: none; }
+		> input { grid-area: 2 / 1; margin: 0; }
+		// The label LuCI adds for its own radio is empty.
+		> label { display: none; }
+	}
+
+	// The view's own nodes lay out on the card's grid.
+	.uf-choices > .cbi-radio > span, .uf-choices .uf-choice { display: contents; }
+
+	.uf-choice-preview {
+		grid-area: 1 / 1 / 2 / 3;
+		display: block;
+		margin-bottom: 4px;
+		padding: 6px;
+		background: var(--uf-canvas);
+		border-radius: var(--uf-radius-sm);
+		> svg { display: block; width: 100%; height: auto; }
+	}
+
+	// A scheme's preview is the page itself, edge to edge.
+	.cbi-value[data-name="mediaurlbase"] .uf-choice-preview {
+		padding: 0;
+		overflow: hidden;
+		border: 1px solid var(--uf-border);
+	}
+
+	.uf-choice-title {
+		grid-area: 2 / 2;
+		color: var(--uf-text-1);
+		font-weight: 600;
+		line-height: 18px;
+	}
+
+	.uf-choice-desc {
+		grid-area: 3 / 2;
+		align-self: start;
+		color: var(--uf-text-3);
+		font-size: 12px;
+		line-height: 16px;
+	}
+
+	// One card a line, the schematic beside the words.
+	@include phone {
+		.cbi-value-field > .uf-choices { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+
+		.cbi-value-field > .uf-choices > .cbi-radio {
+			grid-template-columns: 108px auto minmax(0, 1fr);
+			grid-template-rows: auto 1fr;
+			gap: 2px 8px;
+			padding: 8px;
+		}
+
+		.uf-choice-preview {
+			grid-area: 1 / 1 / 3 / 2;
+			align-self: start;
+			margin: 0 4px 0 0;
+			padding: 4px;
+		}
+
+		.uf-choices > .cbi-radio > input { grid-area: 1 / 2; }
+		.uf-choice-title { grid-area: 1 / 3; }
+		.uf-choice-desc { grid-area: 2 / 2 / 3 / 4; }
+	}
+}

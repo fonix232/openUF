@@ -1,0 +1,526 @@
+// The port panel (view/openuf-theme/ports.js): the router's ports as UniFi's
+// device panel draws them, on Network > Interfaces and as the dashboard's
+// Ports card, and LuCI's own Port status card on the Status overview drawn
+// the same way. A square per port: green with link at gigabit, lime at Fast
+// Ethernet, blue from 2.5 GbE, grey without link, outlined when disabled; a
+// chevron marks the uplink and a bolt a port giving power.
+@use '../abstracts' as *;
+@use '../abstracts/pages-b' as *;
+
+// A disabled port's square: an outline, with its hover and focus rings.
+$outline: inset 0 0 0 1.5px var(--uf-border-strong);
+$hover-ring: 0 0 0 2px var(--uf-surface), 0 0 0 3px var(--uf-text-4);
+$focus-ring: 0 0 0 2px var(--uf-surface), 0 0 0 4px rgba(var(--uf-blue-rgb), .45);
+
+// A disabled port's swatch or dot: an empty ring.
+@mixin hollow {
+	background: none;
+	box-shadow: inset 0 0 0 1px var(--uf-text-4);
+}
+
+:root {
+	--uf-ports-size: 28px;
+	--uf-ports-fe: var(--uf-lime);
+	--uf-ports-gbe: var(--uf-green);
+	// The solid blue that carries white, deeper than the text blue in the dark.
+	--uf-ports-mgig: var(--uf-blue-fill);
+	--uf-ports-down: var(--uf-border-strong);
+	--uf-ports-i-uplink: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='m6 15 6-6 6 6'/></svg>");
+	--uf-ports-i-bolt: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M13.5 2 5 13.5h6L10 22l9-12h-6.5Z'/></svg>");
+	--uf-ports-i-down: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'><path d='M12 4.5v15M6 13.5l6 6 6-6'/></svg>");
+	--uf-ports-i-up: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'><path d='M12 19.5v-15M6 10.5l6-6 6 6'/></svg>");
+}
+
+// A port's colour, for its square, its mini square in the list, its legend
+// swatch and its tooltip head.
+:is(.uf-port, .uf-ports-name, .uf-ports-tip-head, .uf-ports-legend > li) {
+	&[data-state] { --uf-ports-color: var(--uf-ports-down); }
+	&:is([data-state="gbe"], [data-state="up"]) { --uf-ports-color: var(--uf-ports-gbe); }
+	&[data-state="fe"] { --uf-ports-color: var(--uf-ports-fe); }
+	&[data-state="mgig"] { --uf-ports-color: var(--uf-ports-mgig); }
+}
+
+// The card: UniFi's panel header, title and a tertiary count, with any
+// actions on the title's line.
+.uf-ports-card {
+	> .uf-ports-head {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 8px 16px;
+		margin-bottom: 16px;
+		h3 { margin: 0; font-size: 14px; line-height: 20px; }
+
+		.cbi-section-descr {
+			margin: 2px 0 0;
+			color: var(--uf-text-3);
+			font-size: 12px;
+			line-height: 16px;
+		}
+	}
+
+	.uf-ports-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+	// "Details" folds the per-port list away on phones (menu-openuf.js);
+	// wider screens always show the list, and never the button.
+	.uf-ports-toggle {
+		display: none;
+
+		&::after {
+			content: "";
+			@include size(16px);
+			margin: 0 -4px 0 4px;
+			background: currentColor;
+			@include mask(var(--uf-i-chevron) center / 16px no-repeat);
+			transition: transform .15s ease;
+		}
+
+		&[aria-expanded="true"]::after { transform: rotate(180deg); }
+	}
+
+	// The dashboard's row sizes suit charts; the port map and its list want
+	// the whole width.
+	.Dashboard .dashboard-charts > & { flex-basis: 100%; }
+}
+
+// The strip
+// ---------
+
+.uf-ports {
+	container-type: inline-size;
+
+	// The legend sits beside the strip where the card is wide (Interfaces),
+	// under it where it is not; beside, it is centred on the squares.
+	&-map {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: flex-start;
+		gap: 16px 40px;
+	}
+
+	&-strip { display: flex; flex-wrap: wrap; gap: 10px 6px; }
+
+	// Squares are buttons (focus shows their details); none of the base's
+	// button chrome.
+	.uf-port {
+		flex-direction: column;
+		gap: 6px;
+		height: auto;
+		min-width: var(--uf-ports-size);
+		max-width: 72px;
+		padding: 0;
+		background: none;
+		border: 0;
+		border-radius: var(--uf-radius-sm);
+		color: var(--uf-text-3);
+		font-size: 11px;
+		font-weight: 400;
+		line-height: 14px;
+		cursor: default;
+	}
+
+	&[data-clickable] .uf-port { cursor: pointer; }
+	.uf-port:active { transform: none; }
+	.uf-port:focus-visible { outline: 0; }
+}
+
+.uf-port-jack {
+	position: relative;
+	flex: none;
+	@include size(var(--uf-ports-size));
+	border-radius: var(--uf-radius-sm);
+	background: var(--uf-ports-color);
+	transition: box-shadow .15s;
+}
+
+.uf-port {
+	// Disabled: an empty outline, struck through.
+	&[data-state="disabled"] .uf-port-jack {
+		background: linear-gradient(135deg, transparent calc(50% - .75px), var(--uf-border-strong) 0 calc(50% + .75px), transparent 0);
+		box-shadow: $outline;
+	}
+
+	&:hover .uf-port-jack { box-shadow: $hover-ring; }
+	&:focus-visible .uf-port-jack, &[aria-describedby]:focus .uf-port-jack { box-shadow: $focus-ring; }
+	&[data-state="disabled"]:hover .uf-port-jack { box-shadow: $outline, $hover-ring; }
+	&[data-state="disabled"]:focus-visible .uf-port-jack { box-shadow: $outline, $focus-ring; }
+
+	// The uplink's chevron, or a bolt on a port giving PoE: white on a lit
+	// square, grey on a dark one.
+	&:is([data-uplink], [data-poe]) .uf-port-jack::after {
+		content: "";
+		position: absolute;
+		inset: 6px;
+		background: var(--uf-on-accent);
+		@include mask(var(--uf-ports-i-uplink) center / contain no-repeat);
+	}
+
+	&[data-poe]:not([data-uplink]) .uf-port-jack::after {
+		inset: 7px;
+		@include mask-image(var(--uf-ports-i-bolt));
+	}
+
+	&:is([data-state="down"], [data-state="disabled"]) .uf-port-jack::after { background: var(--uf-text-3); }
+
+	&-label {
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	&:hover .uf-port-label, &:focus-visible .uf-port-label { color: var(--uf-text-1); }
+}
+
+// Legend: UniFi's small swatches and tertiary names.
+.uf-ports-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 16px;
+	margin: 6px 0 0;
+	color: var(--uf-text-3);
+	font-size: 12px;
+	line-height: 16px;
+
+	> li {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		white-space: nowrap;
+
+		> i {
+			flex: none;
+			@include size(8px);
+			border-radius: 2px;
+			background: var(--uf-ports-color);
+		}
+	}
+
+	> [data-state="disabled"] > i { @include hollow; }
+
+	> :is([data-state="uplink"], [data-state="poe"]) > i {
+		@include size(10px);
+		border-radius: 0;
+		background: var(--uf-text-3);
+		@include mask(var(--uf-ports-i-uplink) center / contain no-repeat);
+	}
+
+	> [data-state="poe"] > i { @include mask-image(var(--uf-ports-i-bolt)); }
+}
+
+// Port Manager list
+// -----------------
+
+.uf-ports-list {
+	margin-top: 20px;
+	.td { color: var(--uf-text-1); white-space: nowrap; }
+	.td[data-name="tagged"] { white-space: normal; }
+	.td:is([data-name="rx"], [data-name="tx"]), .th:is([data-name="rx"], [data-name="tx"]) { text-align: right; }
+}
+
+.uf-ports-name, .uf-ports-link, .uf-ports-net {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	vertical-align: middle;
+}
+
+.uf-ports-name { font-weight: 500; }
+
+.uf-ports-name small, .uf-ports-tip-head small {
+	color: var(--uf-text-3);
+	font-size: 12px;
+	font-weight: 400;
+}
+
+.uf-ports-mini {
+	flex: none;
+	@include size(10px);
+	border-radius: 2px;
+	background: var(--uf-ports-color);
+}
+
+[data-state="disabled"] > .uf-ports-mini { @include hollow; }
+
+// A status dot, UniFi's online green at any speed (the square beside the name
+// tells the speed), grey without link, a ring when disabled.
+.uf-ports-dot {
+	flex: none;
+	@include size(6px);
+	border-radius: 50%;
+	background: var(--uf-green);
+}
+
+.uf-ports-link {
+	&[data-state="down"] { color: var(--uf-text-2); }
+	&[data-state="down"] > .uf-ports-dot { background: var(--uf-text-4); }
+	&[data-state="disabled"] { color: var(--uf-text-3); }
+	&[data-state="disabled"] > .uf-ports-dot { @include hollow; }
+}
+
+.uf-ports-poe {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	padding: 0 6px;
+	border-radius: var(--uf-radius-sm);
+	background: var(--uf-field);
+	color: var(--uf-text-2);
+	font-size: 12px;
+	line-height: 18px;
+	font-variant-numeric: tabular-nums;
+
+	&::before {
+		content: "";
+		@include size(9px, 11px);
+		background: currentColor;
+		@include mask(var(--uf-ports-i-bolt) center / contain no-repeat);
+	}
+
+	&[data-fault] { background: rgba(var(--uf-red-rgb), .12); color: var(--uf-red-text); }
+}
+
+.uf-ports-speed, .uf-ports-rx, .uf-ports-tx { font-variant-numeric: tabular-nums; }
+
+// "1 GbE  Full duplex", the duplex quieter; half duplex is worth a look.
+.uf-ports-speed {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 8px;
+	> small { color: var(--uf-text-3); font-size: 12px; }
+	> small[data-half] { color: var(--uf-orange-text); }
+}
+
+.uf-ports-none { color: var(--uf-text-3); }
+
+// Networks: the zone's colour as a dot before the name.
+.uf-ports-net { gap: 6px; }
+
+.uf-ports-zone {
+	flex: none;
+	@include size(8px);
+	border-radius: 50%;
+	background: rgb(var(--zone-color-rgb, var(--uf-text-4)));
+	box-shadow: inset 0 0 0 1px rgba(var(--zone-color-rgb, 0, 0, 0), .5);
+	&:not([style]) { background: var(--uf-text-4); }
+}
+
+.uf-ports-natives { display: inline-flex; flex-direction: column; gap: 2px; }
+
+.uf-ports-native {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 2px 10px;
+	> small { color: var(--uf-text-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+}
+
+// Tagged VLANs: chips of the VLAN ID and the network on it.
+.uf-ports-vlans { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+
+.uf-ports-vlan {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 0 8px;
+	border-radius: var(--uf-radius-sm);
+	background: var(--uf-field);
+	color: var(--uf-text-1);
+	font-size: 12px;
+	line-height: 20px;
+	white-space: nowrap;
+	> b { font-weight: 600; font-variant-numeric: tabular-nums; }
+}
+
+// Traffic in the throughput colours: received cyan, sent purple.
+.uf-ports-rx, .uf-ports-tx {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--uf-cyan-text);
+}
+
+.uf-ports-tx { color: var(--uf-purple-text); }
+
+.uf-ports-rx::before, .uf-ports-tx::before {
+	content: "";
+	flex: none;
+	@include size(10px, 12px);
+	background: currentColor;
+	@include mask(var(--uf-ports-i-down) center / contain no-repeat);
+}
+
+.uf-ports-tx::before { @include mask-image(var(--uf-ports-i-up)); }
+
+// Compact (the dashboard): the map beside a short list where there is room,
+// the list under it where there is not.
+@container (min-width: 720px) {
+	.uf-ports[data-mode="compact"] {
+		> .uf-ports-body {
+			display: grid;
+			grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+			align-items: start;
+			gap: 0 48px;
+		}
+
+		.uf-ports-map { max-width: 320px; }
+		.uf-ports-list { margin-top: -4px; }
+	}
+}
+
+// Details on hover or focus: a raised card on the page, not in the strip, so
+// it is never clipped by a card or a scrolling table.
+.uf-ports-tip {
+	display: none;
+	position: fixed;
+	z-index: 1100;
+	width: max-content;
+	min-width: 200px;
+	max-width: min(320px, calc(100vw - 16px));
+	padding: 10px 12px 6px;
+	background: var(--uf-raised);
+	border: 1px solid var(--uf-border);
+	border-radius: var(--uf-radius);
+	box-shadow: var(--uf-shadow);
+	color: var(--uf-text-1);
+	font-size: 12px;
+	line-height: 16px;
+	pointer-events: none;
+	&[data-open] { display: block; }
+
+	&-head {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin-bottom: 6px;
+		font-size: 13px;
+		line-height: 18px;
+		> small { margin-left: auto; }
+	}
+
+	&-row {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 16px;
+		padding: 5px 0;
+		border-top: 1px solid var(--uf-divider);
+		> span:first-child { flex: none; color: var(--uf-text-3); }
+
+		> span:last-child {
+			display: flex;
+			flex-wrap: wrap;
+			justify-content: flex-end;
+			gap: 4px 10px;
+			text-align: right;
+			font-variant-numeric: tabular-nums;
+		}
+	}
+
+	.uf-ports-vlans { justify-content: flex-end; }
+}
+
+// Status overview: LuCI's Port status tiles become the same squares, each
+// with its zone as a slim bar, its name and speed, and its traffic in the
+// throughput colours. The markup has no uplink: the port in the wan zone
+// (LuCI's fixed wan colour) is it. Scoped to tiles that draw a port icon, so
+// other ifacebox grids are left alone.
+body[data-page="admin-status-overview"] div[style*="grid-template-columns"] {
+	&:has(> .ifacebox img[src*="/port_"]) {
+		display: flex !important; // over the inline grid
+		flex-wrap: wrap;
+		gap: 16px 6px;
+	}
+
+	> .ifacebox:has(img[src*="/port_"]) {
+		--uf-ports-color: var(--uf-ports-down);
+
+		position: relative;
+		align-items: center;
+		width: 72px;
+		padding: 0;
+		background: none;
+		border: 0;
+		border-radius: 0;
+	}
+
+	> .ifacebox:has(img[src*="/port_"][src*="_up."]) {
+		--uf-ports-color: var(--uf-ports-gbe);
+		&:has(span[title^="Speed: 10 "], span[title^="Speed: 100 "]) { --uf-ports-color: var(--uf-ports-fe); }
+		&:has(span[title^="Speed: "]):not(:has(span:is([title^="Speed: 10 "], [title^="Speed: 100 "], [title^="Speed: 1000 "]))) { --uf-ports-color: var(--uf-ports-mgig); }
+	}
+
+	> .ifacebox:has(img[src*="/port_"]) {
+		// The square leads the column; the zone bar follows it.
+		&::before {
+			content: "";
+			order: -2;
+			flex: none;
+			@include size(var(--uf-ports-size));
+			border-radius: var(--uf-radius-sm);
+			background: var(--uf-ports-color);
+		}
+
+		> .ifacebox-body:has(> img)::before { content: none; }
+
+		// The uplink's chevron, or a bolt on a port giving PoE, over the square.
+		&:is(:has(.zonebadge[style*="240, 144, 144"]), :has(img[src*="/port_pse_up"]))::after {
+			content: "";
+			position: absolute;
+			top: 6px;
+			left: calc(50% - var(--uf-ports-size) / 2 + 6px);
+			@include size(calc(var(--uf-ports-size) - 12px));
+			background: var(--uf-on-accent);
+			@include mask(var(--uf-ports-i-uplink) center / contain no-repeat);
+		}
+	}
+
+	> .ifacebox:has(img[src*="/port_pse_up"]):not(:has(.zonebadge[style*="240, 144, 144"]))::after { @include mask-image(var(--uf-ports-i-bolt)); }
+	> .ifacebox:has(img[src*="/port_"][src*="_down."])::after { background: var(--uf-text-3); }
+
+	> .ifacebox:has(img[src*="/port_"]) {
+		> .ifacebox-head.cbi-tooltip-container {
+			order: -1;
+			width: var(--uf-ports-size);
+			height: 3px;
+			margin: 4px 0 2px;
+			padding: 0;
+		}
+
+		> .ifacebox-head:first-child {
+			max-width: 100%;
+			color: var(--uf-text-2);
+			font-size: 11px;
+			font-weight: 500;
+			line-height: 14px;
+		}
+
+		> .ifacebox-body:has(> img) {
+			display: block;
+			padding: 0;
+			color: var(--uf-text-3);
+			font-size: 11px;
+			line-height: 14px;
+		}
+
+		> .ifacebox-body:last-child { padding: 4px 0 0; }
+	}
+}
+
+// Phones: the list stacks (the base labels each cell); the port leads its row
+// across the width, the link and network pair, then traffic.
+@include phone {
+	.uf-ports-card {
+		> .uf-ports-head { flex-wrap: wrap; }
+		.uf-ports-toggle { display: inline-flex; align-items: center; }
+		&[data-list="closed"] .uf-ports-list { display: none; }
+	}
+
+	.uf-ports-list {
+		margin-top: 16px;
+		.tr > .td[data-name="port"] { flex-basis: 100%; }
+		.tr > .td[data-name="port"]::before { display: none; }
+		.td:is([data-name="rx"], [data-name="tx"]) { text-align: left; }
+		.td { white-space: normal; }
+	}
+}

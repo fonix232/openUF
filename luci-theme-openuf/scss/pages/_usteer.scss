@@ -1,0 +1,355 @@
+// Network > Usteer (luci-app-usteer): usteer's nodes (this AP's radios and
+// the other APs it hears), the clients they hear, and its settings. The tabs
+// sit on the canvas, as DHCP's do, and each tab brings its cards: Status
+// shows the nodes as tiles like UniFi's device panel between two lists, the
+// hearing map is one list with a row per client over the APs that hear it,
+// and the long settings form falls into cards by topic. The view writes every
+// reading as bare text, so what CSS cannot see (a good signal from a poor
+// one, a connected client from a probing one) stays text.
+@use '../abstracts' as *;
+@use '../abstracts/pages-b' as *;
+
+// A list's data row: neither its column titles nor its "no entries" note.
+$row: '.tr:not(.table-titles, .placeholder)';
+
+// The settings rows that open a topic's card, after the first.
+$topics: '[data-name="max_neighbor_reports"]', '[data-name="load_balancing_threshold"]',
+	'[data-name="assoc_steering"]', '[data-name="roam_process_timeout"]',
+	'[data-name="load_kick_enabled"]', '[data-name="band_steering_interval"]',
+	'[data-name="node_up_script"]';
+
+body[data-page^="admin-network-usteer"] {
+	#cbi-usteer {
+		// The section holding the tabs is no card: each tab brings its own.
+		> .cbi-section {
+			margin-bottom: 0;
+			padding: 0;
+			background: none;
+			border: 0;
+			border-radius: 0;
+
+			> .cbi-tabmenu {
+				margin-top: 0;
+				> li > a { font-size: 14px; }
+			}
+		}
+
+		// Status and Hearing map: one card each; the form row around it is bare.
+		:is([data-tab="status"], [data-tab="hearingmap"]) > .cbi-value { padding: 0; }
+		[data-tab] > .cbi-value > .cbi-tblsection { margin: 0 0 16px; @include card(18px 20px); }
+		.cbi-tblsection > h3:not(:first-child) { margin-top: 28px; }
+		.cbi-tblsection .table { font-variant-numeric: tabular-nums; }
+	}
+
+	// A list's first column names the row, in the stronger text.
+	:is(#remotehost_table, #compactconnectioninfo_table, [id^="client_table"]) .td:first-child { color: var(--uf-text-1); }
+
+	// Readings with their unit, as UniFi writes them.
+	@each $unit, $cells in (
+		"\a0MHz": '#connectioninfo_table .td:nth-child(5), #compactconnectioninfo_table .td:nth-child(4), [id^="client_table"] .td:nth-child(4)',
+		"\a0 dBm": '#connectioninfo_table .td:nth-child(7), [id^="client_table"] .td:nth-child(6)',
+		"%": '#connectioninfo_table .td:nth-child(8), #compactconnectioninfo_table .td:nth-child(5)'
+	) {
+		:is(#{$cells}):not(:empty)::after { content: $unit; color: var(--uf-text-3); }
+	}
+
+	// Remote hosts: usteer keeps a host only while it hears from it, so each
+	// is online, UniFi's green dot. A background, so the hover tint stays.
+	#remotehost_table #{$row} > .td:first-child {
+		padding-left: 26px;
+		background-image: radial-gradient(circle, var(--uf-green) 3px, transparent 3.5px);
+		background-repeat: no-repeat;
+		background-position: 8px 50%;
+		background-size: 8px 8px;
+	}
+
+	// Nodes: one tile per node (a radio and its SSID), its details as
+	// label/value rows as in UniFi's device panel, the AP and interface as its
+	// title. A node is listed only while it is up (a remote one until it times
+	// out): the green dot.
+	#connectioninfo_table {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+		gap: 12px;
+		margin: 0;
+		.tr.table-titles { display: none; }
+
+		#{$row} {
+			display: flex;
+			flex-direction: column;
+			min-width: 0;
+			padding: 14px 16px 8px;
+			border: 1px solid var(--uf-border);
+			border-radius: var(--uf-radius);
+
+			> .td {
+				display: flex;
+				flex: none;
+				align-items: baseline;
+				align-self: stretch;
+				padding: 5px 0;
+				border: 0;
+				border-top: 1px solid var(--uf-divider);
+				border-radius: 0;
+				background-color: transparent;
+				color: var(--uf-text-1);
+				text-align: right;
+				overflow: visible;
+				overflow-wrap: anywhere;
+
+				&::before {
+					content: attr(data-title);
+					display: block;
+					margin-right: auto;
+					padding-right: 12px;
+					color: var(--uf-text-3);
+					font-size: 13px;
+					font-weight: 400;
+					text-align: left;
+					white-space: nowrap;
+				}
+
+				&:nth-child(1) {
+					align-items: center;
+					gap: 8px;
+					padding: 0;
+					border: 0;
+					font-size: 14px;
+					line-height: 20px;
+					font-weight: 600;
+					text-align: left;
+
+					&::before {
+						content: "";
+						flex: none;
+						@include size(8px);
+						margin: 0;
+						padding: 0;
+						border-radius: 50%;
+						background: var(--uf-green);
+					}
+				}
+
+				&:nth-child(2) {
+					padding: 0 0 10px 16px;
+					border: 0;
+					color: var(--uf-text-3);
+					font-size: 12px;
+					line-height: 17px;
+					text-align: left;
+					&::before { content: none; }
+				}
+
+				// The title's rule runs under it, a step stronger than the rows'.
+				&:nth-child(3) { border-top-color: var(--uf-border); }
+			}
+		}
+
+		.tr.placeholder {
+			grid-column: 1 / -1;
+			display: block;
+			height: auto;
+			padding: 0;
+			border: 0;
+			> .td { position: static; display: block; padding: 22px 0; }
+		}
+	}
+
+	// Clients per node: under the tiles, each node's connected clients as
+	// chips, a green dot each (the view lists no other); the address and
+	// cipher are in the tip.
+	#compactconnectioninfo_table {
+		margin-top: 24px;
+
+		.cbi-tooltip-container {
+			position: relative;
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			margin: 2px 6px 2px 0;
+			// The view ends each name with an em space, which pads the right.
+			padding: 0 1px 0 8px;
+			border: 1px solid var(--uf-border-strong);
+			border-radius: var(--uf-radius-sm);
+			color: var(--uf-text-1);
+			font-size: 12px;
+			line-height: 20px;
+			white-space: nowrap;
+			vertical-align: middle;
+
+			&::before {
+				content: "";
+				flex: none;
+				@include size(6px);
+				border-radius: 50%;
+				background: var(--uf-green);
+			}
+
+			// The tip opens above its chip and ends where the chip does: the
+			// chips are the list's last column, and the card clips what passes
+			// its edge.
+			&:hover > .cbi-tooltip:not(:empty) { left: auto; right: 0; bottom: calc(100% + 6px); }
+		}
+	}
+
+	// Hearing map: one list, as UniFi's Clients: a row per client (MAC,
+	// address and name, as the view joins them) over the APs that hear it,
+	// indented under the name. The view draws a table per client; the tables
+	// give up their box so their rows line up as one grid, under one row of
+	// column titles.
+	#cbi-usteer [data-tab="hearingmap"] .cbi-tblsection {
+		display: flex;
+		flex-direction: column;
+		> h3 { order: -3; }
+		> h3 + div { order: -2; margin: -8px 0 14px; color: var(--uf-text-2); }
+		> .table { display: contents; }
+	}
+
+	[id^="client_table"] {
+		// Each row is its own grid, so the columns line up only by being the
+		// same in every row: shares of the width, with floors the AP (an
+		// address) and the interface fit in; a longer name wraps rather than
+		// run over.
+		.tr {
+			display: grid;
+			grid-template-columns: minmax(124px, 3fr) minmax(132px, 4fr) minmax(64px, 4fr) minmax(80px, 3fr) minmax(72px, 3fr) minmax(64px, 3fr);
+		}
+
+		.td > nobr { white-space: normal; overflow-wrap: anywhere; }
+		&:first-of-type .tr.table-titles { order: -1; border-bottom: 1px solid var(--uf-border); }
+		&:not(:first-of-type) .tr.table-titles { display: none; }
+
+		.th {
+			width: auto !important; // over the view's inline widths, which the grid now sets
+			border: 0;
+		}
+
+		:is(.th, .td):first-child { padding-left: 38px; }
+		.tr:not(.table-titles) + .tr > .td { border-top: 1px solid var(--uf-divider); }
+		.tr.table-titles + .tr > .td { border-top: 0; }
+	}
+
+	#cbi-usteer [data-tab="hearingmap"] .cbi-tblsection {
+		> h4 {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			margin: 0;
+			padding: 12px 8px 4px;
+			border-top: 1px solid var(--uf-border);
+			font-size: 13px;
+			line-height: 20px;
+			font-variant-numeric: tabular-nums;
+			overflow-wrap: anywhere;
+		}
+
+		// No rule over the first client: the column titles' rule is right above.
+		> div + h4 { border-top: 0; }
+
+		> h4::before {
+			content: "";
+			flex: none;
+			@include size(20px);
+			background: var(--uf-text-3);
+			@include mask(var(--uf-i-wifi) center / contain no-repeat);
+		}
+	}
+
+	// Settings: one long form, in cards by topic: general (after the view's
+	// note), station timers, balancing and the other APs, steering, roaming,
+	// load kicks, band steering, scripts and lists, the options only newer
+	// usteer has, and the buttons. A topic's first row opens its card, its
+	// last row closes it.
+	#cbi-usteer [data-tab="settings"] > .cbi-value {
+		padding: 7px 20px;
+		background-color: var(--uf-surface);
+		border: solid var(--uf-border);
+		border-width: 0 1px;
+
+		// The rule between rows stops at the card's padding, as a card's do.
+		& + .cbi-value {
+			border-top: 0;
+			background-image: linear-gradient(var(--uf-divider), var(--uf-divider));
+			background-repeat: no-repeat;
+			background-position: 20px 0;
+			background-size: calc(100% - 40px) 1px;
+		}
+
+		&:is(:first-child, #{$topics}, [data-name="ssid_list"] + [data-name], :not([data-name]):last-child) {
+			margin-top: 16px;
+			padding-top: 14px;
+			border-top: 1px solid var(--uf-border);
+			border-top-left-radius: var(--uf-radius);
+			border-top-right-radius: var(--uf-radius);
+			background-image: none;
+		}
+
+		&:is(:has(+ :is(#{$topics}, :not([data-name]):last-child)), [data-name="ssid_list"]:has(+ [data-name])) {
+			padding-bottom: 14px;
+			border-bottom: 1px solid var(--uf-border);
+			border-bottom-left-radius: var(--uf-radius);
+			border-bottom-right-radius: var(--uf-radius);
+		}
+
+		// The view's note ("The first four options below are mandatory…")
+		// heads the first card.
+		&:first-child:not([data-name]) { margin-top: 0; padding-top: 18px; padding-bottom: 10px; }
+		&:first-child > div { flex: 1 1 100%; color: var(--uf-text-2); }
+		&:first-child h3 { margin-bottom: 4px; }
+
+		// The buttons: the action bar of other pages, held at the window's
+		// foot while the form scrolls under it.
+		&:not([data-name]):last-child {
+			position: sticky;
+			bottom: 0;
+			z-index: 50;
+			margin-bottom: 16px;
+			padding: 12px 20px;
+			border: 1px solid var(--uf-border);
+			border-radius: var(--uf-radius);
+			box-shadow: 0 -6px 16px -12px var(--uf-scrim);
+			.cbi-page-actions { padding: 0; }
+		}
+	}
+
+	@include phone {
+		#cbi-usteer [data-tab] > .cbi-value > .cbi-tblsection { padding: 14px; }
+
+		// Stacked, the dot goes with the address, under its label.
+		#remotehost_table #{$row} > .td:first-child {
+			padding-left: 20px;
+			background-position: 6px calc(100% - 9px);
+		}
+
+		#connectioninfo_table #{$row} { padding: 12px 14px 6px; }
+
+		// A hearing row is two lines of three labelled readings: the AP, its
+		// interface and SSID over frequency, connection and signal.
+		[id^="client_table"] {
+			.tr {
+				grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) minmax(0, 2fr);
+				padding: 4px 0;
+			}
+
+			.tr:not(.table-titles) + .tr { border-top: 1px solid var(--uf-divider); }
+			.tr.table-titles { display: none; }
+			.tr:not(.table-titles) + .tr > .td { border-top: 0; }
+			.tr > .td:first-child { padding-left: 6px; }
+		}
+
+		#cbi-usteer {
+			[data-tab="hearingmap"] .cbi-tblsection > h4 { padding: 12px 6px 2px; }
+
+			[data-tab="settings"] > .cbi-value {
+				padding: 10px 14px;
+
+				& + .cbi-value {
+					background-position: 14px 0;
+					background-size: calc(100% - 28px) 1px;
+				}
+
+				&:not([data-name]):last-child { padding: 12px 14px; }
+			}
+		}
+	}
+}
