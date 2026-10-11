@@ -2,7 +2,8 @@
 'require view';
 'require form';
 
-// openUF settings (luci-app-openuf): /etc/config/openuf, section `main`.
+// openUF settings (luci-app-openuf): /etc/config/openuf, sections `main`
+// (options), `board` (LED, radios) and the `ng`/`na` radio policies.
 // Saving restarts the daemon (procd's reload trigger on the openuf config).
 // Defaults mirror /usr/share/openuf/config.lua; USAGE.md documents each one.
 
@@ -131,6 +132,51 @@ return view.extend({
 		flag(s, 'advanced', 'debug_dump_requests', _('Capture what openUF sends'),
 			_('Also log openUF\'s own messages and transport errors.'), false)
 			.depends({ debug_dump_file: /./ });
+
+		// ── Board (section `board`): corrections to what openUF derived ──
+		const b = m.section(form.NamedSection, 'board', 'board', _('Board'),
+			_('openUF describes this board by itself. Set these only to correct it; empty keeps what it found.'));
+		b.addremove = false;
+		o = b.option(form.Value, 'led', _('Status LED'),
+			_('The LED that Locate blinks, by its name in /sys/class/leds (e.g. green:status). Check that it is really wired to the case.'));
+		o.placeholder = _('automatic');
+		o.validate = function(section_id, value) {
+			return (!value || (/^[A-Za-z0-9][A-Za-z0-9_:.\-@+]*$/.test(value) && value.indexOf('..') < 0))
+				? true : _('An LED name from /sys/class/leds');
+		};
+		o = b.option(form.DynamicList, 'hwassign', _('Radios to report'),
+			_('The wifi-device sections the controller sees and configures, e.g. radio0. Empty reports every radio.'));
+		o.validate = function(section_id, value) {
+			return (!value || /^[A-Za-z0-9_]+$/.test(value)) ? true : _('A wifi-device name, e.g. radio0');
+		};
+
+		// ── Radio policy (sections `ng` and `na`, type radio_policy) ─────
+		const htmodes = [ 'HT20', 'HT40', 'VHT20', 'VHT40', 'VHT80', 'VHT160',
+			'HE20', 'HE40', 'HE80', 'HE160', 'EHT20', 'EHT40', 'EHT80', 'EHT160', 'EHT320' ];
+		const bands = [ [ 'ng', _('Radio policy: 2.4 GHz') ], [ 'na', _('Radio policy: 5 and 6 GHz') ] ];
+		for (const [ band, title ] of bands) {
+			const p = m.section(form.NamedSection, band, 'radio_policy', title,
+				_('Limits for a radio this board cannot run as the controller asks. They override the controller; leave empty to let it decide.'));
+			p.addremove = false;
+			o = p.option(form.ListValue, 'htmode_max', _('Widest channel'),
+				_('Lower a pushed channel width to at most this, e.g. for a driver that advertises 160 MHz it cannot start.'));
+			o.value('', _('no limit'));
+			htmodes.forEach(function(h) { o.value(h); });
+			o = p.option(form.ListValue, 'htmode_floor', _('Narrowest channel'),
+				_('Raise a pushed width to at least this. A WLAN with Force WiFi 4 Mode is never raised.'));
+			o.value('', _('no floor'));
+			htmodes.forEach(function(h) { o.value(h); });
+			if (band == 'na') {
+				o = p.option(form.ListValue, 'acs_exclude_dfs', _('DFS channels on Auto'),
+					_('Whether automatic channel selection may pick a DFS channel. Overrides the site\'s setting.'));
+				o.value('', _('as the controller says'));
+				o.value('1', _('never (driver cannot do DFS)'));
+				o.value('0', _('allowed'));
+			}
+			o = p.option(form.DynamicList, 'channel', _('Auto channels'),
+				_('The channels automatic selection chooses from, used as written: the controller\'s exclusions are ignored.'));
+			o.datatype = 'range(1,233)';
+		}
 
 		return m.render();
 	}

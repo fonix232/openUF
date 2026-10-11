@@ -102,7 +102,7 @@ curl -sk -b $J -X PUT $B/api/s/default/set/setting/mgmt/$MG \
 
 # 5. Point the AP at the controller and start it (section 4, scripted)
 docker exec openuf-validation-ap sh -c \
-  'echo "config.inform_url = \"http://controller:8080/inform\"" >> /etc/openuf/local.lua'
+  'echo "{\"config\": {\"debug_dump_file\": \"/var/log/openuf-informs.log\", \"inform_url\": \"http://controller:8080/inform\"}}" > /etc/openuf/local.json'
 docker exec -d openuf-validation-ap sh -c 'cd /usr/share/openuf && exec lua announce.lua > /tmp/announce.log 2>&1'
 docker exec -d openuf-validation-ap sh -c 'cd /usr/share/openuf && exec lua inform.lua   > /tmp/inform.log   2>&1'
 

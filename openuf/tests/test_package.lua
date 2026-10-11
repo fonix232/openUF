@@ -58,6 +58,73 @@ return {
 		end
 	},
 	{
+		name = "package: USAGE's schema reference lists every option config.lua reads, with its default",
+		fn = function()
+			local usage = read("../USAGE.md")
+			local ref = usage:match("### Configuration schema reference\n(.-)\n%-%-%-\n")
+			assert_not_nil(ref, "the schema reference section")
+			local kinds = {bool = "boolean", int = "integer", string = "string"}
+			for _, o in ipairs(config.OPTIONS) do
+				local d = o[3]
+				if d == nil then d = "unset"
+				elseif d == true then d = "`1`"
+				elseif d == false then d = "`0`"
+				else d = "`" .. tostring(d) .. "`" end
+				local row = "| `" .. o[1] .. "` | " .. kinds[o[2]] .. " | " .. d .. " |"
+				assert_true(ref:find(row, 1, true) ~= nil, "USAGE schema row: " .. row)
+			end
+			for _, list in ipairs({config.BOARD_OPTIONS, config.POLICY_OPTIONS, config.DEBUG_OPTIONS}) do
+				for _, o in ipairs(list) do
+					assert_true(ref:find("`" .. o[1] .. "`", 1, true) ~= nil, "USAGE documents " .. o[1])
+				end
+			end
+		end
+	},
+	{
+		name = "package: local.json is a conffile, and local.lua stays one while it is still read",
+		fn = function()
+			local cf = read("Makefile"):match("define Package/openuf/conffiles\n(.-)\nendef")
+			assert_not_nil(cf, "conffiles found")
+			assert_true(cf:find(config.JSON_FILE, 1, true) ~= nil, "local.json kept across upgrades")
+			assert_true(cf:find(config.LOCAL_FILE, 1, true) ~= nil, "local.lua kept across upgrades")
+			assert_true(cf:find("/etc/config/openuf", 1, true) ~= nil, "the UCI file too")
+		end
+	},
+	{
+		name = "package: the LuCI page's board and radio policy sections are ones the daemon reads",
+		fn = function()
+			local js = read("../luci-app-openuf/htdocs/luci-static/resources/view/openuf/settings.js")
+			local known = {board = {}, radio_policy = {}}
+			for _, o in ipairs(config.BOARD_OPTIONS) do known.board[o[1]] = true end
+			for _, o in ipairs(config.POLICY_OPTIONS) do known.radio_policy[o[1]] = true end
+			-- `const b = m.section(form.NamedSection, 'board', 'board', ...)`
+			local vartype = {}
+			for var, name, stype in js:gmatch("const (%w+) = m%.section%(form%.NamedSection, ([^,]+), '([%w_]+)'") do
+				vartype[var] = stype
+				if stype == "board" then
+					assert_eq(name, "'" .. config.SECTION_NAMES.board .. "'", "the board section's name")
+				end
+			end
+			assert_eq(vartype.b, "board", "the board section")
+			assert_eq(vartype.p, "radio_policy", "the radio policy sections")
+			-- The bands the page loops over are config.lua's.
+			local bands = {}
+			for band in (js:match("const bands = (%b[])") or ""):gmatch("%[ '([%w_]+)'") do
+				bands[#bands + 1] = band
+			end
+			assert_eq(table.concat(bands, ","), table.concat(config.BANDS, ","), "the bands")
+			local n = 0
+			for var, name in js:gmatch("(%w+)%.option%(form%.%w+, '([%w_]+)'") do
+				local stype = vartype[var]
+				assert_not_nil(stype, "option " .. name .. " is on a known section")
+				assert_true(known[stype][name], "settings.js writes " .. stype .. "." .. name
+					.. ", which config.lua does not know")
+				n = n + 1
+			end
+			assert_eq(n, 6, "led, hwassign and the four policy options")
+		end
+	},
+	{
 		name = "package: the shipped UCI config parses to the daemon's defaults",
 		fn = function()
 			local s = {}

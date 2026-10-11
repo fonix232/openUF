@@ -344,8 +344,8 @@ end
 
 -- Raise an OpenWrt htmode to at least `floor`, per-kind and per-width
 -- independently ("VHT80" with a floor of "HE20" becomes "HE80"). Overrides the
--- controller, so it only runs when local.lua asked for it
--- (dev.conf.radio.<band>.htmode_floor); the hardware clamp still runs after.
+-- controller, so it only runs when the board's radio policy asked for it
+-- (dev.conf.radio.<band>.htmode_floor, UCI openuf.<band>.htmode_floor); the hardware clamp still runs after.
 -- Returns the htmode and, when it changed, the original.
 function M.raise_htmode(htmode, floor)
 	if type(htmode) ~= "string" or type(floor) ~= "string" then return htmode, nil end
@@ -365,8 +365,9 @@ end
 -- Lower an htmode to at most `ceiling` -- the mirror of raise_htmode, for a
 -- width the driver ADVERTISES and the radio cannot actually run (e.g. HE160
 -- on a board whose driver cannot start DFS CAC, when every 160 MHz block
--- overlaps DFS). `iw phy` cannot say "advertised but unusable"; local.lua
--- can, via dev.conf.radio.<band>.htmode_max.
+-- overlaps DFS). `iw phy` cannot say "advertised but unusable"; the board's
+-- radio policy can, via dev.conf.radio.<band>.htmode_max (UCI
+-- openuf.<band>.htmode_max).
 function M.cap_htmode(htmode, ceiling)
 	if type(htmode) ~= "string" or type(ceiling) ~= "string" then return htmode, nil end
 	local h_kind, h_width = htmode:match("^(%u+)(%d+)$")
@@ -1330,8 +1331,10 @@ end
 -- country: ISO 3166-1 alpha-2 regulatory domain from the controller's site
 -- setting (system_cfg's radio.<n>.countrycode, numeric on the wire and mapped
 -- to alpha-2 by inform.lua). nil leaves UCI alone.
--- radio_policy: local.lua's dev.conf.radio table, keyed by band ("ng" =
--- 2.4 GHz, "na" = 5/6 GHz) -- board-level answers the controller cannot know:
+-- radio_policy: dev.conf.radio, keyed by band ("ng" = 2.4 GHz, "na" = 5/6
+-- GHz), from UCI `config radio_policy '<band>'` (config.lua; the UCI list
+-- `channel` arrives as `channels`, numbers) or local.json -- board-level
+-- answers the controller cannot know:
 --   acs_exclude_dfs  with channel Auto, keep ACS off DFS channels (for a
 --                    driver that cannot start CAC, where ACS picking a DFS
 --                    channel leaves the radio down)
@@ -2620,7 +2623,7 @@ local function radio_rows()
 end
 
 -- Return a table of radio info for the inform payload.
--- hwassign: dev.conf.hwassign (set in local.lua) -- the radio names to
+-- hwassign: dev.conf.hwassign (UCI list openuf.board.hwassign) -- the radio names to
 -- report. That matters on a board with a radio openUF should not present as
 -- part of the emulated model (a third radio, a mesh-only or monitor phy): the
 -- controller would show and try to configure a radio the emulated model does

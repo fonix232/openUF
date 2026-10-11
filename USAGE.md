@@ -111,7 +111,8 @@ stays, so a reinstall finds the adoption again. Delete it by hand to forget the 
 package over it. Before its files go in, the package stops the old service, keeps the old
 `conf.lua` and removes the old code, init scripts, LuCI files and `sysupgrade.conf` lines.
 The move into UCI then writes every setting that differs from the defaults to
-`/etc/config/openuf` and the research-only table options to `/etc/openuf/local.lua`.
+`/etc/config/openuf`, its research-only `debug_caps` numbers to the `debug` section and its
+`debug_payload_extra` table to `/etc/openuf/local.json`.
 `state.json` is not touched, so the AP stays adopted.
 
 **Building it yourself.** The repository is an OpenWrt feed. In a buildroot or SDK:
@@ -130,15 +131,30 @@ stopping at the first that does not complete an inform.
 
 ## 3. Configuration
 
-Settings live in UCI, `/etc/config/openuf`, section `main`. Change them on **Services →
-openUF → Settings** in LuCI, or with `uci`:
+Settings live in UCI, `/etc/config/openuf`. Change them on **Services → openUF →
+Settings** in LuCI, or with `uci`:
 
 ```sh
 uci set openuf.main.inform_url=http://10.0.0.1:8080/inform
 uci commit openuf        # the service restarts on its own
 ```
 
-Every option has a default (`/usr/share/openuf/config.lua`), so an empty section works.
+Every option has a default (`/usr/share/openuf/config.lua`), so an empty file works.
+
+openUF reads three layers at start, each overriding the one before:
+
+1. **The board description**, derived from the device itself (below).
+2. **UCI**, `/etc/config/openuf`: the options (section `main`), corrections to the board
+   description (section `board`), the radio policies (sections `ng` and `na`) and the
+   research-only capability overrides (section `debug`).
+3. **`/etc/openuf/local.json`**, optional: a JSON object for what UCI cannot hold, an
+   arbitrary nested table such as `debug_payload_extra`, or a correction to the board's
+   port layout.
+
+The [schema reference](#configuration-schema-reference) at the end of this section lists
+every section, option and key with its type and default. `/etc/openuf/local.lua`, the
+executable Lua file that used to fill the third layer, is deprecated
+([migration](#migrating-from-locallua)).
 
 ### Hardware description (automatic)
 
@@ -172,13 +188,16 @@ device because someone moved a cable. Delete the file to derive it again.
 DSA boards only: on a swconfig board (`which swconfig` finds a binary) the sockets are not
 netdevs, and openUF no longer supports those.
 
-To correct the description, set what is wrong in `/etc/openuf/local.lua`, which runs after it
-with `dev` in scope:
+To correct the description, set what is wrong in the `board` section (**Settings → Board**
+in LuCI):
 
-```lua
-dev.conf.led = "green:status"        -- the LED Locate blinks, from `ls /sys/class/leds`
-dev.conf.hwassign = {"radio0"}       -- report only this radio
+```sh
+uci set openuf.board.led=green:status     # the LED Locate blinks, from `ls /sys/class/leds`
+uci add_list openuf.board.hwassign=radio0 # report (and configure) only this radio
+uci commit openuf
 ```
+
+The port layout (`dev.conf.net`) has no UCI form; correct it in `local.json` (below).
 
 ⚠️ **Check the LED is actually wired.** `/sys/class/leds` lists what the drivers registered,
 not what the case has. A radio LED (`mt76-phy0`) is registered on every board whether or not
@@ -299,27 +318,8 @@ feature switched off takes its state with it at the next start: the L2 and DNS-a
 tables are deleted and the controller's cron job is removed. The timezone and NTP servers
 keep their last values.
 
-`/etc/openuf/local.lua`, if it exists, runs after UCI is read, with `config` (the options)
-and `dev` (the board description) as globals, and may change either. It is for what UCI cannot
-express: the research-only table options `debug_caps` and `debug_payload_extra` (override
-`fw_caps`/`wifi_caps`/`wifi_caps2`, merge extra payload fields; logged loudly at every
-start), or a model-map tweak such as a radio policy:
-
-```lua
-dev.conf.radio = {
-    na = {htmode_max = "HE80", acs_exclude_dfs = true},  -- a driver that cannot start DFS CAC
-    ng = {htmode_floor = "HE20"},                        -- raise a controller's 802.11n default
-}
-```
-
-`htmode_floor` never overrides a WLAN's Force WiFi 4 Mode, and the hardware clamp still runs
-last. `acs_exclude_dfs` and `channels` only apply while the channel is Auto.
-
-The controller has its own say over the same two options (Radio AI's channel exclusions and
-5 GHz DFS switch, see § 6). A policy is an operator override and wins over the controller:
-`acs_exclude_dfs = true` keeps ACS off DFS whatever the site says, `acs_exclude_dfs = false`
-allows DFS even when the site has it off, and a `channels` list is used as written, with the
-site's exclusions ignored (logged). Leave a key out of the policy to let the controller decide.
+The radio policies, the research-only capability overrides and `local.json` have their own
+subsections below.
 
 `l2_announce` — on by default; sends the UDP discovery broadcasts that make the
 device appear in UniFi Discover with no `set-inform` at all, and answers the
@@ -368,6 +368,265 @@ debug mode: `/etc/openuf/unhandled.json` (`unhandled_file`; `off` keeps it in me
 holds every response type, command, top-level field and config key shape openUF did not
 act on, with a count, first/last seen and a copy of what arrived — secrets redacted by
 field name, payloads capped at 2 KB, 150 entries at most.
+
+### Radio policy
+
+Some boards cannot run a radio the way the controller asks: a driver that advertises a
+160 MHz width it cannot start, or one that cannot run DFS CAC, so an Auto channel that
+lands on DFS leaves the radio down. A radio policy is the board's answer, per band, in the
+sections `ng` (2.4 GHz) and `na` (5 and 6 GHz), of type `radio_policy` (**Settings → Radio
+policy** in LuCI):
+
+```sh
+uci set openuf.na.htmode_max=HE80        # a driver that cannot start 160 MHz
+uci set openuf.na.acs_exclude_dfs=1      # ...or DFS CAC
+uci set openuf.ng.htmode_floor=HE20      # raise a controller's 802.11n default
+uci add_list openuf.na.channel=36        # Auto picks only from these
+uci add_list openuf.na.channel=149
+uci commit openuf
+```
+
+`htmode_floor` never overrides a WLAN's Force WiFi 4 Mode, and the hardware clamp still runs
+last. `acs_exclude_dfs` and `channel` only apply while the channel is Auto.
+
+The controller has its own say over the same two options (Radio AI's channel exclusions and
+5 GHz DFS switch, see § 6). A policy is an operator override and wins over the controller:
+`acs_exclude_dfs 1` keeps ACS off DFS whatever the site says, `acs_exclude_dfs 0` allows
+DFS even when the site has it off, and a `channel` list is used as written, with the site's
+exclusions ignored (logged). Leave an option unset to let the controller decide.
+
+A band whose section sets nothing has no policy, so the two empty sections the package
+ships change nothing. A band with a policy owns its ACS options: openUF writes or removes
+`acs_exclude_dfs` and `channels` on that radio itself, where without a policy it leaves a
+hand-set value alone.
+
+### Research-only capability overrides
+
+The `debug` section overrides the capability bitmasks the device claims, and `local.json`'s
+`config.debug_payload_extra` merges extra top-level fields into every inform payload:
+
+```sh
+uci set openuf.debug.wifi_caps2=0x40     # decimal or 0x hex
+uci commit openuf
+```
+
+A claimed bit makes the controller push configuration and show UI for a feature this device
+may not implement, so the daemon says `DEBUG OVERRIDES ACTIVE` in the log at every start.
+For protocol experiments only: unset them when done (`uci delete openuf.debug.wifi_caps2`).
+
+### local.json
+
+`/etc/openuf/local.json` holds what UCI cannot: an arbitrary table, or a change to the
+board description that has no UCI option. It is a JSON object with up to two members,
+`config` (the options) and `dev` (the board description), applied as a
+[JSON merge patch (RFC 7396)](https://www.rfc-editor.org/rfc/rfc7396) over what the board
+and UCI produced: an object merges member by member, `null` removes a member, and anything
+else, an array included, replaces it.
+
+```json
+{
+  "config": {
+    "debug_payload_extra": {"uplink": {"type": "wireless"}}
+  },
+  "dev": {
+    "conf": {
+      "net": {"ports": [{"idx": 1, "ifname": "lan1"}, {"idx": 5, "ifname": "wan"}]},
+      "radio": {"na": {"channels": [36, 40, 44, 48]}}
+    }
+  }
+}
+```
+
+It is checked as a whole before any of it is used. If it does not parse, or any value has
+the wrong type, the log says `REJECTED` with every reason and **none of the file is
+applied**. A key openUF does not know is logged and dropped, and the rest applies. The
+options take JSON types (`true`, not `"1"`); `null` puts an option back to its built-in
+default. Check a file before restarting:
+
+```sh
+cd /usr/share/openuf && lua -e 'local p, n = require("config").check_json(io.open("/etc/openuf/local.json"):read("*a")) print(p and "ok" or "rejected") for _, m in ipairs(n) do print(m) end'
+```
+
+The package never ships the file, and keeps it across upgrades and sysupgrades.
+
+### Migrating from local.lua
+
+`/etc/openuf/local.lua` (executable Lua with `dev` and `config` in scope) is deprecated.
+This release still runs it, last, after `local.json`, exactly as before, and logs a
+deprecation warning at every start (and once at install). The next release will not read it.
+Automatic conversion was ruled out: the file is code, it can compute values or replace `dev`
+outright, and a converter that runs it and keeps the result would freeze values the board
+derives on every start (the LED, the uplink) into a file nobody wrote.
+
+Move each line to its new home, then delete `local.lua`:
+
+| `local.lua` | Now |
+|---|---|
+| `config.<option> = v` | `uci set openuf.main.<option>=v` |
+| `dev.conf.led = "x"` | `uci set openuf.board.led=x` |
+| `dev.conf.hwassign = {"radio0"}` | `uci add_list openuf.board.hwassign=radio0` |
+| `dev.conf.radio.na = {htmode_max = "HE80"}` | `uci set openuf.na.htmode_max=HE80` |
+| `dev.conf.radio.na.acs_exclude_dfs = true` | `uci set openuf.na.acs_exclude_dfs=1` |
+| `dev.conf.radio.na.channels = {36, 40}` | `uci add_list openuf.na.channel=36` (once per channel) |
+| `config.debug_caps = {fw_caps = 0x110}` | `uci set openuf.debug.fw_caps=0x110` |
+| `config.debug_payload_extra = {...}` | `local.json`: `{"config": {"debug_payload_extra": {...}}}` |
+| `dev.conf.net.<field> = ...` | `local.json`: `{"dev": {"conf": {"net": {...}}}}` |
+| `dev = dofile(...)` (a whole description) | `local.json` with the fields that differ |
+
+A tarball install's `conf.lua` (§ 2) moves straight to the new places: its options to
+`main`, its `debug_caps` numbers to `debug`, its `debug_payload_extra` to `local.json`.
+
+### Configuration schema reference
+
+This is the contract between the files and the daemon. Another implementation (the Rust
+daemon) follows it exactly; `openuf/src/config.lua` is the Lua one, and
+`openuf/tests/test_config.lua` pins its behaviour.
+
+**Load order.** At start, once:
+
+1. `dev` = the board description (`openwrt/board.lua`): `dev.conf.net`, `dev.conf.led`,
+   `dev.identity`.
+2. Read every section of the UCI package `openuf`. `config` = the `main` options, typed
+   (an unset or invalid option takes its default). Set `config.debug_caps` from `debug`;
+   override `dev.conf.led` and `dev.conf.hwassign` from `board` where set; set
+   `dev.conf.radio.<band>` from each `radio_policy` section that sets anything valid.
+3. If `/etc/openuf/local.json` exists and passes validation, merge it (below).
+4. Compute the derived fields (below), from the merged values.
+5. Deprecated, this release only: if `/etc/openuf/local.lua` exists, warn and run it with
+   `dev` and `config` as globals.
+
+Settings are read once; a change to `/etc/config/openuf` restarts the service (procd
+reload trigger). A change to `local.json` needs `/etc/init.d/openuf restart`.
+
+**UCI values.** Every option is a string in UCI.
+
+- *boolean*: `1`, `true`, `yes`, `on`, `enabled` → true; `0`, `false`, `no`, `off`,
+  `disabled` → false; case-insensitive.
+- *integer*: a whole number, decimal (a `0x`-prefixed hex number is also accepted).
+- *string*: as written; `""` is unset.
+- A `list` where a single option belongs: its last element is used. An `option` where a
+  list belongs: split on whitespace.
+- An invalid value is logged and treated as unset: a `main` option takes its default; a
+  `board`, `radio_policy` or `debug` option is absent. One invalid element makes a whole
+  list absent (a partial list is a different setting from the one written).
+- An option a section does not define is logged and ignored.
+
+**UCI sections.** Each section has a fixed name. A section of a known type under another
+name (including an anonymous one), and a section of an unknown type, is logged and ignored.
+All five ship empty (apart from `main.inform_url`); the package's uci-defaults adds any that a
+kept `/etc/config/openuf` lacks, and never changes an existing one.
+
+| Section | Type | Lands in |
+|---|---|---|
+| `main` | `openuf` | `config.<option>` |
+| `board` | `board` | `dev.conf.led`, `dev.conf.hwassign` |
+| `ng`, `na` | `radio_policy` | `dev.conf.radio.ng`, `dev.conf.radio.na` |
+| `debug` | `debug` | `config.debug_caps` |
+
+`main` (meanings in [Options](#options)):
+
+| Option | Type | Default |
+|---|---|---|
+| `inform_url` | string | `http://unifi:8080/inform` |
+| `l2_announce` | boolean | `1` |
+| `discovery_replies` | boolean | `0` |
+| `ssh_adopt` | boolean | `0` |
+| `stun` | boolean | `1` |
+| `stun_local_port` | integer | `3478` |
+| `cfg_retries` | integer | `2` |
+| `use_only_unifi_wlan` | boolean | `1` |
+| `own_config` | boolean | `1` |
+| `bridge_backend` | string | `auto` |
+| `bridge_takeover` | boolean | `1` |
+| `bridge_rollback_timeout` | integer | `180` |
+| `bridge_name` | string | `br-lan` |
+| `port_default` | string | `all` |
+| `country_override` | string | unset |
+| `sta_events` | boolean | `1` |
+| `system_timezone` | boolean | `1` |
+| `system_ntp` | boolean | `1` |
+| `system_cron` | boolean | `1` |
+| `l2guard` | boolean | `1` |
+| `guest_isolation` | boolean | `1` |
+| `rrm_enrichment` | boolean | `1` |
+| `rrm_request_interval` | integer | `600` |
+| `sibling_exchange` | boolean | `1` |
+| `idle_scan_interval` | integer | `1800` |
+| `sibling_scan_interval` | integer | `1800` |
+| `wireless_uplink` | boolean | `0` |
+| `roam_assist_diff_db` | integer | `8` |
+| `upgrade_mode` | string | unset |
+| `advertise_updates` | boolean | `0` |
+| `advertise_interval` | integer | `21600` |
+| `version_scheme` | string | unset |
+| `state_file` | string | `/etc/openuf/state.json` |
+| `unhandled_file` | string | `/etc/openuf/unhandled.json` |
+| `debug_dump_file` | string | unset |
+| `debug_dump_requests` | boolean | `0` |
+| `debug_dump_max_bytes` | integer | `4194304` |
+
+`board` (unset: the board description's own value):
+
+| Option | Kind | Value | Lands in |
+|---|---|---|---|
+| `led` | option | an LED name: `^[A-Za-z0-9][A-Za-z0-9_:.\-@+]*$`, no `..` | `dev.conf.led` (string) |
+| `hwassign` | list | wifi-device names, `^[A-Za-z0-9_]+$` | `dev.conf.hwassign` (array of strings; absent or empty: every radio) |
+
+`radio_policy` (`ng`, `na`; unset: the controller decides). A section that sets no valid
+option produces no `dev.conf.radio.<band>` entry at all:
+
+| Option | Kind | Value | Lands in |
+|---|---|---|---|
+| `htmode_max` | option | `HT20`, `HT40`, or `VHT`/`HE`/`EHT` + `20`/`40`/`80`/`160`/`320` | `.htmode_max` (string) |
+| `htmode_floor` | option | as `htmode_max` | `.htmode_floor` (string) |
+| `acs_exclude_dfs` | option | boolean; false is a value (allow DFS), not absence | `.acs_exclude_dfs` (boolean) |
+| `channel` | list | channel numbers, integers 1–233 | `.channels` (array of integers, in order) |
+
+`debug` (unset: not claimed; `config.debug_caps` is absent when none is set):
+
+| Option | Value | Lands in |
+|---|---|---|
+| `fw_caps`, `wifi_caps`, `wifi_caps2` | a whole number ≥ 0, decimal or `0x` hex | `config.debug_caps.<option>` (integer) |
+
+**Derived fields**, computed after `local.json` and never settable:
+
+- `config.controller_system`: `true` when `system_timezone`, `system_ntp` and
+  `system_cron` are all true, `false` when all are false, else
+  `{timezone, ntp, cron}` with each boolean.
+- `config.unhandled_file`: `false` when the string is one of the false boolean words
+  (`off`, `0`, …), keeping the ledger in memory.
+- `config.bootstrap_adopt_user`: `"ubnt"` when `ssh_adopt`, else absent.
+
+**local.json.** UTF-8 JSON; the top level is an object. Validation runs over the whole
+document before anything is applied:
+
+- An error rejects the whole file: text that is not JSON, a top level that is not an
+  object, a value of the wrong type, or `null` where it is not allowed. The log lists
+  every error.
+- A key not in the schema below is logged and dropped; the rest applies.
+- `null` is allowed where the tables below say so.
+
+| Path | Type | `null` |
+|---|---|---|
+| `config` | object | no |
+| `config.<option>` (every `main` option) | its type as JSON: boolean, integer (a number with no fraction), string | the built-in default |
+| `config.debug_caps` | object of `fw_caps`, `wifi_caps`, `wifi_caps2`: JSON integers ≥ 0 (`null` removes one) | removes all |
+| `config.debug_payload_extra` | object, any content; its members become top-level payload fields, overwriting | removes it |
+| `dev` | object | no |
+| `dev.conf` | object | no |
+| `dev.conf.led` | string, as `board.led` | no LED (Locate does nothing) |
+| `dev.conf.hwassign` | array of strings, as `board.hwassign` | every radio |
+| `dev.conf.radio` | object of `ng`, `na` | no policy |
+| `dev.conf.radio.<band>` | object: `htmode_max`, `htmode_floor` (strings, as in UCI), `acs_exclude_dfs` (boolean), `channels` (array of integers 1–233); each may be `null` (removed) | no policy for the band |
+| `dev.conf.net` | object: `lan_name`, `lan_cpueth`, `wan_cpueth`, `identity_mac` (strings), `lan_vlanid` (integer), each may be `null`; `ports` (array of `{"idx": integer, "ifname": string}`, not `null`) | no |
+| `dev.identity` | object, merged over the presented UniFi model's catalogue entry | no |
+
+Merging, per RFC 7396, over the tables steps 1–2 produced: an object member merges
+recursively; `null` removes the member; any other value (string, number, boolean, array)
+replaces it. `[]` and `{}` differ: `[]` replaces with an empty array, `{}` merges nothing.
+Under `config` two rules come first: an option set to `null`, or a string option set to
+`""`, takes its built-in default (as an unset UCI option does). After the merge, a `dev.conf.radio.<band>`
+left with no members is removed: like an empty UCI section, it is no policy.
 
 ---
 
@@ -1616,7 +1875,7 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 
 | Symptom | Likely cause |
 |---|---|
-| An Auto radio never picks a DFS channel, or avoids channels nobody excluded | `uci show wireless.<radio>` — `openuf_acs_dfs=1` means the site's 5 GHz DFS switch is off (Radio AI; a site that never stored a choice sends off), `openuf_channels=1` with a `channels` list means the site excludes channels. No stamp: the value was set by hand or by a board policy in `local.lua`. `grep chanlist /var/run/hostapd-<phy>.conf` shows what hostapd got |
+| An Auto radio never picks a DFS channel, or avoids channels nobody excluded | `uci show wireless.<radio>` — `openuf_acs_dfs=1` means the site's 5 GHz DFS switch is off (Radio AI; a site that never stored a choice sends off), `openuf_channels=1` with a `channels` list means the site excludes channels. No stamp: the value was set by hand or by a board radio policy (`uci show openuf.na`). `grep chanlist /var/run/hostapd-<phy>.conf` shows what hostapd got |
 | Device doesn't appear in UniFi Discover | `announce.lua` not running, or UDP port 10001 blocked |
 | Controller shows device as "Disconnected" | `inform.lua` not running, or wrong `inform_url` |
 | Adoption fails with SSH error | SSH not reachable from controller, or root password not set — run `passwd root` on the device, or switch on the adoption account (`uci set openuf.main.ssh_adopt=1 && uci commit openuf`) |
@@ -1644,7 +1903,7 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 | Clients on the same radio can't reach each other (a Cast/Google Home stereo pair or speaker group falls apart, AirPlay or printers vanish) while other clients are fine | The WLAN has Proxy ARP or Multicast Enhancement on, so OpenWrt forces `ap_isolate=1`, and the radio's bridge port lost its hairpin flag in a reconfigure (§ Hairpin). `cat /sys/class/net/<ifname>/brport/hairpin_mode` must be `1` on every BSS whose `/var/run/hostapd-<phy>.conf` block has `ap_isolate=1`. openUF restores it within a minute and logs `re-asserted hairpin_mode`. On an older openUF, run `echo 1 >` on that file and on `proxyarp_wifi` |
 | Idle clients score low on WiFi Experience, and every client receives the same ~16 KB/s even when nothing is using it | usteerd's broadcast sync, copied to each client by Multicast Enhancement (§ usteer's AP-to-AP sync). Compare a client's `tx bytes` in `iw dev <ifname> station dump` over 30 s across clients. `nft list table bridge openuf_usteer` must show three drop rules while usteerd runs. On an older openUF, the traffic reaches every client |
 | No "Possible interference" events ever appear for an openUF AP | Expected: the controller raises them from the radio's tx-timeout and carrier-sense-timeout counters (`athstats.ast_txto`/`ast_cst`, more than 10/s over at least 5 s), and openUF has no faithful OpenWrt source for those, so it does not send them. Channel utilization and "Avg. Interference" (from `iw dev <ifname> survey dump`) are reported as usual |
-| Locate does nothing | The board registered no usable status LED — set `dev.conf.led` in `/etc/openuf/local.lua` to a name from `ls /sys/class/leds` (§ 3) |
+| Locate does nothing | The board registered no usable status LED — set `uci set openuf.board.led=<name>` to a name from `ls /sys/class/leds` (§ 3) |
 | LEDs stay dark with the LED setting on | `ls /var/run/openuf-leds.json`: present means openUF still holds them (a Locate running, or the setting still off as far as openUF knows — `grep led_enabled /etc/openuf/state.json`). Absent means they are in OpenWrt's own state: check the LED's section in `/etc/config/system` and `cat /sys/class/leds/<led>/trigger` |
 | JSON decode error in controller logs | AES key mismatch — try `syswrapper.sh reset-inform` |
 | `inform: parse error: ... inflate: truncated stream` | A compressed controller response arrived incomplete. One heartbeat is lost and the next retries, so an occasional line is harmless; a steady stream of them points at the link to the controller (an MTU or proxy problem), not at the device |

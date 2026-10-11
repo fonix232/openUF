@@ -32,8 +32,8 @@
 	derive again.
 
 	DSA boards only: on a swconfig board the sockets are not netdevs.
-	/etc/openuf/local.lua can still change or replace what this returns --
-	including dev.conf.hwassign, the radios to report (nil: all of them).
+	config.lua layers UCI (openuf.board: led, hwassign; openuf.<band>: the
+	radio policy) and /etc/openuf/local.json over what this returns.
 ]]--
 
 local identity = require("unifi.identity")

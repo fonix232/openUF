@@ -10,7 +10,8 @@ LUAC=$(command -v luac5.1 || command -v luac || true)
 [ -n "$LUAC" ] || { echo "globals-check: no luac" >&2; exit 2; }
 
 # Lua 5.1's own, and openUF's deliberate globals: the test-mode switches, the
-# lib.lua packet helper, and the `config`/`dev` pair local.lua works on.
+# lib.lua packet helper, and the `config`/`dev` pair the deprecated local.lua
+# works on.
 ALLOWED='^(_G|_VERSION|arg|assert|collectgarbage|coroutine|debug|dofile|error|getfenv|getmetatable|io|ipairs|load|loadfile|loadstring|math|module|next|os|package|pairs|pcall|print|rawequal|rawget|rawset|require|select|setfenv|setmetatable|string|table|tonumber|tostring|type|unpack|xpcall|OPENUF_TEST_MODE|SYSWRAPPER_TEST_MODE|config|dev)$'
 
 status=0

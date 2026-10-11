@@ -33,13 +33,14 @@ if [ "$1" != "--verify" ]; then
 	exit 0
 fi
 
-# A copy of the package (and the LuCI app beside it, which the packaging
-# tests read) with src/ stripped.
+# A copy of the package (and the LuCI app and USAGE.md beside it, which the
+# packaging tests read) with src/ stripped.
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/openuf"
 cp -r . "$work/openuf/"
 [ -d ../luci-app-openuf ] && cp -r ../luci-app-openuf "$work/"
+[ -f ../USAGE.md ] && cp ../USAGE.md "$work/"
 strip_tree "$work/openuf/src"
 
 echo "verify: bytecode equivalence"

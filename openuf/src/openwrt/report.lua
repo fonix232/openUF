@@ -212,7 +212,7 @@ function M.build(ctx, st, cfg, ufhw)
 		if ufuci.begin_pass then ufuci.begin_pass() end
 		local ok_v, rv = pcall(ufuci.get_vap_table)
 		if ok_v then vap_table = rv end
-		-- dev.conf.hwassign (local.lua) restricts which radios are reported;
+		-- dev.conf.hwassign (UCI openuf.board.hwassign) restricts which radios are reported;
 		-- absent, every wifi-device in UCI is (see get_radio_table).
 		local hwassign = cfg and cfg.hwassign
 		local ok_r, rr = pcall(ufuci.get_radio_table, hwassign)
@@ -1568,10 +1568,11 @@ function M.build(ctx, st, cfg, ufhw)
 	ctx._last_identity = {}
 	for _, k in ipairs(ctx._staevents.IDENTITY_FIELDS) do ctx._last_identity[k] = payload[k] end
 
-	-- debug_caps / debug_payload_extra (set in local.lua): RESEARCH ONLY. The rule
+	-- debug_caps (UCI section openuf.debug) / debug_payload_extra (local.json):
+	-- RESEARCH ONLY. The rule
 	-- everywhere else in this file is "never claim a bit openUF cannot honour";
 	-- these are the deliberate, loudly logged exception (_warn_debug_overrides)
-	-- so a go/no-go protocol experiment is a local.lua edit and a restart. An
+	-- so a go/no-go protocol experiment is a config edit and a restart. An
 	-- extra key that already exists is overwritten on purpose.
 	local conf = cfg and cfg.config
 	if conf and type(conf.debug_caps) == "table" then

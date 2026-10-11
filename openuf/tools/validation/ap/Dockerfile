@@ -87,7 +87,7 @@ RUN ln -sf /usr/share/openuf/hook/syswrapper.sh /usr/bin/syswrapper.sh \
     && chmod +x /usr/bin/syswrapper.sh /usr/share/openuf/hook/syswrapper.sh \
     && chmod +x /usr/local/bin/ubus /usr/local/bin/iw /usr/local/bin/bridge /usr/local/bin/entrypoint.sh \
     && mkdir -p /etc/openuf /var/log \
-    && echo 'config.debug_dump_file = "/var/log/openuf-informs.log"' > /etc/openuf/local.lua \
+    && echo '{"config": {"debug_dump_file": "/var/log/openuf-informs.log"}}' > /etc/openuf/local.json \
     && printf '1735689600 ca:fe:be:ef:00:01 192.168.1.101 printer *\n' > /tmp/dhcp.leases
 
 # The ap.uc stub stands in for OpenWrt 25.12's wifi generator, the file

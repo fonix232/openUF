@@ -376,7 +376,7 @@ function M._warn_debug_overrides(cfg)
 		parts[#parts + 1] = "extra payload fields: " .. table.concat(keys, ", ")
 	end
 	io.stderr:write(
-		"openuf: DEBUG OVERRIDES ACTIVE (local.lua debug_caps / debug_payload_extra):\n" ..
+		"openuf: DEBUG OVERRIDES ACTIVE (openuf.debug caps / local.json debug_payload_extra):\n" ..
 		"openuf:   " .. table.concat(parts, "; ") .. "\n" ..
 		"openuf: the controller is being told about capabilities this device does\n" ..
 		"openuf: not implement. For protocol experiments only -- unset when done.\n")

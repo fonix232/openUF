@@ -4117,4 +4117,40 @@ return {
 			end)
 		end
 	},
+	{
+		name = "ucihelper: a radio policy from UCI (config.lua) reaches rf_config through apply_config",
+		fn = function()
+			-- Producer to consumer: the UCI sections config.lua parses, the dev
+			-- they land in, and apply_config handed dev.conf as the inform loop
+			-- hands it (inform.lua: M.run(dev.conf, ...)).
+			local config = dofile("src/config.lua")
+			config._warn = function() end
+			local dev = {conf = {net = {lan_cpueth = "eth1"}}}
+			config.from_uci({
+				na = {[".type"] = "radio_policy", htmode_max = "HE80", acs_exclude_dfs = "1",
+					channel = {"36", "149"}},
+				ng = {[".type"] = "radio_policy", htmode_floor = "HE20"},
+			}, dev)
+			with_ucihelper(function(db)
+				ucihelper._popen = function() return AX3000T_IW_PHY end
+				seed_radios({"radio0", "radio1"})
+				local c = ucihelper._uci.cursor()
+				c:set("wireless", "radio0", "band", "2g")
+				c:set("wireless", "radio1", "band", "5g")
+				local quiet = io.stderr
+				io.stderr = {write = function() end}
+				local ok, err = pcall(ucihelper.apply_config, {vap_table = {}, radio_table = {
+					{name = "radio1", htmode = "HE160", channel = "auto"},
+					{name = "radio0", htmode = "HT40", channel = 6},
+				}}, dev.conf)
+				io.stderr = quiet
+				assert_true(ok, tostring(err))
+				assert_eq(db.wireless.radio1.htmode, "HE80", "UCI htmode_max caps the push")
+				assert_eq(db.wireless.radio1.acs_exclude_dfs, "1", "UCI acs_exclude_dfs reaches ACS")
+				assert_eq(table.concat(db.wireless.radio1.channels or {}, ","), "36,149",
+					"the UCI list `channel` reaches ACS as channels")
+				assert_eq(db.wireless.radio0.htmode, "HE40", "UCI htmode_floor lifts the 2.4 GHz push")
+			end)
+		end
+	},
 }

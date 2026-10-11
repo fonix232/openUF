@@ -34,18 +34,24 @@ return {
 		end
 	},
 	{
-		name = "migrate: research tables become local.lua, which Lua can load back",
+		name = "migrate: research tables go to the debug section and local.json",
 		fn = function()
 			local legacy = migrate.read(read("tests/fixtures/conf.lua.legacy"))
-			local src = migrate.local_lua(legacy)
-			assert_not_nil(src, "written")
-			local env = {config = {}}
-			local chunk = assert(loadstring(src))
-			setfenv(chunk, env)
-			chunk()
-			assert_eq(env.config.debug_caps.fw_caps, 123, "number")
-			assert_eq(env.config.debug_caps.wifi_caps, "x", "string")
-			assert_nil(migrate.local_lua({}), "nothing to write")
+			local dbg = migrate.debug_options(legacy)
+			assert_eq(dbg.fw_caps, "0x7b", "a number becomes a debug option, in hex")
+			assert_nil(dbg.wifi_caps, "a non-number was never claimed: dropped")
+			local config = migrate._config
+			local warn = config._warn
+			config._warn = function() end
+			local p = config.debug_caps(dbg)
+			config._warn = warn
+			assert_eq(p.fw_caps, 123, "and config.lua reads it back")
+			assert_nil(migrate.local_json(legacy), "no debug_payload_extra: no local.json")
+			local text = migrate.local_json({debug_payload_extra = {uplink = {type = "wireless"}}})
+			assert_not_nil(text, "written")
+			local patch = config.check_json(text)
+			assert_not_nil(patch, "a local.json config.lua accepts")
+			assert_eq(patch.config.debug_payload_extra.uplink.type, "wireless", "with the table")
 		end
 	},
 	{
@@ -61,22 +67,20 @@ return {
 			}
 			local err = io.stderr
 			io.stderr = {write = function() end}
-			local lf = "/tmp/openuf_test_local.lua"
+			local lf = "/tmp/openuf_test_local.json"
 			os.remove(lf)
-			local orig = migrate._config.LOCAL_FILE
-			migrate._config.LOCAL_FILE = lf
+			local orig = migrate._config.JSON_FILE
+			migrate._config.JSON_FILE = lf
 			local keys = migrate.apply("tests/fixtures/conf.lua.legacy", cursor)
-			migrate._config.LOCAL_FILE = orig
+			migrate._config.JSON_FILE = orig
 			io.stderr = err
 			assert_eq(set[".main"], "openuf", "section created")
+			assert_eq(set[".debug"], "debug", "debug section created")
 			assert_eq(set.l2guard, "0", "option set")
+			assert_eq(set.fw_caps, "0x7b", "research caps set")
 			assert_true(committed, "committed")
 			assert_true(#keys >= 5, "reported")
-			local f = io.open(lf, "r")
-			assert_not_nil(f, "local.lua written for the research table")
-			assert_true(f:read("*a"):find("config.debug_caps", 1, true) ~= nil, "with debug_caps")
-			f:close()
-			os.remove(lf)
+			assert_nil(io.open(lf, "r"), "no payload table: no local.json")
 		end
 	},
 	{

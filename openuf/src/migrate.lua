@@ -6,8 +6,9 @@
 	    cd /usr/share/openuf && lua migrate.lua /etc/openuf/conf.lua.legacy
 
 	Only what differs from config.lua's defaults is written, so later default
-	changes still reach an upgraded device. The table-valued research options
-	(debug_caps, debug_payload_extra) go to /etc/openuf/local.lua instead.
+	changes still reach an upgraded device. The research options go where
+	they now live: debug_caps's numbers to the `debug` section, and
+	debug_payload_extra (an arbitrary table) to /etc/openuf/local.json.
 ]]--
 
 local M = {}
@@ -64,36 +65,25 @@ function M.options(legacy, modelmap)
 	return out
 end
 
-local function serialize(v, indent)
-	indent = indent or ""
-	if type(v) == "table" then
-		local keys = {}
-		for k in pairs(v) do keys[#keys + 1] = k end
-		table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
-		local parts = {}
-		for _, k in ipairs(keys) do
-			local key = (type(k) == "string" and k:match("^[%a_][%w_]*$")) and k
-				or ("[" .. serialize(k) .. "]")
-			parts[#parts + 1] = indent .. "\t" .. key .. " = " .. serialize(v[k], indent .. "\t") .. ","
-		end
-		return "{\n" .. table.concat(parts, "\n") .. "\n" .. indent .. "}"
-	elseif type(v) == "string" then
-		return ("%q"):format(v)
+-- The `debug` section's options for a legacy debug_caps table: only the
+-- numbers (anything else was never claimed: report.lua took tonumber()).
+function M.debug_options(legacy)
+	local out = {}
+	if type(legacy.debug_caps) ~= "table" then return out end
+	for _, o in ipairs(config.DEBUG_OPTIONS) do
+		local v = legacy.debug_caps[o[1]]
+		local n = type(v) == "number" and config.CHECK.caps(v) or nil
+		if n then out[o[1]] = string.format("0x%x", n) end
 	end
-	return tostring(v)
+	return out
 end
 
--- local.lua source for the research options, or nil when neither is set.
-function M.local_lua(legacy)
-	local lines = {}
-	for _, k in ipairs({"debug_caps", "debug_payload_extra"}) do
-		if legacy[k] ~= nil then
-			lines[#lines + 1] = "config." .. k .. " = " .. serialize(legacy[k])
-		end
-	end
-	if #lines == 0 then return nil end
-	return "-- Moved from conf.lua by the openuf package (research-only options).\n"
-		.. table.concat(lines, "\n") .. "\n"
+-- local.json text for a legacy debug_payload_extra, or nil when unset.
+function M.local_json(legacy)
+	local extra = legacy.debug_payload_extra
+	if type(extra) ~= "table" or next(extra) == nil then return nil end
+	local ok, s = pcall(require("cjson").encode, {config = {debug_payload_extra = extra}})
+	return ok and (s .. "\n") or nil
 end
 
 -- Write it all. Returns the options set, for the log.
@@ -112,9 +102,17 @@ function M.apply(path, cursor)
 		cursor:set(config.PACKAGE, config.SECTION, k, v)
 		keys[#keys + 1] = k .. "=" .. v
 	end
+	local dbg = M.debug_options(legacy)
+	if next(dbg) then
+		if not cursor:get(config.PACKAGE, "debug") then cursor:set(config.PACKAGE, "debug", "debug") end
+		for k, v in pairs(dbg) do
+			cursor:set(config.PACKAGE, "debug", k, v)
+			keys[#keys + 1] = "debug." .. k .. "=" .. v
+		end
+	end
 	cursor:commit(config.PACKAGE)
-	local extra = M.local_lua(legacy)
-	local lf_path = M._config.LOCAL_FILE
+	local extra = M.local_json(legacy)
+	local lf_path = M._config.JSON_FILE
 	if extra and not config._exists(lf_path) then
 		local lf = io.open(lf_path, "w")
 		if lf then lf:write(extra); lf:close() end

@@ -59,8 +59,11 @@ define Package/openuf/description
   dependency: a full wpad build (the service refuses to start on wpad-basic).
 endef
 
+# local.json is the override file the package never ships; local.lua is its
+# deprecated predecessor, still read (and so still kept) for this release.
 define Package/openuf/conffiles
 /etc/config/openuf
+/etc/openuf/local.json
 /etc/openuf/local.lua
 endef
 

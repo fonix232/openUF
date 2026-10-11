@@ -12,11 +12,13 @@ RUN mkdir -p /var/lock /var/run \
 COPY src/ /usr/share/openuf/
 COPY files/openuf.init /etc/init.d/openuf
 COPY files/openuf.config /etc/config/openuf
-COPY tools/validation/openwrt/ap/bench-modelmap.lua /etc/openuf/bench-map.lua
+# Bench board (local.json over the derived description): `wan` is a veth
+# cable to the bench gateway, lan1/lan2 are veths. U6IW numbering: 1-4
+# downstream, 5 = the uplink ("PoE In + Data"). No status LED.
+COPY tools/validation/openwrt/ap/bench-local.json /etc/openuf/local.json
 COPY tools/validation/openwrt/ap/network.bifrost /etc/config/network.bench
 COPY tools/validation/openwrt/ap/prepare.sh /usr/local/sbin/bench-prepare
 RUN chmod +x /usr/local/sbin/bench-prepare /etc/init.d/openuf /usr/share/openuf/hook/*.sh \
     && ln -sf /usr/share/openuf/hook/syswrapper.sh /usr/bin/syswrapper.sh \
-    && mkdir -p /etc/openuf \
-    && printf '%s\n' 'local id = dev.identity' 'dev = dofile("/etc/openuf/bench-map.lua")' 'dev.identity = id' > /etc/openuf/local.lua
+    && mkdir -p /etc/openuf
 CMD ["/sbin/init"]

@@ -36,8 +36,8 @@
 ---@field net DevNet
 ---@field led string?        the status LED Locate blinks (a /sys/class/leds name), or nil when the board has none usable
 ---@field config Config      the options (set by the entry points)
----@field hwassign string[]? the UCI radios reported, from local.lua; nil: all
----@field radio table<string, RadioPolicy>? per-band limits, from local.lua
+---@field hwassign string[]? the UCI radios reported (openuf.board.hwassign, local.json); nil: all
+---@field radio table<string, RadioPolicy>? per-band limits (openuf.<band> radio_policy, local.json)
 
 ---@class Dev                openwrt/board.lua's describe()
 ---@field conf DevConf
@@ -47,7 +47,7 @@
 ---@field htmode_max string?     cap, e.g. "HE80"
 ---@field htmode_floor string?   floor, e.g. "HE20"
 ---@field acs_exclude_dfs boolean?
----@field channels string[]?     ACS candidates while the channel is Auto
+---@field channels integer[]?    ACS candidates while the channel is Auto (UCI list `channel`)
 
 -- ─── What the device presents as ────────────────────────────────────────────
 
@@ -396,5 +396,5 @@
 ---@field debug_dump_requests boolean
 ---@field debug_dump_max_bytes integer
 ---@field bootstrap_adopt_user string?
----@field debug_caps table?          research only, from local.lua
----@field debug_payload_extra table? research only, from local.lua
+---@field debug_caps {fw_caps: integer?, wifi_caps: integer?, wifi_caps2: integer?}? research only, UCI openuf.debug
+---@field debug_payload_extra table? research only, from local.json
