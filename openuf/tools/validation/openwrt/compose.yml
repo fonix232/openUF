@@ -1,0 +1,47 @@
+# Bridge-ownership bench: a UniFi Network 10.6.106 controller, a VLAN-aware
+# gateway and a real-netifd OpenWrt AP running this tree's openUF.
+# See README.md in this directory.
+name: openuf-owrt-bench
+services:
+  mongo:
+    image: mongo:8.0
+    volumes: ["./init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro"]
+    networks: [lan]
+  controller:
+    image: lscr.io/linuxserver/unifi-network-application:10.6.106
+    depends_on: [mongo]
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      MONGO_USER: unifi
+      MONGO_PASS: benchpass
+      MONGO_HOST: mongo
+      MONGO_PORT: "27017"
+      MONGO_DBNAME: unifi
+      MONGO_AUTHSOURCE: unifi
+      MEM_LIMIT: "1024"
+    ports: ["127.0.0.1:28443:8443"]
+    networks:
+      lan: {ipv4_address: 172.31.0.10}
+  gw:
+    build: {context: ../../.., dockerfile: tools/validation/openwrt/gw/Dockerfile}
+    cap_add: [NET_ADMIN]
+    sysctls: {net.ipv4.ip_forward: "1"}
+    networks:
+      lan: {ipv4_address: 172.31.0.2}
+  ap:
+    build:
+      context: ../../..
+      dockerfile: tools/validation/openwrt/ap/Dockerfile
+      args: {OPENWRT_TAG: "${OPENWRT_TAG:-armsr-armv8-SNAPSHOT}"}
+    privileged: true
+    hostname: openuf-owrt
+    networks:
+      lan: {ipv4_address: 172.31.0.30}
+networks:
+  lan:
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+          ip_range: 172.31.0.128/26

@@ -18,32 +18,40 @@ what each requires.
 The "AP" is Alpine with a **mocked UCI**, not OpenWrt. Two things to know before
 you trust a result here:
 
-- **UCI persists across process restarts.** The mock writes
+- **UCI persists across process restarts** (since 2026-09-10). The mock writes
   `/var/lib/openuf-uci-mock.json` on every `set`/`delete` and reloads it at
-  module load, the way a real `/etc/config/*` survives a reboot, which is what
-  makes "does this survive a restart?" answerable here at all. Clear it with
-  `docker compose down -v` (it lives in the container's writable layer) or
-  `lua -e 'require("uci")._reset()'` for a clean run without recreating the
-  container.
+  module load, the way a real `/etc/config/*` survives a reboot. That is what
+  makes "does this survive a restart?" answerable here at all — the startup
+  reapply of the Multicast/Broadcast Blocker and the WiFi Speed Limit rebuilds
+  both from `openuf_bcfilt`/`openuf_ratelimit_*` stamped on each managed
+  section, and that is now testable end to end. Before this the mock reseeded
+  on every process start, so the whole question was invisible.
+  Clear it with `docker compose down -v` (it lives in the container's writable
+  layer) or `lua -e 'require("uci")._reset()'` for a clean run without
+  recreating the container.
 - **`state.json` does survive**, since it is a real file in the container's
   writable layer. `docker restart openuf-validation-ap` therefore makes a
   faithful reboot test for anything driven from state.json — the static-IP
   reapply, blocked clients, the LED toggle. The network is reset by Docker on
   restart, exactly as a reboot resets it.
 
-**`grep -c "handle_response failed" /tmp/inform.log` must read 0 before you trust
-anything here.** A mock gap raises inside `_tick`'s pcall and surfaces as one
-stderr line, with everything after it — the bcfilter and shaper reconciles, the
-switchvlan pass, `handle_response`'s own final `state.save` — simply not run. Two
-such gaps have been fixed (a missing `cursor:get()`, and a
-`cursor:delete(config, section, option)` that ignored its third argument and
-destroyed the whole section); the unit-test mock in `tests/test_ucihelper.lua`
-had both right, which is why unit tests never showed them.
+The mock also gained a correct `cursor:delete(config, section, option)` on the
+same date. It had ignored the third argument and deleted the whole **section**
+either way — and the option form is not a rare path: `rf_config` deletes
+`txpower`/`basic_rate`/`supported_rates`/`legacy_rates` on essentially every
+radio push, and `wlan_add` deletes `macfilter`/`maclist` on every WLAN without a
+MAC filter. The lab was destroying its own `radio0`/`radio1` wifi-device sections
+and its freshly written wifi-iface sections on the ordinary push. The unit-test
+mock in `tests/test_ucihelper.lua` always had this right, which is why unit tests
+never showed it.
 
-**To test against an older controller**, pin the image with a one-line override
-file: `docker compose -f tools/validation/docker-compose.yml -f <override> up -d
---build`, where the override sets `services.controller.image`. Reset the stack
-first (`down -v`) — the Mongo state is not cross-compatible.
+The mock gained `cursor:get()` on 2026-09-10. It had never had one, and
+`usteer.set_enabled`'s no-op guard calls it on every WiFi setparam — so **every
+setparam in this environment died partway through**, inside `_tick`'s pcall,
+surfacing as a single stderr line. Everything after that call had therefore never
+run here: the bcfilter and shaper reconciles, the switchvlan pass, and
+`handle_response`'s own final `state.save`. If you see `handle_response failed`
+in the AP's log, stop and fix the cause before trusting anything downstream of it.
 
 ## 1. Start the environment
 
@@ -60,7 +68,7 @@ moment before the controller container comes up healthy.
 Sections 2–4 describe the UI path. **None of it needs a browser** — the entire
 setup, adoption and config-push flow is the controller's own REST API, which is
 far faster and is what you want when a `down -v` reset is part of the loop.
-Verified end to end against 10.4.57 on 2026-09-10 and 10.6.106 on 2026-10-14.
+Verified end to end against 10.4.57 on 2026-09-10; upstream moved the lab to 10.6.106 on 2026-10-14.
 
 ```sh
 J=/tmp/uc.jar                      # cookie jar
@@ -96,9 +104,9 @@ curl -sk -b $J -X PUT $B/api/s/default/set/setting/mgmt/$MG \
 #    By IP: a freshly adopted AP that informs to the hostname is refused with
 #    "invalid inform_ip controller" (HTTP 400) on 10.6.106.
 docker exec openuf-validation-ap sh -c \
-  "sed -i 's|http://unifi:8080/inform|http://$CIP:8080/inform|' /opt/openuf/conf.lua"
-docker exec -d openuf-validation-ap sh -c 'cd /opt/openuf && exec lua announce.lua > /tmp/announce.log 2>&1'
-docker exec -d openuf-validation-ap sh -c 'cd /opt/openuf && exec lua inform.lua   > /tmp/inform.log   2>&1'
+  'echo "{\"config\": {\"debug_dump_file\": \"/var/log/openuf-informs.log\", \"inform_url\": \"http://controller:8080/inform\"}}" > /etc/openuf/local.json'
+docker exec -d openuf-validation-ap sh -c 'cd /usr/share/openuf && exec lua announce.lua > /tmp/announce.log 2>&1'
+docker exec -d openuf-validation-ap sh -c 'cd /usr/share/openuf && exec lua inform.lua   > /tmp/inform.log   2>&1'
 
 # 5b. Mark the controller as set up. This REST path never writes is_default=false,
 #     so without this line the controller treats its next restart as a factory
@@ -151,182 +159,10 @@ Three things that will cost you time otherwise:
   aborts with exit 143. Kill by PID, or match on something the wrapper does not
   contain.
 
-### What openUF actually did with the push
-
-A capture answers "what was sent"; `tools/cfg-coverage.lua` answers "what did we
-read". Recover a `system_cfg` from the dump (`config.debug_dump_file`, see
-USAGE.md) into a plain file, then, from the repo root:
-
-```sh
-eval $(luarocks path --local)
-lua tools/cfg-coverage.lua /tmp/syscfg.txt --shapes          # one row per key shape
-lua tools/cfg-coverage.lua /tmp/syscfg.txt --values          # with the wire value
-```
-
-It replays the blob through every pure parser, then re-replays it once per key
-with that key deleted and with its value replaced, and sorts the keys by whether
-any parser's output moved: **consumed** (proof that something read it),
-**inert** (openUF's recognized-key list claims it, yet nothing reacts to this
-value) and **ignored** (nothing looks at it at all). Secrets are redacted even
-under `--values`.
-
-Two uses:
-
-- After implementing a key family, expect every key of that family in
-  **consumed**. A row left in inert/ignored is a consumer that never got wired
-  up — this repo's recurring defect.
-- For a *new* candidate key, run the tool over two captures taken across the
-  controller toggle and diff the two reports. One capture cannot tell a setting
-  from a decoy: per CLAUDE.md the discriminator is the key whose value *changes*.
-
 `override_inform_host` on the `mgmt` setting did not persist on 10.4.57 in the
 run above; setting `super_identity.hostname` to the controller's container IP was
 enough for adoption and informs to work. If you hit `invalid inform_ip` in
 `server.log`, that is the knob to revisit.
-
-## 1c. WPA-Enterprise (802.1X): the RADIUS server
-
-A FreeRADIUS container lives in the compose file behind the `radius` profile, so
-the default workflow is unchanged. It gives the controller's RADIUS profile a
-real, reachable endpoint, which is what makes the captured `aaa.<n>.radius.*`
-block the one a real site would get.
-
-**What it proves:** the wire format and openUF's parse/apply of it. **What it
-does not:** nothing authenticates here — this AP container has no radios and no
-hostapd, so no EAP exchange ever happens. Only real hardware can show that.
-
-```sh
-docker compose -f tools/validation/docker-compose.yml --profile radius up -d radius
-RIP=$(docker inspect openuf-validation-radius \
-      --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
-
-# Sanity-check the server itself before blaming openUF. radclient is not in the
-# freeradius image, so borrow it from a throwaway container on the same network:
-NET=$(docker inspect openuf-validation-radius \
-      --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
-docker run --rm --network "$NET" alpine:3.21 sh -c \
-  "apk add -q freeradius-utils && \
-   echo 'User-Name=openuf-vlan,User-Password=openufpass' | \
-   radclient -x $RIP:1812 auth openufradius"
-# -> Access-Accept with Tunnel-Private-Group-Id = "10"
-```
-
-Users and secret are in `tools/validation/radius/` (`authorize`, `clients.conf`):
-`openuf-test` accepts with no VLAN, `openuf-vlan` accepts with the RFC 3580
-tunnel attributes, anything else is rejected. The shared secret is
-`openufradius`. `docker logs openuf-validation-radius` shows every request —
-the server runs in `-X` debug mode on purpose.
-
-Then push an Enterprise WLAN (REST, continuing from section 1b's `$J` / `$B`):
-
-```sh
-RP=$(curl -sk -b $J -X POST $B/api/s/default/rest/radiusprofile \
-  -H 'Content-Type: application/json' -d "{\"name\":\"openuf-lab-radius\",
-   \"auth_servers\":[{\"ip\":\"$RIP\",\"port\":1812,\"x_secret\":\"openufradius\"}],
-   \"accounting_enabled\":true,
-   \"acct_servers\":[{\"ip\":\"$RIP\",\"port\":1813,\"x_secret\":\"openufradius\"}],
-   \"interim_update_enabled\":true,\"interim_update_interval\":900,
-   \"vlan_wlan_mode\":\"required\",
-   \"use_usg_auth_server\":false,\"use_usg_acct_server\":false}" \
-  | python3 -c "import sys,json;print(json.load(sys.stdin)['data'][0]['_id'])")
-
-# ap_group_ids is REQUIRED on 10.6.106 -- without it the POST fails with
-# api.err.ApGroupMissing. The id comes from the v2 API; /rest/apgroup returns
-# api.err.InvalidObject on this build.
-AG=$(curl -sk -b $J $B/v2/api/site/default/apgroups \
-     | python3 -c "import sys,json;print(json.load(sys.stdin)[0]['_id'])")
-WG=$(curl -sk -b $J $B/api/s/default/rest/wlangroup \
-     | python3 -c "import sys,json;print([g['_id'] for g in json.load(sys.stdin)['data'] if g['name']=='Default'][0])")
-NC=$(curl -sk -b $J $B/api/s/default/rest/networkconf \
-     | python3 -c "import sys,json;print(json.load(sys.stdin)['data'][0]['_id'])")
-
-curl -sk -b $J -X POST $B/api/s/default/rest/wlanconf \
-  -H 'Content-Type: application/json' -d "{\"name\":\"openuf-eap\",\"enabled\":true,
-   \"security\":\"wpaeap\",\"radiusprofile_id\":\"$RP\",\"wlangroup_id\":\"$WG\",
-   \"ap_group_ids\":[\"$AG\"],\"ap_group_mode\":\"all\",\"networkconf_id\":\"$NC\",
-   \"wpa_mode\":\"wpa2\",\"wpa_enc\":\"ccmp\",\"is_guest\":false}"
-```
-
-Capturing the push: clear `/var/log/openuf-informs.log` first, then **change**
-something (a `PUT` with identical content produces no new `cfgversion`, so no
-`setparam` is sent and you will wait for a push that never comes — a
-force-provision alone did not resend it either).
-
-```sh
-docker exec openuf-validation-ap sh -c ': > /var/log/openuf-informs.log'
-# ...PUT the radiusprofile with a different interim_update_interval..., then
-sleep 45
-docker exec openuf-validation-ap sh -c 'grep setparam /var/log/openuf-informs.log' \
-  | cut -d' ' -f2- | python3 -c "import sys,json;print(json.load(sys.stdin)['system_cfg'])" \
-  | grep radius
-```
-
-What openUF made of it is in the mock's own dump — the real `inform.lua`
-process's UCI state, which a separate `lua -e` cannot see:
-
-```sh
-docker exec openuf-validation-ap cat /var/log/openuf-uci-mock-wireless.json | python3 -m json.tool
-# expect on the openuf_radio*_... section: encryption=wpa2+ccmp, NO `key`,
-# auth_server_addr/port/shared_secret, acct_server_*, radius_acct_interim_interval,
-# dynamic_vlan.
-```
-
-Verified end to end on 2026-10-26 against 10.6.106. Two traps that capture
-pinned down, both now covered by tests:
-
-- `aaa.<n>.wpa.psk` is **still sent on an EAP WLAN** (a dummy value the
-  controller fills in). Carrying it into UCI would give the BSS a passphrase it
-  must not have.
-- `wireless.<n>.security=none` on the same push. The discriminator is
-  `aaa.<n>.wpa.key.<k>.mgmt`, never that field.
-
-## 1d. The guest walled garden (both forms)
-
-No extra service: the garden is site settings plus one guest WLAN. With `$J` and `$B`
-from 1b:
-
-```sh
-# The guest settings doc's _id (key=guest_access)
-GA=$(curl -sk -b $J $B/api/s/default/get/setting/guest_access \
-     | python3 -c "import sys,json;print(json.load(sys.stdin)['data'][0]['_id'])")
-
-# One IP entry and two domain entries in the SAME list -- the controller splits
-# them by what each one looks like, not by which list it is in.
-curl -sk -b $J -X PUT $B/api/s/default/set/setting/guest_access/$GA \
-  -H 'Content-Type: application/json' \
-  -d '{"key":"guest_access","portal_enabled":true,"auth":"none",
-       "allowed_subnet_1":"www.example.net","allowed_subnet_2":"198.51.100.7/32",
-       "allowed_subnet_3":"example.com","restricted_subnet_4":"ads.example.org"}'
-
-# A guest WLAN, or nothing guest-related is pushed at all. ap_group_ids and
-# usergroup_id are required (api.err.ApGroupMissing otherwise); copy them from an
-# existing WLAN.
-curl -sk -b $J -X POST $B/api/s/default/rest/wlanconf -H 'Content-Type: application/json' \
-  -d '{"name":"openuf-guest","enabled":true,"security":"open","is_guest":true,
-       "wlangroup_id":"<id>","ap_group_ids":["<id>"],"ap_group_mode":"all","usergroup_id":"<id>"}'
-
-# Then force-provision and read the push out of the debug dump (section 3's
-# debug_dump_file), not stat/device -- that document carries no system_cfg on this build.
-docker exec openuf-validation-ap grep -c "handle_response failed" /tmp/inform.log   # 0
-docker exec openuf-validation-ap sh -c 'nft list chain bridge openuf_guest guestin'
-```
-
-Expect, above every drop, one `ip daddr <ip> accept` per resolved address plus
-`ip daddr 198.51.100.7 accept` (no port — that is the shape that marks a garden entry),
-and the egress twins in `guestout`. A name that does not resolve is logged as
-`walled garden: <name> did not resolve …` and left out.
-
-To check the generated statements against real `nft` rather than the mock, run them on a
-dummy netdev in the AP container, twice, and compare:
-
-```sh
-docker exec openuf-validation-ap sh -c 'ip link add openuf-test0 type dummy; ip link set openuf-test0 up'
-# ... reconcile() with vaps = {{ifname = "openuf-test0", bridge_mac = "02:00:00:00:00:aa"}}
-docker exec openuf-validation-ap sh -c 'nft delete table bridge openuf_guest; ip link del openuf-test0'
-```
-
-Verified end to end on 2026-10-26 against 10.6.106; the capture and the findings are in
-PROTOCOL-VALIDATION.md, "The walled garden: two forms".
 
 ## 2. Complete the controller's first-run setup
 
@@ -381,7 +217,7 @@ needed for any of that.
 
 ```sh
 docker exec -it openuf-validation-ap sh
-cd /opt/openuf
+cd /usr/share/openuf
 
 # Broadcast discovery (real UDP broadcast on port 10001 -- works genuinely in
 # this Docker bridge network as of the announce.lua socket-creation-order fix):
@@ -465,10 +301,9 @@ Start and adopt `ap2` exactly like `ap` (step 5 with `openuf-validation-ap2`,
 then step 6), and give the site a WLAN so both APs carry a `vap_table`.
 Hand-made `STA_ASSOC_TRACKER` notifs can then be posted from either
 container with openUF's own `build_packet`/`http_post`. Build the payload's
-identity the way `inform.lua`'s entry point does: `dofile("conf.lua")`, then
-`dev.conf` with `.config` and `.uap` merged in, plus the `ufmodel` as `ufhw`.
-A bare `conf.lua` reports a different firmware version (6.6.55 instead of
-6.8.2.15592), and the controller takes each such notif for a firmware change
+identity the way `inform.lua`'s entry point does (the loaded config plus the
+presented UniFi identity), not by hand: a payload reporting another firmware
+version makes the controller take each notif for a firmware change
 (`device_upgraded=true`, visible with `debug.device=debug` in
 `/config/data/system.properties`).
 
@@ -485,7 +320,7 @@ A bare `conf.lua` reports a different firmware version (6.6.55 instead of
 2. Start `ap2` (command above), then inside it start **announce only** — the new
    device must be *detected* (announcing unadopted); do **not** adopt it in the UI:
    ```sh
-   docker exec -it openuf-validation-ap2 sh -c 'cd /opt/openuf && lua announce.lua'
+   docker exec -it openuf-validation-ap2 sh -c 'cd /usr/share/openuf && lua announce.lua'
    ```
 3. Get AP2's MAC:
    ```sh
@@ -496,7 +331,7 @@ A bare `conf.lua` reports a different firmware version (6.6.55 instead of
 5. Take AP1 offline (`docker stop openuf-validation-ap`) and start AP2's inform
    loop in another shell:
    ```sh
-   docker exec -it openuf-validation-ap2 sh -c 'cd /opt/openuf && lua inform.lua'
+   docker exec -it openuf-validation-ap2 sh -c 'cd /usr/share/openuf && lua inform.lua'
    ```
 6. Once the controller marks AP1 offline, it auto-adopts AP2 (real SSH
    `set-adopt`, no "Click to Adopt" needed) and provisions it with AP1's cloned
@@ -520,11 +355,10 @@ A bare `conf.lua` reports a different firmware version (6.6.55 instead of
 ```sh
 # Full reset (fresh controller + fresh AP state -- remember to redo step 3,
 # Inform Host Override, after this since it lives in the wiped database).
-# The --profile flags matter if you ever started ap2 (section 6) or the RADIUS
-# server (section 1c): `down` ignores services whose profile isn't active, so
-# without them those containers would survive the reset.
-docker compose -f tools/validation/docker-compose.yml \
-  --profile replacement --profile radius down -v
+# The --profile flag matters if you ever started ap2 (section 6): `down`
+# ignores services whose profile isn't active, so without it the ap2
+# container would survive the reset.
+docker compose -f tools/validation/docker-compose.yml --profile replacement down -v
 
 # Just re-adopt with a clean AP state, keep the controller/site config
 # (Inform Host Override survives this since it doesn't touch unifi-db):

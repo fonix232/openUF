@@ -1,0 +1,36 @@
+#!/bin/sh
+# openUF, on every install and upgrade of the package (and once on the first
+# boot of an image that includes it).
+
+# A tarball install's settings (install.sh, /opt/openuf/conf.lua; kept aside
+# by the package's pre-install) move into /etc/config/openuf, once.
+if [ -f /etc/openuf/conf.lua.legacy ]; then
+	(cd /usr/share/openuf && lua migrate.lua /etc/openuf/conf.lua.legacy) | logger -t openuf
+	mv /etc/openuf/conf.lua.legacy /etc/openuf/conf.lua.migrated
+fi
+
+# Model maps are gone (the board describes itself): drop the option.
+uci -q delete openuf.main.modelmap && uci commit openuf
+
+# The sections a kept /etc/config/openuf predates (it is a conffile: an
+# upgrade never replaces it), added empty where absent. Existing sections and
+# options are left exactly as they are; an empty section changes nothing.
+[ -f /etc/config/openuf ] || touch /etc/config/openuf
+added=
+for s in main=openuf board=board ng=radio_policy na=radio_policy debug=debug; do
+	uci -q get "openuf.${s%%=*}" >/dev/null || { uci set "openuf.$s"; added=1; }
+done
+[ -n "$added" ] && uci commit openuf
+
+# local.lua (executable Lua) gave way to UCI and local.json. It is still run
+# for this release, with a warning at every start.
+[ -f /etc/openuf/local.lua ] && logger -t openuf \
+	"/etc/openuf/local.lua is deprecated and will not be read by the next release: move it to /etc/config/openuf or /etc/openuf/local.json (USAGE.md section 3)"
+
+# The SSH adoption account's shell moved with the code.
+sed -i 's#:/opt/openuf/hook/adopt-shell.sh$#:/usr/share/openuf/hook/adopt-shell.sh#' /etc/passwd
+
+# Topology: the controller learns the AP's uplink from LLDP.
+[ -x /etc/init.d/lldpd ] && /etc/init.d/lldpd enable
+
+exit 0

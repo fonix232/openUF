@@ -14,8 +14,8 @@
 
 	Usage, ON THE DEVICE (cwd must be the install dir, as for inform.lua):
 	  scp tools/heartbeat-probe.lua root@<ap>:/tmp/     # or: ssh ... 'cat > /tmp/…'
-	  ssh root@<ap> 'cd /opt/openuf && lua /tmp/heartbeat-probe.lua'
-	  ssh root@<ap> 'cd /opt/openuf && lua /tmp/heartbeat-probe.lua payload > /tmp/p.json'
+	  ssh root@<ap> 'cd /usr/share/openuf && lua /tmp/heartbeat-probe.lua'
+	  ssh root@<ap> 'cd /usr/share/openuf && lua /tmp/heartbeat-probe.lua payload > /tmp/p.json'
 
 	Measurements go to stderr, the payload (with `payload`) to stdout, so the
 	two never mix.
@@ -41,18 +41,18 @@ local MODE = ...
 -- self-executing run() block at the bottom of inform.lua (and announce.lua's
 -- broadcast loop, which _populate_net_info would otherwise start).
 OPENUF_TEST_MODE = true
-pcall(dofile, "lib/lib.lua")
-local ok_conf, conf_err = pcall(dofile, "conf.lua")
+package.path = "./?.lua;" .. package.path
+local ok_conf, dev, config = pcall(function() return require("config").load() end)
 if not ok_conf then
-	io.stderr:write("probe: cannot load conf.lua -- run with cwd = the install "
-		.. "dir (e.g. `cd /opt/openuf`): " .. tostring(conf_err) .. "\n")
+	io.stderr:write("probe: cannot load the settings -- run with cwd = the install "
+		.. "dir (e.g. `cd /usr/share/openuf`): " .. tostring(dev) .. "\n")
 	os.exit(2)
 end
 local inform = dofile("inform.lua")
-if config and type(config.state_file) == "string" and config.state_file ~= "" then
+if type(config.state_file) == "string" and config.state_file ~= "" then
 	inform._state._state_file = config.state_file
 end
-local ufhw = {uap = dofile("ufmodel/" .. dev.openuf.uap.ufmodel .. ".lua")}
+local ufhw = {uap = dev.identity}
 dev.conf.config = config
 dev.conf.uap    = dev.openuf and dev.openuf.uap
 local st = inform._state.load()

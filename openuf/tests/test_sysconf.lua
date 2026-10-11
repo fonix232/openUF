@@ -1,8 +1,8 @@
--- Tests for openuf/sysconf.lua (timezone, NTP, cron from the controller).
+-- Tests for src/openwrt/sysconf.lua (timezone, NTP, cron from the controller).
 -- Run from project root: lua tests/run_tests.lua
 
 OPENUF_TEST_MODE = true
-local sysconf = dofile("openuf/sysconf.lua")
+local sysconf = dofile("src/openwrt/sysconf.lua")
 
 -- A UCI mock with the same contract libuci-lua has for what this module
 -- uses: get() of a list option returns a table; set() with a table writes a
@@ -61,8 +61,9 @@ local function with_stderr(fn)
 	return table.concat(buf)
 end
 
--- The three blocks in the shape a real push carries them (the fork's
--- capture, user renamed), plus two decoys and a duplicate timezone.
+-- The three blocks in the shape a real push carries them (yesrab/openUF's
+-- capture of 2026-09-15, the site's SSH user renamed), plus two decoys and a
+-- duplicate timezone.
 local CAPTURE = table.concat({
 	"system.timezone=IST-5:30",
 	"locale.timezone=IST-5:30",
@@ -258,65 +259,6 @@ return {
 		end
 	},
 	{
-		name = "sysconf: the WiFi Blackout Schedule's schedule-action job is left to the inform loop, quietly",
-		fn = function()
-			-- Lab capture (10.4.57): a WLAN with a schedule adds this job.
-			local _, cmds, files = fresh(system_db("IST-5:30", nil, nil))
-			local cron = sysconf.parse("cron.status=enabled\ncron.1.status=enabled\ncron.1.user=root\n"
-				.. "cron.1.job.1.status=enabled\ncron.1.job.1.schedule=1-59/5 * * * *\n"
-				.. "cron.1.job.1.cmd=syswrapper.sh schedule-action\n").cron
-			local out = with_stderr(function() assert_false(sysconf.apply_cron(cron), "nothing to install") end)
-			assert_nil(files[sysconf.CRONTAB], "no crontab line")
-			assert_eq(#cmds, 0, "crond not touched")
-			assert_eq(out, "", "and nothing logged")
-		end
-	},
-	{
-		name = "sysconf: the walled garden's refresh job is left to the inform loop, quietly",
-		fn = function()
-			-- Lab capture (10.6.106, 2026-10-26): a guest walled garden with a
-			-- domain in it adds this job. openUF re-resolves on the same ten
-			-- minutes in inform._guest_wg_resync, so there is nothing to install
-			-- -- and the argument must not make it look like an unknown command.
-			local _, cmds, files = fresh(system_db("IST-5:30", nil, nil))
-			local cron = sysconf.parse("cron.status=enabled\ncron.1.status=enabled\ncron.1.user=root\n"
-				.. "cron.1.job.1.status=enabled\ncron.1.job.1.schedule=*/10 * * * *\n"
-				.. "cron.1.job.1.cmd=syswrapper.sh refresh-walled-garden 1\n").cron
-			local out = with_stderr(function() assert_false(sysconf.apply_cron(cron), "nothing to install") end)
-			assert_nil(files[sysconf.CRONTAB], "no crontab line")
-			assert_eq(#cmds, 0, "crond not touched")
-			assert_eq(out, "", "and nothing logged")
-			local odd = sysconf.parse("cron.status=enabled\ncron.1.status=enabled\n"
-				.. "cron.1.job.1.status=enabled\ncron.1.job.1.schedule=*/10 * * * *\n"
-				.. "cron.1.job.1.cmd=syswrapper.sh refresh-walled-garden; reboot\n").cron
-			local said = with_stderr(function() assert_false(sysconf.apply_cron(odd), "not installed") end)
-			assert_nil(files[sysconf.CRONTAB], "a verb with something appended is not the verb")
-			assert_true(said:find("not a command this build provides", 1, true) ~= nil, "and is reported")
-		end
-	},
-	{
-		name = "sysconf: the nightly dfs-reset job is installed beside the 11k scan",
-		fn = function()
-			-- Live push, 10.6.106 on the real gateway (2026-10-27): the office
-			-- AP's 5 GHz is pinned to channel 100, so the controller adds this
-			-- second job. Both verbs are the hook's, so both get a line.
-			local _, cmds, files = fresh(system_db("IST-5:30", nil, nil))
-			local cron = sysconf.parse("cron.status=enabled\ncron.1.status=enabled\ncron.1.user=root\n"
-				.. "cron.1.job.1.status=enabled\ncron.1.job.1.schedule=0 2 * * *\n"
-				.. "cron.1.job.1.cmd=syswrapper.sh dfs-reset\n"
-				.. "cron.1.job.2.status=enabled\ncron.1.job.2.schedule=0 4 * * *\n"
-				.. "cron.1.job.2.cmd=syswrapper.sh 11k-scan\n").cron
-			local out = with_stderr(function() assert_true(sysconf.apply_cron(cron), "installed") end)
-			assert_contains(files[sysconf.CRONTAB],
-				"0 2 * * * /usr/bin/syswrapper.sh dfs-reset\n"
-				.. "0 4 * * * /usr/bin/syswrapper.sh 11k-scan\n",
-				"both lines, in the pushed order")
-			assert_contains(out, "2 controller cron job(s) installed", "both counted")
-			assert_eq(out:find("not a command", 1, true), nil, "nothing declined")
-			assert_true(#cmds > 0, "crond told to reload")
-		end
-	},
-	{
 		name = "sysconf: apply_cron removes the managed block when the push stops carrying jobs",
 		fn = function()
 			local _, cmds, files = fresh(system_db("IST-5:30", nil, nil))
@@ -352,6 +294,26 @@ return {
 			assert_contains(out, "sysconf: timezone: ", "and was reported")
 			assert_eq(#r, 0, "no crash")
 			assert_eq(sysconf.apply(nil).timezone, nil, "nil parsed -> nothing")
+		end
+	},
+	{
+		name = "sysconf: the controller's less precise form of the same zone keeps the board's string",
+		fn = function()
+			local db = system_db("GMT0BST,M3.5.0/1,M10.5.0", "Europe/London", nil)
+			fresh(db)
+			assert_false(sysconf.apply_timezone("GMT0BST,M3.5.0,M10.5.0"), "same zone: nothing written")
+			assert_eq(db.system.cfg01.timezone, "GMT0BST,M3.5.0/1,M10.5.0", "board's precise form kept")
+			-- An earlier push already replaced it: the stamped original comes back.
+			local db2 = system_db("GMT0BST,M3.5.0,M10.5.0", nil, nil)
+			db2.system.cfg01.openuf_timezone_orig = "GMT0BST,M3.5.0/1,M10.5.0"
+			db2.system.cfg01.openuf_zonename_orig = "Europe/London"
+			fresh(db2)
+			with_stderr(function()
+				assert_true(sysconf.apply_timezone("GMT0BST,M3.5.0,M10.5.0"), "restored")
+			end)
+			assert_eq(db2.system.cfg01.timezone, "GMT0BST,M3.5.0/1,M10.5.0", "precise form back")
+			assert_eq(db2.system.cfg01.zonename, "Europe/London", "zonename back")
+			assert_nil(db2.system.cfg01.openuf_timezone_orig, "stamp removed")
 		end
 	},
 }

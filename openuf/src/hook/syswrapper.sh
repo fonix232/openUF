@@ -1,3 +1,3 @@
 #!/bin/sh
 # call syswrapper.lua
-lua /opt/openuf/hook/syswrapper.lua "$@"
+lua /usr/share/openuf/hook/syswrapper.lua "$@"

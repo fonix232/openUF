@@ -1,72 +1,149 @@
 --[[
 	Client blocking, driven by the controller's "Block"/"Unblock" client
 	actions. Delivered as a one-shot inform-response cmd (`{"_type":"cmd",
-	"cmd":"block-sta"|"unblock-sta","mac":"<mac>"}`) -- confirmed live against
-	a real controller (see PROTOCOL-VALIDATION.md). There is no persistent
-	wire-level block list the controller pushes on every inform (a candidate
-	top-level `include_blocks` field stays empty even while a client is
-	blocked) -- the device is expected to remember the block itself, the same
-	way real hardware persists it locally after a one-shot command.
+	"cmd":"block-sta"|"unblock-sta","mac":"<mac>"}`) and, authoritatively, as
+	the setparam's blocked_sta list -- see PROTOCOL-VALIDATION.md and
+	provision.lua. The device remembers the block (state.blocked_stas) and
+	reconciles it at startup.
 
 	Enforcement is nftables, in a dedicated `bridge openuf` table so it never
-	collides with (or gets wiped by) OpenWrt's own fw4-managed tables. Rules
-	are added directly to the live kernel ruleset, not via UCI -- like
-	netconfig.lua's `ip addr`/`ip route` calls, this is ephemeral runtime
-	state that must be explicitly reconciled again after a restart (see
-	M.reconcile, called both on the block/unblock cmd and at inform.lua
-	startup with the persisted list from state.json).
+	collides with (or gets wiped by) OpenWrt's own fw4-managed tables. Live
+	kernel state, not UCI: rebuilt from the persisted list after a restart
+	(M.reconcile, called on block/unblock and at inform.lua startup).
 
-	A single dynamic nft set (`blocked_macs`) holds every blocked MAC, with
-	two static rules matching against it (source and destination) -- adding/
-	removing a MAC is then a single `nft add|delete element` against the set,
-	never touching the rules themselves. M.reconcile rebuilds the whole table
-	from scratch (delete + recreate, in one nft transaction: util.nft_apply)
-	rather than diffing -- simpler and self-healing if the table was ever
-	left in an unexpected state, and a blocked client never slips through
-	between the delete and the rebuild.
+	One set (`blocked_macs`) holds every blocked MAC and three rules match
+	against it: frames from and to it through the bridge (forward), and
+	frames from it to the AP itself (input: the AP's own address, DHCP or DNS
+	it may serve, its web UI). The whole table is replaced in one `nft -f`
+	transaction -- the old table goes and the new one appears together, or
+	nothing changes -- and read back afterwards: a command that ran is not a
+	command that succeeded.
+
+	Kicking the client off the air is ucihelper.disconnect_station's job
+	(every VAP, hostapd del_client), called by provision.lua.
 ]]--
 
 local M = {}
-local util = package.loaded["openuf.util"]
-	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
 
--- Injectable: shell command runner, for real `nft`/`hostapd_cli` invocations.
-M._exec = os.execute
+-- Injectable: shell command runner and command reader, for real `nft`.
+M._exec = function(cmd) return os.execute(cmd) end
+M._popen = function(cmd)
+	local p = io.popen(cmd .. " 2>/dev/null")
+	if not p then return "" end
+	local out = p:read("*a") or ""
+	p:close()
+	return out
+end
+M._tmpname = os.tmpname
 
-local NFT_TABLE = "bridge openuf"
+M.TABLE = "bridge openuf"
 
--- Exactly "aa:bb:cc:dd:ee:ff". Every MAC below is spliced into a shell command
--- line; the list comes from the controller (block-sta) by way of state.json,
--- which is also hand-editable, so this module refuses anything else itself
--- rather than trusting the caller to have.
-local is_mac = util.is_mac
+-- os.execute's success on Lua 5.1 (0) and 5.2+ (true).
+local exec_ok = require("openwrt.util").exec_ok
 
--- Rebuild the nftables blocklist to exactly match blocked_macs (a list of
--- MAC address strings). Safe to call with an empty list (leaves an empty,
--- harmless table+set+chain in place) and safe to call repeatedly (each call
--- fully replaces the previous state rather than accumulating).
+-- Exactly "aa:bb:cc:dd:ee:ff". Every MAC below goes into an nft script; the
+-- list comes from the controller by way of state.json, which is also
+-- hand-editable, so this module refuses anything else itself.
+local function is_mac(s)
+	return type(s) == "string" and s:match("^%x%x:%x%x:%x%x:%x%x:%x%x:%x%x$") ~= nil
+end
+
+-- The nft script that replaces the table with one blocking macs (valid,
+-- lowercase, deduplicated). `add table` first, so the `delete` never fails
+-- on a fresh boot.
+function M.script(macs)
+	local els = {}
+	for _, m in ipairs(macs) do els[#els + 1] = m end
+	local lines = {
+		"add table " .. M.TABLE,
+		"delete table " .. M.TABLE,
+		"table " .. M.TABLE .. " {",
+		"\tset blocked_macs {",
+		"\t\ttype ether_addr",
+	}
+	if #els > 0 then lines[#lines + 1] = "\t\telements = { " .. table.concat(els, ", ") .. " }" end
+	for _, l in ipairs({
+		"\t}",
+		"\tchain block {",
+		"\t\ttype filter hook forward priority 0; policy accept;",
+		"\t\tether saddr @blocked_macs drop",
+		"\t\tether daddr @blocked_macs drop",
+		"\t}",
+		"\tchain input {",
+		"\t\ttype filter hook input priority 0; policy accept;",
+		"\t\tether saddr @blocked_macs drop",
+		"\t}",
+		"}",
+	}) do lines[#lines + 1] = l end
+	return table.concat(lines, "\n") .. "\n"
+end
+
+-- The MACs `nft list set` shows in blocked_macs, as a set; nil when the set
+-- (or nft) is not there.
+function M.read_back()
+	local out = M._popen("nft list set " .. M.TABLE .. " blocked_macs")
+	if not out:find("blocked_macs", 1, true) then return nil end
+	local got = {}
+	for m in out:gmatch("(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)") do got[m:lower()] = true end
+	return got
+end
+
+-- Rebuild the blocklist to exactly match blocked_macs (a list of MAC
+-- strings). Safe with an empty list (an empty set, blocking nothing) and to
+-- repeat. Returns true when the table was replaced and reads back as asked.
 function M.reconcile(blocked_macs)
-	local T = NFT_TABLE
-	local stmts = {"add set " .. T .. " blocked_macs { type ether_addr; }"}
+	local macs, seen = {}, {}
 	for _, mac in ipairs(blocked_macs or {}) do
 		if is_mac(mac) then
-			stmts[#stmts + 1] = "add element " .. T .. " blocked_macs { " .. mac .. " }"
+			local m = mac:lower()
+			if not seen[m] then seen[m] = true; macs[#macs + 1] = m end
 		else
 			io.stderr:write(("firewall: ignoring malformed blocked MAC %q\n"):format(tostring(mac)))
 		end
 	end
-	stmts[#stmts + 1] = "add chain " .. T .. " block { type filter hook forward priority 0; }"
-	stmts[#stmts + 1] = "add rule " .. T .. " block ether saddr @blocked_macs drop"
-	stmts[#stmts + 1] = "add rule " .. T .. " block ether daddr @blocked_macs drop"
-	util.nft_apply(T, stmts, M._exec)
+	local path = M._tmpname()
+	local f = io.open(path, "w")
+	if not f then
+		io.stderr:write("firewall: cannot write the nft script -- blocked clients not enforced\n")
+		return false
+	end
+	f:write(M.script(macs))
+	f:close()
+	local rc = M._exec("nft -f '" .. path .. "' 2>/dev/null")
+	os.remove(path)
+	if not exec_ok(rc) then
+		io.stderr:write("firewall: nft rejected the blocklist -- " .. #macs
+			.. " blocked client(s) not enforced\n")
+		return false
+	end
+	local got = M.read_back()
+	if not got then
+		io.stderr:write("firewall: nft shows no blocklist after loading it -- blocked clients not enforced\n")
+		return false
+	end
+	local n = 0
+	for _ in pairs(got) do n = n + 1 end
+	for _, m in ipairs(macs) do
+		if not got[m] then
+			io.stderr:write("firewall: " .. m .. " is not in the blocklist nft shows\n")
+			return false
+		end
+	end
+	if n ~= #macs then
+		io.stderr:write("firewall: the blocklist nft shows holds " .. n .. " MACs, not " .. #macs .. "\n")
+		return false
+	end
 	return true
 end
 
 -- Injectable: run a command and return its output.
-M._read = function(cmd) return util.popen(cmd) or "" end
-
--- Injectable: a file's contents, or nil.
-M._read_file = util.read_file
+M._read = function(cmd)
+	local p = io.popen(cmd)
+	if not p then return "" end
+	local out = p:read("*a") or ""
+	p:close()
+	return out
+end
 
 -- The hostapd control sockets that exist and which socket each one is, as
 -- one string: a single read of /proc/net/unix, no fork. hostapd opens a
@@ -81,6 +158,15 @@ function M.hostapd_sockets()
 	end
 	table.sort(t)
 	return table.concat(t, " ")
+end
+
+-- Injectable: a file's contents, or nil.
+M._read_file = function(path)
+	local f = io.open(path, "r")
+	if not f then return nil end
+	local s = f:read("*a")
+	f:close()
+	return s
 end
 
 local function macs_in(text)

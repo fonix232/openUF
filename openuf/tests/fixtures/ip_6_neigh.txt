@@ -1,0 +1,5 @@
+fd00:db8:77::1 dev eth0 lladdr 00:00:5e:00:53:01 router ref 1 used 0/0/0 probes 4 REACHABLE
+fd00:db8:77::20 dev eth0 lladdr aa:bb:cc:dd:ee:ff ref 1 used 0/0/0 probes 4 REACHABLE
+fe80::200:5eff:fe00:5301 dev eth0 lladdr 00:00:5e:00:53:01 router ref 1 used 0/0/0 probes 1 REACHABLE
+fe80::a8bb:ccff:fedd:eeff dev eth0 lladdr aa:bb:cc:dd:ee:ff ref 1 used 0/0/0 probes 1 REACHABLE
+fd00:db8:77::99 dev eth0  used 0/0/0 probes 6 FAILED

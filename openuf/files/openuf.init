@@ -1,54 +1,113 @@
 #!/bin/sh /etc/rc.common
 # openUF procd service
 #
-# Manages two background processes:
-#   announce — sends L2 UDP discovery broadcasts (port 10001)
+# Manages three background processes:
+#   announce — L2 UDP discovery broadcasts and probe replies (port 10001),
+#              the sibling BSSID exchange (port 10011), and the RADIUS
+#              Dynamic Authorization dispatcher (port 3799)
 #   inform   — sends encrypted TNBU heartbeats to the controller
+#   phases   — times each client connection's steps from hostapd's ubus
+#              notifications, for the controller's connection timing
+#
+# Settings: /etc/config/openuf (see /usr/share/openuf/config.lua).
 
 START=99
 STOP=01
 USE_PROCD=1
 
-OPENUF_DIR=/opt/openuf
+OPENUF_DIR=/usr/share/openuf
+STATE_DIR=/etc/openuf
+ADOPT_USER=ubnt
+ADOPT_GECOS="openuf bootstrap adoption"
+
+# The temporary SSH adoption account (option ssh_adopt): a non-root ubnt/ubnt
+# login whose shell only runs `syswrapper.sh set-adopt`, which is how a
+# controller adopts a device it found on its own subnet. The daemon locks it
+# once the device is adopted and unlocks it after a factory reset; this only
+# creates it, or removes it when the option is off. Never touches a ubnt
+# account openUF did not create.
+adopt_account() {
+	local want uid gid
+	config_get_bool want main ssh_adopt 0
+	if [ "$want" != 1 ]; then
+		if grep -q "^$ADOPT_USER:[^:]*:[0-9]*:[0-9]*:$ADOPT_GECOS:" /etc/passwd 2>/dev/null; then
+			sed -i "/^$ADOPT_USER:/d" /etc/passwd /etc/shadow
+			sed -i '/^openuf:/d' /etc/group
+			# The forwarding the account's unlock switched off comes back.
+			sh "$OPENUF_DIR/hook/ssh-forwarding.sh" restore
+			logger -t openuf "removed the SSH adoption account ($ADOPT_USER)"
+		fi
+		return 0
+	fi
+	grep -q "^$ADOPT_USER:" /etc/passwd 2>/dev/null && return 0
+	# The password hash needs `openssl passwd` (openssl-util, ~0.9 MiB, not a
+	# dependency: most installs adopt over L3 and never use this). Without it
+	# there is no account rather than one nobody can log in to.
+	local hash
+	hash=$(openssl passwd -6 ubnt 2>/dev/null)
+	case "$hash" in
+	'$6$'*) ;;
+	*)
+		logger -t openuf -p daemon.err "ssh_adopt is on, but no password hash can be made (apk add openssl-util); the SSH adoption account was not created"
+		return 0
+		;;
+	esac
+	gid=900
+	while grep -q "^[^:]*:[^:]*:$gid:" /etc/group 2>/dev/null; do gid=$((gid + 1)); done
+	grep -q '^openuf:' /etc/group || echo "openuf:x:$gid:" >> /etc/group
+	gid=$(sed -n 's/^openuf:[^:]*:\([0-9]*\):.*/\1/p' /etc/group)
+	uid=900
+	while awk -F: -v id="$uid" '$3==id{f=1} END{exit !f}' /etc/passwd 2>/dev/null; do uid=$((uid + 1)); done
+	echo "$ADOPT_USER:x:$uid:$gid:$ADOPT_GECOS:$STATE_DIR:$OPENUF_DIR/hook/adopt-shell.sh" >> /etc/passwd
+	echo "$ADOPT_USER:$hash:::::::" >> /etc/shadow
+	# set-adopt writes state.json as that user.
+	mkdir -p "$STATE_DIR"
+	[ -f "$STATE_DIR/state.json" ] || : > "$STATE_DIR/state.json"
+	chgrp "$gid" "$STATE_DIR" "$STATE_DIR/state.json"
+	chmod g+w "$STATE_DIR"
+	chmod 664 "$STATE_DIR/state.json"
+	logger -t openuf "created the SSH adoption account ($ADOPT_USER/ubnt); it locks once adopted"
+}
 
 start_service() {
-	# The Lua scripts (and conf.lua's modelmap dofile) load siblings with
-	# cwd-relative paths, but procd starts services with cwd "/". Run each from
-	# $OPENUF_DIR via `sh -c "cd ... && exec lua ..."` so those loads resolve.
-	#
-	# config.l2_announce = false (conf.lua) skips the broadcaster entirely,
-	# for L3-only adoption. The instance is not started rather than started
-	# and exited: procd would respawn a self-exiting process forever.
-	#
-	# conf.lua dofiles its modelmap by relative path, so the check has to run
-	# from $OPENUF_DIR. Anything unexpected (missing lua, unreadable conf)
-	# leaves the value empty and the broadcaster starts -- fail open, since
-	# that is the documented default.
-	#
+	local l2 sib se msg
+
 	# A full hostapd build first. The controller sends bss_transition with
 	# every WLAN and a wpad-basic-* build rejects it as an unknown option,
 	# taking the radio down: adopted, and no WiFi. Not starting leaves the
 	# device's own WiFi working. wnm_sleep_mode is compiled in only with
 	# WNM; bss_transition is no test (a basic binary has bss_transition_*
-	# event names). install.sh's ensure_full_wpad does the swap.
+	# event names).
 	if ! grep -q wnm_sleep_mode /usr/sbin/hostapd 2>/dev/null; then
-		msg="not starting: /usr/sbin/hostapd has no 802.11v (a wpad-basic build, or none). Re-run install.sh, or: apk add wpad-mbedtls '!wpad-basic-mbedtls'"
+		msg="not starting: /usr/sbin/hostapd has no 802.11v (a wpad-basic build, or none). Swap in the full build: apk add wpad-mbedtls '!wpad-basic-mbedtls'"
 		echo "openuf: $msg" >&2
 		logger -t openuf -p daemon.err "$msg" 2>/dev/null
 		return 1
 	fi
 
-	l2=$(cd "$OPENUF_DIR" 2>/dev/null && lua -e 'dofile("conf.lua")
-		print((config and config.l2_announce == false) and "off" or "on")' 2>/dev/null)
-	if [ "$l2" != "off" ]; then
+	config_load openuf
+	adopt_account
+
+	# The Lua scripts (and the model map) load siblings with cwd-relative
+	# paths, but procd starts services with cwd "/". Run each from
+	# $OPENUF_DIR via `sh -c "cd ... && exec lua ..."` so those loads resolve.
+	#
+	# The announce process does two things: the Ubiquiti discovery broadcast
+	# and probe replies (l2_announce; off for L3-only adoption) and the
+	# sibling BSSID exchange (sibling_exchange). With both off it is not
+	# started rather than started and exited: procd would respawn a
+	# self-exiting process forever.
+	config_get_bool l2 main l2_announce 1
+	config_get_bool sib main sibling_exchange 1
+	# It is also the RADIUS DAS dispatcher (UDP 3799) whenever provisioning
+	# left a plan in $STATE_DIR/das.json.
+	if [ "$l2" = 1 ] || [ "$sib" = 1 ] || [ -s "$STATE_DIR/das.json" ]; then
 		procd_open_instance announce
 		procd_set_param command /bin/sh -c "cd '$OPENUF_DIR' && exec lua announce.lua"
 		procd_set_param respawn 3600 5 0
 		procd_set_param stdout 1
 		procd_set_param stderr 1
 		procd_close_instance
-	else
-		echo "openuf: L2 announce disabled (config.l2_announce = false)"
 	fi
 
 	procd_open_instance inform
@@ -57,34 +116,46 @@ start_service() {
 	procd_set_param stdout 1
 	procd_set_param stderr 1
 	procd_close_instance
+
+	# Connection events off (option sta_events): nothing reads the timings.
+	config_get_bool se main sta_events 1
+	if [ "$se" = 1 ]; then
+		procd_open_instance phases
+		procd_set_param command /usr/bin/ucode "$OPENUF_DIR/openwrt/staphase.uc"
+		procd_set_param respawn 3600 5 0
+		procd_set_param stdout 1
+		procd_set_param stderr 1
+		procd_close_instance
+	fi
+}
+
+# A change to /etc/config/openuf (LuCI's Save & Apply, `uci commit openuf`)
+# restarts the daemon: it reads its settings once, at start. Only openUF's own
+# config: network/wireless triggers cost an in-flight inform on every
+# unrelated LuCI edit, and the daemon re-reads those files each heartbeat
+# anyway.
+service_triggers() {
+	procd_add_reload_trigger "openuf"
+}
+
+reload_service() {
+	stop
+	start
 }
 
 stop_service() {
-	# procd stops the two Lua instances itself. What it cannot see is the RRM
+	# procd stops its instances itself. What it cannot see is the RRM
 	# collector: rrmscan.collector_ensure() spawns `ubus subscribe hostapd.*`
 	# with a trailing &, so it is reparented to init and outlives the daemon
 	# that started it. Left behind it appends beacon-report notifications to
 	# /tmp/openuf-rrm.jsonl forever, and harvest() -- the only thing that ever
 	# truncates that file -- is gone with the inform loop. /tmp is a RAM disk
-	# on these boards, so this is an unbounded leak, and `install.sh uninstall`
-	# calls us on its way to removing $OPENUF_DIR.
+	# on these boards, so this is an unbounded leak.
 	#
 	# Driven through rrmscan.lua rather than a pkill here so the subscribe
-	# pattern and the file path stay defined in exactly one place. Same
-	# cd-then-lua shape as the l2_announce probe above, and best-effort for the
-	# same reasons: this must not block a stop.
-	(cd "$OPENUF_DIR" 2>/dev/null && lua -e 'dofile("rrmscan.lua").collector_stop()') \
+	# pattern and the file path stay defined in exactly one place.
+	# Best-effort: this must not block a stop.
+	(cd "$OPENUF_DIR" 2>/dev/null && lua -e 'require("openwrt.rrmscan").collector_stop()') \
 		>/dev/null 2>&1
 	return 0
 }
-
-# NO service_triggers(). A procd_add_reload_trigger on "network"/"wireless" was
-# registered here and was unwired in both directions. It never fired for
-# openUF's own writes -- those go through libuci-lua, which does not emit the
-# ubus config.change event procd listens for -- and when something else fired
-# it (a LuCI apply, /sbin/reload_config) it did not reload but RESTARTED, since
-# /etc/rc.common degrades `reload` to `restart` when no reload_service() is
-# defined. That cost an in-flight inform POST, reset the 10 s cadence and
-# orphaned the RRM collector, on any unrelated wireless edit in LuCI. Nothing
-# was gained either way: ucihelper.begin_pass() re-reads /etc/config/wireless
-# on every heartbeat, so new config is picked up within 10 s regardless.

@@ -1,10 +1,10 @@
--- Tests for openuf/l2guard.lua (the controller's ebtables.* rules in nft).
+-- Tests for src/openwrt/l2guard.lua (the controller's ebtables.* rules in nft).
 -- Run from project root: lua tests/run_tests.lua
 
 OPENUF_TEST_MODE = true
-local l2guard = dofile("openuf/l2guard.lua")
+local l2guard = dofile("src/openwrt/l2guard.lua")
 
--- The ten rules as the yesrab/openUF fork captured them (2026-09-15).
+-- The ten rules exactly as AP2 received them on 2026-09-15.
 local CAPTURE = table.concat({
 	"ebtables.status=enabled",
 	"ebtables.add_vlan.status=disabled",
@@ -264,6 +264,49 @@ return {
 			assert_eq(n_absent, 0, "no brport: nothing to do")
 			assert_eq(n_fail, 0, "a failed write is not counted")
 			assert_contains(out, "could not set hairpin_mode on phy0-ap0", "and is reported")
+		end
+	},
+	{
+		name = "l2guard: hostapd's configs are found whatever the radio's phy is named",
+		fn = function()
+			-- On the E8450 the wifi-devices name their phys wl0/wl1, so the
+			-- configs are hostapd-wl0.conf: a hostapd-phy*.conf glob found
+			-- none, and the hairpin check never ran there.
+			local orig = l2guard._ls_run
+			l2guard._ls_run = function()
+				return {"hostapd", "hostapd-wl0-ap0.psk", "hostapd-wl0-ap0.sae", "hostapd-wl0-ap0.vlan",
+					"hostapd-wl0.conf", "hostapd-wl0.conf.prev", "hostapd-wl1.conf",
+					"hostapd-phy0.conf", "openuf-status"}
+			end
+			local got = l2guard._list_hostapd_confs()
+			l2guard._ls_run = orig
+			assert_eq(table.concat(got, " "),
+				"/var/run/hostapd-phy0.conf /var/run/hostapd-wl0.conf /var/run/hostapd-wl1.conf",
+				"every radio's config, none of the per-BSS files or the .prev")
+		end
+	},
+	{
+		name = "l2guard: every rule is VAP-scoped and matches only BPDUs or tagged frames, never UniFi's AP-to-AP group",
+		fn = function()
+			local exec, r = fake_nft()
+			local orig = l2guard._exec
+			l2guard._exec = exec
+			l2guard.reconcile({bpdu = true, tagdrop = true}, {"phy0-ap0", "phy1-ap0"})
+			l2guard._exec = orig
+			local cmds = r.cmds
+			local n = 0
+			for _, c in ipairs(cmds) do
+				if c:find("add rule", 1, true) then
+					n = n + 1
+					assert_true(c:find("iifname {", 1, true) or c:find("oifname {", 1, true),
+						"scoped to the VAPs: " .. c)
+					assert_true(c:find("ether daddr 01:80:c2:00:00:00", 1, true)
+						or c:find("ether type vlan", 1, true),
+						"a BPDU or a tagged frame, nothing an untagged IPv4 multicast to "
+						.. "239.254.127.63 could match: " .. c)
+				end
+			end
+			assert_eq(n, 3, "three rules")
 		end
 	},
 }

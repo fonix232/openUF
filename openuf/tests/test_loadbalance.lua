@@ -1,7 +1,7 @@
 -- Tests for openuf/loadbalance.lua: Load balance's per-radio client cap.
 -- Run from project root: lua tests/run_tests.lua
 
-local lb = dofile("openuf/loadbalance.lua")
+local lb = require("unifi.loadbalance")
 
 local function obs(mac, inactive_ms, radio)
 	return {radio = radio or "radio0", ifname = "wlan0", mac = mac, inactive_ms = inactive_ms}

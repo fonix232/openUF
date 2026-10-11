@@ -10,7 +10,7 @@
 # introspect, so those commands would otherwise always fail).
 # Field names deliberately match the real iw(8) binary's own format
 # strings (confirmed via `strings /usr/sbin/iw`) -- see the accompanying
-# openuf/sysinfo.lua fix, which found the *parser* previously expected
+# src/openwrt/sysinfo.lua fix, which found the *parser* previously expected
 # names iw never actually prints.
 REAL_IW=/usr/sbin/iw
 
@@ -31,7 +31,7 @@ EOF
 	"wlan0 station" | "wlan1 station")
 		# No real client can ever associate to this synthetic AP (no real
 		# wireless hardware in this container at all), which means the
-		# vap_table traffic/retry counters (openuf/inform.lua) can never be
+		# vap_table traffic/retry counters (src/inform.lua) can never be
 		# proven against real non-zero data without this: fake connected
 		# stations, same purpose as uci-mock.lua's seeded radio0/radio1 --
 		# realistic synthetic data so the full live pipeline (this ->
@@ -120,7 +120,7 @@ EOF
 		exit 0
 		;;
 	"wlan0 scan" | "wlan1 scan")
-		# Feeds openuf/sysinfo.lua's M.scan_table() -> inform.lua's
+		# Feeds src/openwrt/sysinfo.lua's M.scan_table() -> inform.lua's
 		# scan_radio_table -> controller's Insights/AirView/Environment tab
 		# (stat/rogueap). Fake neighboring BSSes so that pipeline can be
 		# proven end-to-end, same rationale as the fake stations above: this
@@ -175,7 +175,7 @@ EOF
 		exit 0
 		;;
 	"wlan0 info" | "wlan1 info")
-		# Feeds openuf/sysinfo.lua's M.radio_caps() -> inform.lua's per-radio
+		# Feeds src/openwrt/sysinfo.lua's M.radio_caps() -> inform.lua's per-radio
 		# capability fields (is_11ac/is_11ax/is_11be/has_dfs/has_ht160/nss)
 		# -> controller's Radios (channel-planning) tab MIMO/capability
 		# filters, which previously excluded the device entirely ("We

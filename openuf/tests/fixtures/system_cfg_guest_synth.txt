@@ -1,0 +1,76 @@
+# Synthesised, not captured: what UniFi Network 10.6.106's
+# config.ubntconf.YcZSaTCMOYFEMGE emits (CFR decompile) for a device without
+# fw_caps 0x40000 (openUF's 0x110), with one WPA2 guest WLAN "Lobby" on two
+# radios (ath1, ath3), no portal, one pre-authorization subnet, three
+# post-authorization-restricted subnets and restricted DNS on. Rule order is
+# the generator's: per-VAP pass, then the chain bodies, then the inline subnet
+# rules, then ALLOW_DNS_SERVERS. See PROTOCOL-VALIDATION.md, ebtables / guest.
+wireless.1.mode=master
+wireless.1.devname=ath0
+wireless.1.id=2
+wireless.1.l2_isolation=disabled
+wireless.1.is_guest=false
+wireless.1.ssid=Home
+wireless.2.mode=master
+wireless.2.devname=ath1
+wireless.2.id=7
+wireless.2.l2_isolation=enabled
+wireless.2.is_guest=true
+wireless.2.ssid=Lobby
+wireless.3.mode=master
+wireless.3.devname=ath2
+wireless.3.id=2
+wireless.3.l2_isolation=disabled
+wireless.3.is_guest=false
+wireless.3.ssid=Home
+wireless.4.mode=master
+wireless.4.devname=ath3
+wireless.4.id=7
+wireless.4.l2_isolation=enabled
+wireless.4.is_guest=true
+wireless.4.ssid=Lobby
+# ebtables
+ebtables.status=enabled
+ebtables.add_vlan.status=disabled
+ebtables.1.cmd=-t nat -A PREROUTING --in-interface ath0 -d BGA -j DROP
+ebtables.2.cmd=-t nat -A POSTROUTING --out-interface ath0 -d BGA -j DROP
+ebtables.3.cmd=-t nat -A PREROUTING --in-interface ath1 -d BGA -j DROP
+ebtables.4.cmd=-t nat -A POSTROUTING --out-interface ath1 -d BGA -j DROP
+ebtables.5.cmd=-t nat -A PREROUTING --in-interface ath2 -d BGA -j DROP
+ebtables.6.cmd=-t nat -A POSTROUTING --out-interface ath2 -d BGA -j DROP
+ebtables.7.cmd=-t nat -A PREROUTING --in-interface ath3 -d BGA -j DROP
+ebtables.8.cmd=-t nat -A POSTROUTING --out-interface ath3 -d BGA -j DROP
+ebtables.9.cmd=-t nat -N GUESTIN -P ACCEPT
+ebtables.10.cmd=-t nat -N GUESTOUT -P ACCEPT
+ebtables.11.cmd=-t nat -A PREROUTING --in-interface ath1 -j GUESTIN
+ebtables.12.cmd=-t nat -A POSTROUTING --out-interface ath1 -j GUESTOUT
+ebtables.13.cmd=-t nat -A GUESTIN --in-interface ath1 --proto 0x888e -j ACCEPT
+ebtables.14.cmd=-t nat -A PREROUTING --in-interface ath3 -j GUESTIN
+ebtables.15.cmd=-t nat -A POSTROUTING --out-interface ath3 -j GUESTOUT
+ebtables.16.cmd=-t nat -A GUESTIN --in-interface ath3 --proto 0x888e -j ACCEPT
+ebtables.17.cmd=-t nat -A GUESTIN -p 0x800 --pkttype-type broadcast --ip-proto 17 --ip-sport 68 --ip-dport 67 -j ACCEPT
+ebtables.18.cmd=-t nat -A GUESTIN -p arp --arp-opcode Request -j ACCEPT
+ebtables.19.cmd=-t nat -N GUEST_DNS -P ACCEPT
+ebtables.20.cmd=-t nat -A GUESTIN -p 0x800 --ip-proto 17 --ip-dport 53 -j GUEST_DNS
+ebtables.21.cmd=-t nat -A GUESTIN -p 0x800 --ip-proto 6 --ip-dport 53 -j GUEST_DNS
+ebtables.22.cmd=-t nat -A GUESTIN -p 0x86dd -j DROP
+ebtables.23.cmd=-t nat -A GUESTIN --pkttype-type broadcast -j DROP
+ebtables.24.cmd=-t nat -A GUESTOUT -p 0x800 --pkttype-type broadcast --ip-proto 17 --ip-sport 67 --ip-dport 68 -j ACCEPT
+ebtables.25.cmd=-t nat -A GUESTOUT -p arp --arp-opcode Request -j ACCEPT
+ebtables.26.cmd=-t nat -A GUESTOUT -p 0x86dd -j DROP
+ebtables.27.cmd=-t nat -A GUESTOUT --pkttype-type broadcast -j DROP
+ebtables.28.cmd=-t nat -N CAPTIVE_PORTAL -P RETURN
+ebtables.29.cmd=-t nat -A GUESTIN -p 0x800 --ip-proto 6 --ip-dport 443 -j CAPTIVE_PORTAL
+ebtables.30.cmd=-t nat -I GUESTIN -p 0x800 --ip-dst 198.51.100.7 -j ACCEPT
+ebtables.31.cmd=-t nat -I GUESTOUT -p 0x800 --ip-src 198.51.100.7 -j ACCEPT
+ebtables.32.cmd=-t nat -A GUESTIN -p 0x800 --ip-dst 224.0.0.0/4 -j DROP
+ebtables.33.cmd=-t nat -A GUESTOUT -p 0x800 --ip-dst 224.0.0.0/4 -j DROP
+ebtables.34.cmd=-t nat -A GUESTIN -p 0x800 --ip-dst 192.0.2.0/24 -j DROP
+ebtables.35.cmd=-t nat -A GUESTIN -p 0x800 --ip-dst 198.51.100.0/24 -j DROP
+ebtables.36.cmd=-t nat -A GUESTIN -p 0x800 --ip-dst 203.0.113.0/24 -j DROP
+ebtables.37.cmd=-t nat -N ALLOW_DNS_SERVERS -P DROP
+ebtables.38.cmd=-t nat -A ALLOW_DNS_SERVERS -p 0x800 --ip-dst 192.0.2.53 -j ACCEPT
+ebtables.39.cmd=-t nat -I GUESTIN -p 0x800 --ip-proto 17 --ip-dport 53 -j ALLOW_DNS_SERVERS
+ebtables.40.cmd=-t nat -I GUESTIN -p 0x800 --ip-proto 6 --ip-dport 53 -j ALLOW_DNS_SERVERS
+ebtables.41.cmd=-t broute -A BROUTING -i ath1 -p 802_1Q -j DROP
+ebtables.42.cmd=-t broute -A BROUTING -i ath3 -p 802_1Q -j DROP

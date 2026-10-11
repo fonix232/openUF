@@ -2,284 +2,339 @@
 
 ## 1. Dependencies
 
-Install the following apk packages on the OpenWrt device before running openUF.
-OpenWrt 25.12 replaced `opkg` with `apk`; on 24.10 and earlier substitute
-`opkg update` / `opkg install`.
+The `openuf` package depends on everything openUF cannot work without: `lua`,
+`lua-cjson`, `luasocket`, `lua-openssl`, `luabitop`, `libuci-lua`, `iw`, `lldpd`,
+`nftables`, `kmod-nft-bridge`, `hostapd-utils` and `ip-bridge`. The rest each enable one
+controller feature and are left to you, because they cost flash a small board may not
+have: `usteer`, `tc-tiny`, `kmod-ifb`, `kmod-sched-act-police`, `luasec`, `kmod-leds-gpio`,
+`coreutils-stat`, `snmpd-ssl`.
+
+One more is **required but not a package dependency**: a full `wpad` build. Stock images
+ship `wpad-basic-*`, and no dependency can name "any full build" (every variant provides
+`wpad`). Swap the basic build for the full one of the same crypto library in one
+transaction, which changes nothing if the download fails:
 
 ```sh
-apk update
-apk add lua lua-cjson luasocket lua-openssl luabitop libuci-lua iw lldpd nftables kmod-nft-bridge hostapd-utils usteer ip-bridge tc-tiny kmod-ifb
-# A stock image ships wpad-basic-*, which a controller-pushed WLAN takes down.
-# Swap it for the full build of the same library in one transaction (on
-# opkg: opkg remove wpad-basic-mbedtls && opkg install wpad-mbedtls):
-apk add wpad-mbedtls '!wpad-basic-mbedtls'
+apk add wpad-mbedtls '!wpad-basic-mbedtls'   # or -wolfssl / -openssl to match
+/etc/init.d/wpad restart
 ```
 
-On OpenWrt 24.10 and earlier the package manager is `opkg install` rather than
-`apk add`; the package names are the same, and `install.sh` picks whichever one
-the device has.
+Without it the service refuses to start (§ troubleshooting).
 
 | Package | Purpose |
 |---|---|
 | `lua` | Lua 5.1 runtime |
 | `lua-cjson` | Fast JSON encode/decode |
 | `luasocket` | TCP client for HTTP POST to controller |
-| `lua-openssl` | AES-128-CBC **and AES-128-GCM** (replaces `luacrypto`, which was dropped from the 25.12 feeds). Effectively mandatory — see the GCM note below |
+| `lua-openssl` | AES-128-CBC **and AES-128-GCM** — see the GCM note below |
 | `luabitop` | bit operations for Lua 5.1 |
 | `libuci-lua` | `require("uci")` — every radio and WLAN read and write goes through it. Not pulled in by `lua`. Without it the device adopts, reports its ports and statistics and looks perfectly healthy, while `radio_table` goes out **empty** and the controller has no radio to push a WLAN onto: pushes are accepted and no SSID is ever created. openUF says so at startup rather than leaving you to find it |
 | `iw` | Radio and station statistics |
 | `lldpd` | LLDP topology announcement and neighbor discovery |
 | `openssl-util` | `openssl` CLI — last-resort AES-**CBC** fallback if `lua-openssl` is unavailable. This path cannot do GCM, so it is not sufficient to complete adoption on its own |
-| `nftables` | Client block/unblock (`openuf/firewall.lua`) **and** Multicast Suppression (`openuf/bcfilter.lua`). ~490 KB with its kernel modules — the first thing that won't fit on a small-flash board, which leaves both features unavailable (openUF logs that rather than pretending) |
+| `nftables` | Client block/unblock (`firewall.lua`) **and** the Multicast/Broadcast Blocker (`bcfilter.lua`). ~490 KB with its kernel modules — the first thing that won't fit on a small-flash board, which leaves both features unavailable (openUF logs that rather than pretending) |
 | `kmod-nft-bridge` | The Multicast/Broadcast Blocker, the L2 hardening (`bridge openuf_l2guard`) and the guest portal (`bridge openuf_guest`, lab-validated only). `nftables` does not pull it in, and without `nft_meta_bridge` the bridge family has no `meta` expression — so the blocker's drop rule is rejected while its table, chain and allow-list set all build normally. Client block/unblock matches on `ether saddr` alone and does not need it |
-| `hostapd-utils` | `hostapd_cli` — each client's AKM for `is_11r`, a blocked client's entry in hostapd's deny list on every SSID, immediate deauth of a just-blocked wireless client, the controller's Client → Reconnect (`kick-sta`), client kick (Roaming Assistance), Minimum RSSI's 30 s kick, and restarting a WLAN's beacon when its WiFi Blackout Schedule ends or guest selfrun (`off`) is over |
-| `tc-tiny` | `tc` — WiFi Speed Limit (`openuf/shaper.lua`). Busybox has no `tc`; without it the limit is recorded in UCI and never enforced. Its `htb`, `fq_codel`, `u32`, `mirred` and `police` are all openUF uses |
+| `hostapd-utils` | `hostapd_cli` — each client's AKM for `is_11r`, a blocked client's entry in hostapd's deny list on every SSID, immediate deauth of a just-blocked wireless client, the controller's Client → Reconnect (`kick-sta`), client kick (Roaming Assistance), Minimum RSSI's 30 s kick, and restarting a WLAN's beacon when its WiFi Blackout Schedule ends |
+| `tc-tiny` | `tc` — WiFi Speed Limit (`shaper.lua`). Busybox has no `tc`; without it the limit is recorded in UCI and never enforced. Its `htb`, `fq_codel`, `u32`, `mirred` and `police` are all openUF uses |
 | `kmod-ifb` | The **upload** half of WiFi Speed Limit, queued: each SSID's incoming frames are redirected to an IFB device (`oufb<ifindex>`) and shaped there. Without it upload falls back to dropping the excess (tc `police`), which TCP handles far worse (lab: 0.78 Mbit/s under a 2 Mbit/s limit with a tight bucket). openUF logs `no IFB device (install kmod-ifb)` once |
 | `kmod-sched-act-police` | Only for that fallback, when `kmod-ifb` is missing. `police` is a tc *action*, a separate module absent from a stock filogic image |
 | `coreutils-stat` | `stat` — only if your build has no `stat` applet (some do not). `inform.lua` uses `stat -c %Y` to notice an out-of-process `state.json` write, i.e. an SSH `set-adopt` or a manual `reset-inform`; without it those are ignored until restart. Enabling busybox's own `stat` applet is smaller |
-| `usteer` | Band Steering (Behavior Controls) — ubus-based client-steering daemon, driven by `openuf/usteer.lua`. Roaming Assistant needs it too, for its view of which AP hears a client how loudly |
-| `wpad-mbedtls` (or `wpad-openssl`, `wpad-wolfssl`, `wpad`, `wpad-mesh-*`, `hostapd-*`) | Full hostapd build — **required, not optional.** The controller sends `aaa.<n>.bss_transition` with every WLAN, so openUF always writes `bss_transition`, and `wpad-basic-*` (built without `CONFIG_WNM`) stops at "unknown configuration item 'bss_transition'" with the radio down. Any full build will do. It conflicts with the basic one, so a plain `apk add` of it fails: swap with `apk add wpad-mbedtls '!wpad-basic-mbedtls'` |
-
-`install.sh install` installs all of the above automatically when missing, so a
-manual `apk add` is only needed if you're not using the installer. It reads the
-hostapd binary, not the package name: a full build has the `wnm_sleep_mode`
-option compiled in (a grep for `bss_transition` is no test, since a basic binary
-carries `bss_transition_query_rx` and similar event names). A full build is left
-alone, so no SSID bounces for nothing. A basic one is replaced by the full build
-of the same crypto library: on apk in one transaction that changes nothing if it
-fails, on opkg only after the new package has downloaded, with the basic build put
-back if the install still fails. Then `wpad` is restarted so hostapd re-executes.
+| `snmpd-ssl` | SNMP Monitoring (Settings → System → SNMP): net-snmp's agent, configured by openUF from the controller's community and v3 user (`openwrt/snmp.lua`). 43 KiB plus `libnetsnmp-ssl` (~1.1 MiB). `snmpd-nossl` works for v1/v2c only: v3 needs AES privacy, so openUF claims `fw_caps` `0x4000` (SNMPv3) only with the ssl build. Without either, an SNMP push is logged once and ignored |
+| `usteer` | Band Steering (Behavior Controls) — ubus-based client-steering daemon, driven by `usteer.lua`. Roaming Assistant needs it too, for its view of which AP hears a client how loudly |
+| `wpad-mbedtls` (or `wpad-openssl`, `wpad-wolfssl`, `wpad`, `wpad-mesh-*`, `hostapd-*`) | Full hostapd build — **required, not optional.** The controller sends `aaa.<n>.bss_transition` with every WLAN, so openUF always writes `bss_transition`, and `wpad-basic-*` stops at "unknown configuration item 'bss_transition'" with the radio down. The init script checks the hostapd binary itself (`wnm_sleep_mode` is compiled in only with 802.11v; a grep for `bss_transition` is no test, since a basic binary carries `bss_transition_*` event names), so any full build counts, and it refuses to start on a basic one |
 
 > **AES-GCM is required for adoption.** UniFi Network Application 10.4.57 will
 > not finish provisioning a device until it has received a genuine
 > AES-128-GCM-encrypted inform; a device that can only do CBC stays stuck at
 > "Adopting" indefinitely. openUF's GCM support needs a `lua-openssl` build with
 > AEAD/GCM available — the `openssl-util` CLI fallback above is CBC-only and will
-> not get you adopted. See docs/WIRE-REFERENCE.md's "The GCM provisioning gate".
+> not get you adopted. See PROTOCOL-VALIDATION.md's "The GCM provisioning gate".
 
 There is no Lua zlib binding in the OpenWrt 25.12 feeds. openUF therefore sends
 inform payloads uncompressed and decompresses zlib-compressed controller
-responses with a bundled pure-Lua inflater (`openuf/inflate.lua`), so no zlib
+responses with a bundled pure-Lua inflater (`inflate.lua`), so no zlib
 package is required.
 
 Only required if your inform URL uses `https://` (uncommon — the UniFi default
 is `http://…:8080/inform`): `apk add luasec` for the TLS client. Without it, an
 `https://` URL fails with a clear error instead of connecting in cleartext.
-`install.sh` installs it for you when — and only when — the URL it finds (the
-adopted `state.json`, else `conf.lua`'s default) actually is `https://`.
 
 ---
 
 ## 2. Installation
 
-Download the latest release directly on the device over SSH — no git client or scp required:
+openUF is two OpenWrt packages, both architecture-independent: `openuf` (the daemon) and
+`luci-app-openuf` (its LuCI pages). They come from this repository's package feed, which
+GitHub Actions builds with the official OpenWrt SDK and signs:
+
+OpenWrt 25.12 or later (apk; 24.10 and its opkg are not supported):
 
 ```sh
-# On the OpenWrt device
-mkdir openuf-install && cd openuf-install
-wget https://github.com/jonasevcik/openUF/releases/latest/download/openuf.tar.gz
-tar xzf openuf.tar.gz
-sh install.sh install
+wget -O /etc/apk/keys/openuf.pem https://fonix232.github.io/openUF/openuf.pem
+apk add -X https://fonix232.github.io/openUF/apk/packages.adb luci-app-openuf
 ```
 
-Optionally verify the download before installing:
+Install `openuf` alone on a device without LuCI. What the package puts where:
+
+| Path | What |
+|---|---|
+| `/usr/share/openuf/` | The daemon (comment-stripped at build time; the repository keeps the comments) |
+| `/etc/config/openuf` | Settings (§ 3) |
+| `/etc/openuf/` | State: `state.json` (adoption, authkey, cfgversion), the auto-derived model files, the unhandled ledger, saved original network/wireless config |
+| `/etc/init.d/openuf` | The service: two procd instances, `announce` and `inform`. Restarts on its own when `/etc/config/openuf` changes |
+| `/etc/init.d/openuf-bootstrap` | Reinstalls the package after a firmware upgrade (below) |
+| `/usr/bin/syswrapper.sh` | The controller-facing command (`set-inform`, `set-adopt`, …) |
+| `/etc/apk/keys/openuf.pem`, `/etc/apk/repositories.d/openuf.list` | The feed, so updates arrive with the rest of the system's packages |
+| `/lib/upgrade/keep.d/openuf` | What a firmware upgrade keeps |
+
+The first install enables and starts the service and enables `lldpd`.
+
+**Updating.** `apk upgrade` (or `apk upgrade openuf luci-app-openuf` for just these two);
+the service restarts onto the new build. The feed keeps the last five builds, so
+`apk add openuf=<version>` goes back to an earlier one.
+
+**Firmware upgrades.** A package survives a firmware upgrade only when it is built into
+the image, and OpenWrt's image builder (ASU: owut, LuCI's attended sysupgrade, the
+firmware-selector) only builds official packages. So the package lists its settings, state,
+feed and bootstrap service in `/lib/upgrade/keep.d/openuf`, which every upgrade that keeps
+settings honours. On the new image's first boot the bootstrap waits for the network, then
+installs `openuf` (and `luci-app-openuf` when LuCI is there) from the feed. The AP comes back
+still adopted, with the same identity. The controller's Upgrade button (`upgrade_mode
+owut`, § 6) tells owut to leave openUF's packages out of the ASU request; when you run
+`owut upgrade` by hand, add `-r openuf,luci-app-openuf`, or the ASU server rejects the
+build.
+
+**Uninstalling.** `apk del luci-app-openuf openuf`. The service stops, the
+temporary SSH adoption account and the controller's cron jobs go (§ 6), and `/etc/openuf/`
+stays, so a reinstall finds the adoption again. Delete it by hand to forget the device.
+
+**From a tarball install** (the `install.sh` era, code in `/opt/openuf`): install the
+package over it. Before its files go in, the package stops the old service, keeps the old
+`conf.lua` and removes the old code, init scripts, LuCI files and `sysupgrade.conf` lines.
+The move into UCI then writes every setting that differs from the defaults to
+`/etc/config/openuf`, its research-only `debug_caps` numbers to the `debug` section and its
+`debug_payload_extra` table to `/etc/openuf/local.json`.
+`state.json` is not touched, so the AP stays adopted.
+
+**Building it yourself.** The repository is an OpenWrt feed. In a buildroot or SDK:
 
 ```sh
-wget https://github.com/jonasevcik/openUF/releases/latest/download/openuf.tar.gz.sha256
-sha256sum -c openuf.tar.gz.sha256
+echo "src-git openuf https://github.com/fonix232/openUF.git" >> feeds.conf
+./scripts/feeds update openuf && ./scripts/feeds install -p openuf -a
+make package/openuf/compile package/luci-app-openuf/compile
 ```
 
-Releases are tagged `vX.Y.Z`; each tag push builds and publishes a new `openuf.tar.gz` via
-GitHub Actions. If you're working from a git checkout instead (e.g. for development), the old
-transfer-then-install flow still works:
-
-```sh
-# From your development machine
-scp -r openuf/ install.sh root@<device-ip>:/tmp/openuf/
-ssh root@<device-ip> "cd /tmp/openuf && sh install.sh install"
-```
-
-What `install.sh install` does:
-- Copies `openuf/` to `/opt/openuf/` — **an existing `conf.lua` is kept**, and the shipped
-  default lands beside it as `conf.lua.dist`. That file holds the modelmap selection,
-  `l2_announce` and `bootstrap_adopt_user`, none of it re-derivable; overwriting it on an
-  adopted AP resets the board to the generic profile, which changes `lan_cpueth`, changes
-  the identity MAC, and leaves the controller unable to recognise the device. Because it is
-  preserved, **re-running the installer is safe** — which is how you top up a dependency
-  added by a later version
-- Creates `/etc/openuf/` (state directory)
-- Adds `/etc/openuf/` and `/opt/openuf/conf.lua` to `/etc/sysupgrade.conf`, so that a
-  firmware upgrade keeps them. `sysupgrade` preserves `/etc/config` and a short built-in
-  list and knows nothing about either path; without this a stock upgrade takes
-  `state.json` — mac, authkey, cfgversion, `swvlan_backup` — and the modelmap selection
-  with it, and the AP comes back unadopted, posing as a generic dualband AP the
-  controller no longer recognises. Each line is appended only if it is not already there
-  and nothing else in the file is touched, so a keep list you maintain yourself is safe.
-  The Lua tree is deliberately *not* preserved: the installer reinstalls it, and carrying
-  an old copy onto a new OpenWrt is a silent version mismatch
-- Symlinks `/opt/openuf/hook/syswrapper.sh` → `/usr/bin/syswrapper.sh`
-- Creates `/etc/init.d/openuf` with two procd service instances (announce + inform)
-- Enables and starts the service
-- Enables and starts `lldpd`
-
-To uninstall:
-```sh
-sh install.sh uninstall
-```
-
-Uninstall removes the `/opt/openuf/conf.lua` line from `/etc/sysupgrade.conf` — the file
-is gone with `/opt/openuf/` — but **keeps the `/etc/openuf/` line**. The state directory
-itself is left intact so that the authkey survives, and un-registering it would let the
-next firmware upgrade delete exactly what it is being kept for. Remove that line by hand
-if you also delete `/etc/openuf/`; leaving it costs nothing either way.
+`.github/scripts/sdk-build.sh` does the same inside the official SDK containers, and
+`openuf/tools/deploy.sh <dir> <ap>...` installs what it built on test APs, one at a time,
+stopping at the first that does not complete an inform.
 
 ---
 
 ## 3. Configuration
 
-### Hardware model map (`openuf/conf.lua`)
+Settings live in UCI, `/etc/config/openuf`. Change them on **Services → openUF →
+Settings** in LuCI, or with `uci`:
 
-Select the modelmap that matches your hardware:
-
-```lua
--- For TP-Link Archer C5 v1 (dual-band, board-specific):
-dev = dofile("modelmap/archer-c5-v1.lua")
-
--- For TP-Link TL-WDR3500 v1 (dual-band, board-specific):
-dev = dofile("modelmap/tl-wdr3500-v1.lua")
-
--- For Xiaomi Mi Router AX3000T (802.11ax, DSA — no swconfig):
-dev = dofile("modelmap/xiaomi-ax3000t.lua")
-
--- For BT Home Hub 5 Type A (lantiq xrx200, DSA — no swconfig;
--- VLAN-tagged SSIDs assume the uplink cable is in lan1):
-dev = dofile("modelmap/bt-homehub-v5a.lua")
-
--- For any other dual-band OpenWrt AP:
-dev = dofile("modelmap/generic-dualband-ap.lua")
-
--- For TP-Link WR1043ND v2 (single-band):
-dev = dofile("modelmap/tl-wr1043ndv2.lua")
+```sh
+uci set openuf.main.inform_url=http://10.0.0.1:8080/inform
+uci commit openuf        # the service restarts on its own
 ```
 
-Prefer a board-specific map where one exists. A generic profile cannot know your
-board's LED name (so Locate and the LED toggle do nothing) or which of its ports
-is the uplink — and it gets the uplink wrong on an Archer C5 deployed as an AP,
-which uses `eth1` and never touches `eth0`.
+Every option has a default (`/usr/share/openuf/config.lua`), so an empty file works.
 
-**swconfig or DSA?** `which swconfig` on the device settles it. A board with no
-`swconfig` binary (anything on a modern target — mediatek/filogic, ath79's
-successors, ipq40xx…) is DSA, and its map looks different: each socket is
-already its own netdev, so the ports are listed by `ifname` and there is **no
-`dev.conf.vlan` at all**. Don't invent one — it is what makes openUF shell out
-to a `swconfig` that isn't there. `modelmap/xiaomi-ax3000t.lua` is the worked
-example.
+openUF reads three layers at start, each overriding the one before:
 
-The modelmap sets:
-- `dev.conf.net.lan_cpueth` — LAN CPU ethernet port (e.g. `eth1`); also the trunk port
-  used to create VLAN-tagged sub-interfaces (`eth1.<vlanid>`) for controller-pushed VLAN SSIDs
-- `dev.conf.vlan.mib_poll_ms` — how often the switch driver refreshes its per-port byte
-  counters, which is where the Ports view's Tx/Rx figures come from. openUF turns polling on
-  at startup (500 ms) when the driver ships it off, which an AR8327 does; set `false` to
-  leave the switch alone, at the cost of 0 B on every socket
-- `dev.conf.net.ports`      — the ports openUF reports to the controller, one entry per
-  **physical socket** on a board with a switch: `{idx = 1, swport = "lan1"}`, where `idx`
-  is the UniFi `port_idx` and `swport` names a key in `dev.conf.vlan.ports`. Pin each
-  `idx` to a socket and leave it alone — the controller keys per-port settings on it.
-  Do **not** flag one as `uplink`: openUF detects which socket the uplink cable is in
-  from the switch's ARL table, so the flag follows a replug and the other sockets report
-  their own link speed and their own wired clients. A board with no switch map instead
-  uses the netdev shape (`{idx = 1, ifname = "eth0", uplink = true}`), which on a switch
-  board can report only the CPU port's internal link. The two mix: a socket wired to its
-  own MAC/PHY instead of the switch (the TL-WDR3500's WAN socket, `eth1`) is listed with an
-  `ifname` and no `swport`, and sysfs then describes that socket correctly. Count the RJ45
-  sockets on the case — the list should have one entry each.
-  On a **DSA** board every socket takes the netdev shape and still gets no `uplink` flag:
-  there the uplink is detected from the bridge FDB (`bridge fdb show br br-lan`, which
-  names the port each MAC was learned on) instead of from a switch ARL table. Keep the
-  flag only for a board where neither source can answer
-- `dev.conf.net.wan_cpueth` — WAN-side CPU netdev (e.g. `eth0`). Only used as the uplink
-  entry of a fallback `port_table` for a board that declares no `dev.conf.net.ports`
-- `dev.conf.vlan.device`    — swconfig device name (e.g. `switch0`), as `swconfig list`
-  reports it. Boards that name it something else — `switch1` is common on ath79 and
-  ramips — must set this, or every `swconfig` call silently addresses the wrong device
-  and per-socket port reporting falls back to the CPU-port netdev. Not used on a DSA
-  board, which has no swconfig at all
-- `dev.conf.led`            — status LED, driven by the controller's Locate action and its
-  **Manage → LED** toggle. Accepts a full sysfs path (`/sys/class/leds/tp-link:green:wlan`)
-  or a bare LED name (`tp-link:green:wlan`). `nil` by default, since a generic profile can't
-  know the board's LED — LED control is a silent no-op until you set it. Find yours with
-  `ls /sys/class/leds`.
-  ⚠️ **Check the LED you name is actually wired.** `/sys/class/leds` lists what the drivers
-  registered, not what the case has. A radio LED (`mt76-phy0`, `phy0-led`) is registered by
-  the wireless driver on every board whether or not the pin goes anywhere — Locate will
-  report success and blink nothing. And a board whose LEDs are on GPIO needs the
-  `kmod-leds-gpio` module: without it the device tree's LEDs never register at all, the
-  GPIOs stay unclaimed at whatever the bootloader left, and only the radio LEDs show up.
-  Both were true of a Xiaomi AX3000T. Confirm by writing to it and looking at the box:
-  ```sh
-  echo none > /sys/class/leds/<led>/trigger; echo 1 > /sys/class/leds/<led>/brightness
-  ```
-- `dev.openuf.uap.ufmodel`  — Which ufmodel file to load (e.g. `"u6iw"`)
-- `dev.openuf.uap.hwassign` — UCI radio names to report to the controller
-  (e.g. `{"radio0", "radio1"}`). Every other `wifi-device` on the board is left out of
-  `radio_table`, so a radio the emulated model doesn't have (a third phy, a mesh- or
-  monitor-only one) is neither shown nor configurable in the UI. Omit it — or leave it
-  empty — to report every radio UCI knows about, which is what a modelmap without the
-  field means. openUF never touches an unreported radio: a config push naming one is
-  refused rather than applied
+1. **The board description**, derived from the device itself (below).
+2. **UCI**, `/etc/config/openuf`: the options (section `main`), corrections to the board
+   description (section `board`), the radio policies (sections `ng` and `na`) and the
+   research-only capability overrides (section `debug`).
+3. **`/etc/openuf/local.json`**, optional: a JSON object for what UCI cannot hold, an
+   arbitrary nested table such as `debug_payload_extra`, or a correction to the board's
+   port layout.
 
-### Device identity (`openuf/ufmodel/u6iw.lua`)
+The [schema reference](#configuration-schema-reference) at the end of this section lists
+every section, option and key with its type and default. `/etc/openuf/local.lua`, the
+executable Lua file that used to fill the third layer, is deprecated
+([migration](#migrating-from-locallua)).
 
-The U6-InWall identity is configured in `ufmodel/u6iw.lua`.  The firmware version
-(`fw.ver`) must be accepted by your controller.  If the controller rejects the
-device with "firmware too old" or similar, increment `fw.ver` and try again.
+### Hardware description (automatic)
 
-```lua
-uap = {
-    platform = "U6IW",
-    model    = "U6IW",
-    fw = {
-        pre        = "U6IW.",
-        ver        = "6.6.55",    -- tune this if the controller rejects the device
-        buildtime  = "230801.1200",
-        factoryver = "6.5.28"
-    },
-    ...
-}
+There is nothing to configure per board: `openwrt/board.lua` describes the device from the
+device itself, once, and keeps the result.
+
+- **Sockets:** `/etc/board.json` (written by OpenWrt's own `board.d` scripts from the device
+  tree): `network.wan.device`, then `network.lan.ports` (or `lan.device` on a one-port
+  board).
+- **Uplink:** the socket the default gateway's MAC is learned on (`bridge fdb show`), else
+  board.json's WAN device.
+- **Identity MAC:** the MAC the network already knows the AP by, the bridge the uplink sits
+  in, else board.json's label MAC. Never a socket MAC: a Netgear WAX220's `eth0` gets a
+  random one on every boot.
+- **Status LED:** the one OpenWrt lights once boot is done (`get_dt_led running` in
+  `/lib/functions/leds.sh`, from the device tree), else its boot LED, else the first of
+  `status`/`power`/`system`/`run` in `/sys/class/leds`, blue, white or green preferred.
+  Locate blinks it. The controller's LED setting is not tied to it: that switches every
+  LED (§ LEDs below).
+- **Radios:** every `wifi-device` in `/etc/config/wireless`. openUF never touches a radio it
+  does not report.
+- **Port numbers:** the chosen UniFi model's own layout (below). A model with a built-in
+  switch takes its uplink on the last port ("PoE In + Data", port 5 on a U6-IW), a plain AP
+  on port 1; the other sockets follow in board.json order. The controller stores per-port
+  settings against these numbers.
+
+The layout is written to `/etc/openuf/modelmap-auto.json` once the uplink could actually be
+detected, and read back on every later start: numbering must not move under an adopted
+device because someone moved a cable. Delete the file to derive it again.
+
+DSA boards only: on a swconfig board (`which swconfig` finds a binary) the sockets are not
+netdevs, and openUF no longer supports those.
+
+To correct the description, set what is wrong in the `board` section (**Settings → Board**
+in LuCI):
+
+```sh
+uci set openuf.board.led=green:status     # the LED Locate blinks, from `ls /sys/class/leds`
+uci add_list openuf.board.hwassign=radio0 # report (and configure) only this radio
+uci commit openuf
 ```
 
-### Paths and options (`openuf/conf.lua`)
+The port layout (`dev.conf.net`) has no UCI form; correct it in `local.json` (below).
 
-```lua
-config = {
-    use_only_unifi_wlan = true,  -- disable non-openuf_ SSIDs during provisioning
-    plugins = {},                -- third-party WLAN-option plugins, see "Plugins" below
-    inform_url  = "http://unifi:8080/inform",   -- default URL (overwritten at adoption)
-    state_file  = "/etc/openuf/state.json",
-    l2_announce = true,          -- see below
-    debug_dump_file = nil,       -- see below
-    debug_dump_max_bytes = 4194304,
-    bootstrap_adopt_user = nil,  -- see below
-}
+⚠️ **Check the LED is actually wired.** `/sys/class/leds` lists what the drivers registered,
+not what the case has. A radio LED (`mt76-phy0`) is registered on every board whether or not
+the pin goes anywhere, and a board whose LEDs are on GPIO needs `kmod-leds-gpio`, or its
+real LEDs never register at all (both true of a Xiaomi AX3000T). Confirm by writing to it
+and looking at the box:
+
+```sh
+echo none > /sys/class/leds/<led>/trigger; echo 1 > /sys/class/leds/<led>/brightness
 ```
+
+### LEDs
+
+The controller sends one LED setting per device, `led_enabled` in `mgmt_cfg`: the device's
+own LED override (Default/On/Off) resolved against the site's Device LED switch. openUF
+applies it to every LED the board has:
+
+- **Off:** every LED in `/sys/class/leds` dark (trigger `none`, brightness 0). Before the
+  first change after a boot, each LED's state is snapshotted to `/var/run/openuf-leds.json`:
+  its trigger, the trigger's settings (a netdev LED's device and link/rx/tx modes, timer
+  delays), brightness and colour.
+- **On:** each LED is put back from that snapshot, and the snapshot is dropped. Nothing is
+  taken from UCI here: OpenWrt's own `/etc/init.d/led turnon` puts back only the LEDs with a
+  `system` `led` section or a diag.sh role, so a radio LED (`mt76-phy0` on `phy0tpt`) would
+  stay dark after one off/on.
+- **Never pushed:** the LEDs are not touched.
+
+The snapshot is in tmpfs on purpose: it describes kernel state and lives exactly as long.
+A restart of openUF finds it (the LEDs are dark by openUF's hand, not the board's); a
+reboot clears it, and the board comes up in its own state before openUF applies the
+setting again. While the setting is off, openUF checks once a minute for an LED that
+something relit — saving LuCI's LED page restarts OpenWrt's `led` service — and darkens it
+again, keeping its new state as the one to restore.
+
+To change what an LED does, configure it in OpenWrt as usual (LuCI → System → LED
+Configuration, or `/etc/config/system`); the controller's switch then turns that on and off.
+
+**LEDs on the bridge.** A netdev LED the board configured on its own bridge — an E8450's
+internet LED and a WAX220's LAN LED both watch `switch.1` on OpenWrt 25.12 — would name a
+device that no longer exists once openUF's network model replaces that bridge, and stay dark.
+While openUF's bridge is in place, such an LED is pointed at it the way interfaces are:
+`<bridge>.<vid>` → `br-lan.<vid>`, the bridge itself → `br-lan`. The board's value is kept in
+the section's `openuf_dev_orig` and goes back when the bridge does (a rollback of the first
+takeover, `syswrapper.sh netmodel-restore`). The old bridge names come from
+`/etc/openuf/network.pre-openuf`; the running LED follows at once, no `led` restart.
+
+### Device identity
+
+openUF presents itself as the UniFi access point closest to the board, chosen once
+(`unifi/identity.lua`) and kept in `/etc/openuf/ufmodel-auto.json`: an adopted device never
+changes model under the controller. The facts come from `/etc/board.json` (bands, PHY
+generation, antenna count, maximum width, sockets); the candidates are `unifi/catalog.lua`,
+the controller's own model registry. A board that describes nothing to match on presents as
+a U6-IW, the identity validated end to end.
+
+To pin a model yourself, write its code there before the first start (or re-adopt after):
+
+```sh
+echo '{"model":"UHDIW"}' > /etc/openuf/ufmodel-auto.json && /etc/init.d/openuf restart
+```
+
+Regenerate the catalogue after a controller upgrade:
+
+```sh
+# uidb.json and bundles.json are in the Network application package:
+#   usr/lib/unifi/dl/uidb/uidb.json, usr/lib/unifi/dl/firmware/bundles.json
+python3 openuf/tools/uidb-catalog.py --uidb uidb.json --bundles bundles.json --fw \
+    --source "UniFi Network 11.0.81" > openuf/src/unifi/catalog.lua
+```
+
+`--fw` adds each model's current release version from fw-update.ui.com. It matters: the
+controller calls a device "upgradable" whenever its version differs from the catalogue's,
+character for character. openUF also learns the version from the controller's own upgrade
+commands, so a stale one corrects itself after one upgrade round.
+
+### Options
+
+| Option | Default | What it does |
+|---|---|---|
+| `inform_url` | `http://unifi:8080/inform` | Where an unadopted device informs. Once adopted, the URL the controller assigned (in `state.json`) wins |
+| `l2_announce` | `1` | L2 discovery broadcasts (below) |
+| `discovery_replies` | `0` | Also answer clients' v1 discovery probes (needs `l2_announce`). Leave off: with it the UniFi app treats the APs as standalone devices and asks for their login |
+| `ssh_adopt` | `0` | The temporary `ubnt/ubnt` SSH adoption account (§ 4) |
+| `stun`, `stun_local_port` | `1`, `3478` | Let the controller wake the device for an immediate inform |
+| `cfg_retries` | `2` | How often a push that failed to apply is asked for again (§ 6) |
+| `use_only_unifi_wlan` | `1` | Take SSIDs the controller did not create off the air (§ 6) |
+| `own_config` | `1` | Remove interfaces and SSIDs the controller did not ask for, keeping a copy (§ 6) |
+| `bridge_backend` | `auto` | `vlan_filtering`, `bridges` or `auto` (§ 6) |
+| `bridge_takeover`, `bridge_rollback_timeout` | `1`, `180` | Let openUF rebuild the management bridge, and roll back after this many seconds without the controller |
+| `bridge_name`, `port_default` | `br-lan`, `all` | The management bridge; what a wired port without a profile carries besides the native VLAN (`all` tagged, or `none`) |
+| `country_override` | — | Program this ISO country's regulatory domain instead of the controller's (the controller's is still reported). A legal decision — off unless set |
+| `sta_events` | `1` | Client connection events as `STA_ASSOC_TRACKER` notification informs (§ 6) |
+| `system_timezone`, `system_ntp`, `system_cron` | `1` | Apply the controller's timezone, NTP servers and nightly scan job. A site with its own NTP switches just `system_ntp` off |
+| `l2guard` | `1` | The controller's `ebtables.*` hardening as an nftables bridge table on the VAPs |
+| `guest_isolation` | `1` | The controller's guest-WLAN restrictions, and its captive portal (⚠️ lab-validated upstream only), as an nftables bridge table on the guest VAPs (§ 6) |
+| `rrm_enrichment`, `rrm_request_interval` | `1`, `3600` | Ask 802.11k-capable clients for beacon reports (the neighbour list). A client with active/passive measurement is asked to look; a beacon-**table**-only client (most phones seen) is asked for its scan cache (mode 2) |
+| `sibling_exchange` | `1` | Broadcast this AP's BSSIDs to other openUF APs on UDP 10011 and keep theirs (`/tmp/openuf-siblings.json`, 5 min), so a sibling a client reports over 802.11k is tagged as a UniFi neighbour. It also carries the clients this AP denies for Lock to Access Point, which is how the AP a client is locked to learns of the lock (§ Lock to Access Point). Lock lists, and the BSSIDs a wireless parent or child is named from, are accepted only from authenticated packets: v5, keyed from the site key the controller pushes (`unifi.key`, sent while UniFi IDP is on), kept derived in `/etc/openuf/sibling.key` (0600). Every AP also sends the unauthenticated v3 packet older openUF builds understand. At most 1024 BSSIDs are kept Runs in the `announce` process, which now starts when this or `l2_announce` is on |
+| `sibling_scan_interval` | `1800` | Seconds between short scans of only the channels siblings announced (same band, not the radio's own): `iw scan freq <f>… ap-force`, a fraction of a second, **with clients associated**. `0` = never. A full idle sweep counts as one |
+| `idle_scan_interval` | `1800` | Seconds between off-channel sweeps (`iw scan ap-force`, in the background) of a radio with **no associated client** on any of its interfaces; `0` = never. A radio with clients is looked at again a minute later. The sweep is what lets an AP hear siblings on other channels |
+| `roam_assist_diff_db` | `8` | Roaming Assistant: how many dB louder another AP must hear a weak client before it is moved there (§ 6) |
+| `wireless_uplink` | `0` | Offer the controller wireless meshing (`wifi_caps` `0x1`/`0x800`): a hidden backhaul BSS on the 5 GHz radio for other APs to join, and a station that joins one while this AP's cable is out (§ 6, Wireless uplink). ⚠️ Not yet confirmed on this project's hardware |
+| `upgrade_mode` | — | `owut`: the controller's Upgrade button runs an attended sysupgrade (§ 6) |
+| `advertise_updates`, `advertise_interval`, `version_scheme` | `0`, `21600`, — | Show newer OpenWrt builds in the controller (§ 6) |
+| `state_file` | `/etc/openuf/state.json` | Where the adoption lives |
+| `unhandled_file` | `/etc/openuf/unhandled.json` | The unhandled ledger (below); `off` keeps it in memory |
+| `debug_dump_file`, `debug_dump_requests`, `debug_dump_max_bytes` | —, `0`, `4194304` | Protocol capture (below) |
+
+Booleans take `1`/`0` (or `true`/`false`, `on`/`off`). A value that does not parse falls
+back to the default and says so in the log.
+
+A setting that changes what a controller push does (`use_only_unifi_wlan`, `own_config`,
+the `bridge_*` options, `port_default`, `country_override`, `l2guard`, `guest_isolation` and the three
+`system_*` options), the board's radio policy (`config radio_policy`) or its reported radios
+(`hwassign`) also makes the daemon forget the cfgversion at its next start, so the
+controller sends its whole configuration again and the change lands straight away. An
+upgrade to a release that changes what a push writes does the same once, so the existing
+WLANs get it without waiting for a change in the controller. A
+feature switched off takes its state with it at the next start: the L2 and DNS-answer nft
+tables are deleted and the controller's cron job is removed. The timezone and NTP servers
+keep their last values.
+
+The radio policies, the research-only capability overrides and `local.json` have their own
+subsections below.
 
 `l2_announce` — on by default; sends the UDP discovery broadcasts that make the
-device appear in UniFi Discover with no `set-inform` at all. The same process
-listens on UDP 10001 for the whole of its life, adopted or not, and answers the
-discovery requests the UniFi app, WiFiman's Discovery tab and the Device Discovery
-Tool broadcast, so they list the AP with its model, name and firmware (one reply
-per asker and request type per half second). Requests sent to the discovery multicast
-group `233.89.188.1` are answered too; IPv6 (`ff02::1`) requests are not, because the
-listener is IPv4 only (see docs/WIRE-REFERENCE.md, "Discovery requests"). `false` turns the broadcast and the responder off together.
-Set it to `false` to be adopted over L3 only, and restart the service (the init script reads this
-and simply doesn't start the broadcaster). The reason to turn it off isn't
+device appear in UniFi Discover with no `set-inform` at all, and answers the
+v1 discovery probes clients such as WiFiman send when `discovery_replies` is also on (off by
+default: the UniFi app then took the APs for standalone devices). Set it to `0`
+to be adopted over L3 only (the `announce` process then sends and answers
+nothing on port 10001; it still runs for `sibling_exchange`). The reason to turn it off isn't
 noise: a controller that discovered a device via L2 adopts it *by SSHing in*,
 so on a device that can't accept that login, adoption fails while the inform
 loop looks perfectly healthy — see § 4.
 
 `debug_dump_file` — opt-in, off by default. When set to a path (e.g.
-`"/var/log/openuf-informs.log"`), every decrypted controller inform response is
+`/var/log/openuf-informs.log`), every decrypted controller inform response is
 appended verbatim, with a UTC timestamp, before it's dispatched. Used to capture
 ground-truth payload shapes when validating field assumptions (`system_cfg`,
 `cmd` dispatch, etc.) against a real UniFi controller — see
@@ -299,44 +354,291 @@ config blob listing the keys no parser consumed, collapsed to key shapes with
 counts, e.g.
 
 ```
-inform: mgmt_cfg: 2 dropped key(s): mgmt_url x1, report_crash x1
+inform: mgmt_cfg: 5 dropped key(s): capability x1, mgmt_url x1, report_crash x1, selfrun_guest_mode x1, stun_url x1
 inform: system_cfg: 12 dropped key(s): switch.port.<n>.name x5, switch.vlan.<n>.id x4, ...
 ```
 
 Most of what it lists is dropped deliberately (each case is explained in
-docs/WIRE-REFERENCE.md's `system_cfg` section) — its value is showing you when
+PROTOCOL-VALIDATION.md's `system_cfg` section) — its value is showing you when
 the controller starts sending something openUF has *never* seen, which is how
 two whole features sat unnoticed in every capture for months. Key names and
 counts only: these blobs carry passphrases and the adoption key, so no value is
 ever logged.
 
-Not behind that flag, because it is rare: a controller request openUF has no handler
-for is logged by name, with a count since the daemon started:
+The dropped-key report also feeds the **unhandled ledger**, always and not only in
+debug mode: `/etc/openuf/unhandled.json` (`unhandled_file`; `off` keeps it in memory)
+holds every response type, command, top-level field and config key shape openUF did not
+act on, with a count, first/last seen and a copy of what arrived — secrets redacted by
+field name, payloads capped at 2 KB, 150 entries at most.
+
+An unhandled command or response type is also logged by name, with its ledger count
+(lifetime, unless `unhandled_file` is `off`), so a new request shows up in logread:
 
 ```
-inform: unhandled cmd 'clear-counters' (1 since start) -- ignored
+inform: unhandled cmd 'clear-counters' (1 seen) -- ignored
 ```
 
-Some of these are expected, such as other device classes' commands. A name not listed in
-docs/WIRE-REFERENCE.md's cmd list is a request openUF should probably answer, so please report it.
+Some of these are expected, such as other device classes' commands; anything else is a
+request openUF should probably answer, so please report it.
 
-`bootstrap_adopt_user` — set by `install.sh install --bootstrap-adopt`, not by
-hand. Names the temporary SSH bootstrap account (see § SSH prerequisite below)
-that `inform.lua` should lock/unlock as the device's adopted state changes.
+### Radio policy
 
-### Plugins
+Some boards cannot run a radio the way the controller asks: a driver that advertises a
+160 MHz width it cannot start, or one that cannot run DFS CAC, so an Auto channel that
+lands on DFS leaves the radio down. A radio policy is the board's answer, per band, in the
+sections `ng` (2.4 GHz) and `na` (5 and 6 GHz), of type `radio_policy` (**Settings → Radio
+policy** in LuCI):
 
-A plugin lets a recipe that openUF does not ship, typically one that needs extra software on the
-AP, edit the UCI options of the WLANs openUF provisions. It lives in its own project; openUF only
-offers the hook. **Third-party plugins are unsupported by openUF, and a plugin is Lua running as
-root**: list only code you have read.
+```sh
+uci set openuf.na.htmode_max=HE80        # a driver that cannot start 160 MHz
+uci set openuf.na.acs_exclude_dfs=1      # ...or DFS CAC
+uci set openuf.ng.htmode_floor=HE20      # raise a controller's 802.11n default
+uci add_list openuf.na.channel=36        # Auto picks only from these
+uci add_list openuf.na.channel=149
+uci commit openuf
+```
 
-Off by default. A plugin is `/etc/openuf/plugins/<name>.lua`, loaded only when named in
-`config.plugins` (`conf.lua`) or on a line of `/etc/openuf/plugins.enabled` (the file an installer
-should edit). A changed plugin set or plugin file makes openUF ask the controller for a fresh push
-at the next start; Force Provision does the same at once. Failures are logged
-(`logread | grep "openuf: plugin"`) and skipped, and the push goes on. The contract, the `ctx`
-reference, uninstall order, versioning and testing are in [docs/PLUGINS.md](docs/PLUGINS.md).
+`htmode_floor` never overrides a WLAN's Force WiFi 4 Mode, and the hardware clamp still runs
+last. `acs_exclude_dfs` and `channel` only apply while the channel is Auto.
+
+The controller has its own say over the same two options (Radio AI's channel exclusions and
+5 GHz DFS switch, see § 6). A policy is an operator override and wins over the controller:
+`acs_exclude_dfs 1` keeps ACS off DFS whatever the site says, `acs_exclude_dfs 0` allows
+DFS even when the site has it off, and a `channel` list is used as written, with the site's
+exclusions ignored (logged). Leave an option unset to let the controller decide.
+
+A band whose section sets nothing has no policy, so the two empty sections the package
+ships change nothing. A band with a policy owns its ACS options: openUF writes or removes
+`acs_exclude_dfs` and `channels` on that radio itself, where without a policy it leaves a
+hand-set value alone.
+
+### Research-only capability overrides
+
+The `debug` section overrides the capability bitmasks the device claims, and `local.json`'s
+`config.debug_payload_extra` merges extra top-level fields into every inform payload:
+
+```sh
+uci set openuf.debug.wifi_caps2=0x40     # decimal or 0x hex
+uci commit openuf
+```
+
+A claimed bit makes the controller push configuration and show UI for a feature this device
+may not implement, so the daemon says `DEBUG OVERRIDES ACTIVE` in the log at every start.
+For protocol experiments only: unset them when done (`uci delete openuf.debug.wifi_caps2`).
+
+### local.json
+
+`/etc/openuf/local.json` holds what UCI cannot: an arbitrary table, or a change to the
+board description that has no UCI option. It is a JSON object with up to two members,
+`config` (the options) and `dev` (the board description), applied as a
+[JSON merge patch (RFC 7396)](https://www.rfc-editor.org/rfc/rfc7396) over what the board
+and UCI produced: an object merges member by member, `null` removes a member, and anything
+else, an array included, replaces it.
+
+```json
+{
+  "config": {
+    "debug_payload_extra": {"uplink": {"type": "wireless"}}
+  },
+  "dev": {
+    "conf": {
+      "net": {"ports": [{"idx": 1, "ifname": "lan1"}, {"idx": 5, "ifname": "wan"}]},
+      "radio": {"na": {"channels": [36, 40, 44, 48]}}
+    }
+  }
+}
+```
+
+It is checked as a whole before any of it is used. If it does not parse, or any value has
+the wrong type, the log says `REJECTED` with every reason and **none of the file is
+applied**. A key openUF does not know is logged and dropped, and the rest applies. The
+options take JSON types (`true`, not `"1"`); `null` puts an option back to its built-in
+default. Check a file before restarting:
+
+```sh
+cd /usr/share/openuf && lua -e 'local p, n = require("config").check_json(io.open("/etc/openuf/local.json"):read("*a")) print(p and "ok" or "rejected") for _, m in ipairs(n) do print(m) end'
+```
+
+The package never ships the file, and keeps it across upgrades and sysupgrades.
+
+### Migrating from local.lua
+
+`/etc/openuf/local.lua` (executable Lua with `dev` and `config` in scope) is deprecated.
+This release still runs it, last, after `local.json`, exactly as before, and logs a
+deprecation warning at every start (and once at install). The next release will not read it.
+Automatic conversion was ruled out: the file is code, it can compute values or replace `dev`
+outright, and a converter that runs it and keeps the result would freeze values the board
+derives on every start (the LED, the uplink) into a file nobody wrote.
+
+Move each line to its new home, then delete `local.lua`:
+
+| `local.lua` | Now |
+|---|---|
+| `config.<option> = v` | `uci set openuf.main.<option>=v` |
+| `dev.conf.led = "x"` | `uci set openuf.board.led=x` |
+| `dev.conf.hwassign = {"radio0"}` | `uci add_list openuf.board.hwassign=radio0` |
+| `dev.conf.radio.na = {htmode_max = "HE80"}` | `uci set openuf.na.htmode_max=HE80` |
+| `dev.conf.radio.na.acs_exclude_dfs = true` | `uci set openuf.na.acs_exclude_dfs=1` |
+| `dev.conf.radio.na.channels = {36, 40}` | `uci add_list openuf.na.channel=36` (once per channel) |
+| `config.debug_caps = {fw_caps = 0x110}` | `uci set openuf.debug.fw_caps=0x110` |
+| `config.debug_payload_extra = {...}` | `local.json`: `{"config": {"debug_payload_extra": {...}}}` |
+| `dev.conf.net.<field> = ...` | `local.json`: `{"dev": {"conf": {"net": {...}}}}` |
+| `dev = dofile(...)` (a whole description) | `local.json` with the fields that differ |
+
+A tarball install's `conf.lua` (§ 2) moves straight to the new places: its options to
+`main`, its `debug_caps` numbers to `debug`, its `debug_payload_extra` to `local.json`.
+
+### Configuration schema reference
+
+This is the contract between the files and the daemon. Another implementation (the Rust
+daemon) follows it exactly; `openuf/src/config.lua` is the Lua one, and
+`openuf/tests/test_config.lua` pins its behaviour.
+
+**Load order.** At start, once:
+
+1. `dev` = the board description (`openwrt/board.lua`): `dev.conf.net`, `dev.conf.led`,
+   `dev.identity`.
+2. Read every section of the UCI package `openuf`. `config` = the `main` options, typed
+   (an unset or invalid option takes its default). Set `config.debug_caps` from `debug`;
+   override `dev.conf.led` and `dev.conf.hwassign` from `board` where set; set
+   `dev.conf.radio.<band>` from each `radio_policy` section that sets anything valid.
+3. If `/etc/openuf/local.json` exists and passes validation, merge it (below).
+4. Compute the derived fields (below), from the merged values.
+5. Deprecated, this release only: if `/etc/openuf/local.lua` exists, warn and run it with
+   `dev` and `config` as globals.
+
+Settings are read once; a change to `/etc/config/openuf` restarts the service (procd
+reload trigger). A change to `local.json` needs `/etc/init.d/openuf restart`.
+
+**UCI values.** Every option is a string in UCI.
+
+- *boolean*: `1`, `true`, `yes`, `on`, `enabled` → true; `0`, `false`, `no`, `off`,
+  `disabled` → false; case-insensitive.
+- *integer*: a whole number, decimal (a `0x`-prefixed hex number is also accepted).
+- *string*: as written; `""` is unset.
+- A `list` where a single option belongs: its last element is used. An `option` where a
+  list belongs: split on whitespace.
+- An invalid value is logged and treated as unset: a `main` option takes its default; a
+  `board`, `radio_policy` or `debug` option is absent. One invalid element makes a whole
+  list absent (a partial list is a different setting from the one written).
+- An option a section does not define is logged and ignored.
+
+**UCI sections.** Each section has a fixed name. A section of a known type under another
+name (including an anonymous one), and a section of an unknown type, is logged and ignored.
+All five ship empty (apart from `main.inform_url`); the package's uci-defaults adds any that a
+kept `/etc/config/openuf` lacks, and never changes an existing one.
+
+| Section | Type | Lands in |
+|---|---|---|
+| `main` | `openuf` | `config.<option>` |
+| `board` | `board` | `dev.conf.led`, `dev.conf.hwassign` |
+| `ng`, `na` | `radio_policy` | `dev.conf.radio.ng`, `dev.conf.radio.na` |
+| `debug` | `debug` | `config.debug_caps` |
+
+`main` (meanings in [Options](#options)):
+
+| Option | Type | Default |
+|---|---|---|
+| `inform_url` | string | `http://unifi:8080/inform` |
+| `l2_announce` | boolean | `1` |
+| `discovery_replies` | boolean | `0` |
+| `ssh_adopt` | boolean | `0` |
+| `stun` | boolean | `1` |
+| `stun_local_port` | integer | `3478` |
+| `cfg_retries` | integer | `2` |
+| `use_only_unifi_wlan` | boolean | `1` |
+| `own_config` | boolean | `1` |
+| `bridge_backend` | string | `auto` |
+| `bridge_takeover` | boolean | `1` |
+| `bridge_rollback_timeout` | integer | `180` |
+| `bridge_name` | string | `br-lan` |
+| `port_default` | string | `all` |
+| `country_override` | string | unset |
+| `sta_events` | boolean | `1` |
+| `system_timezone` | boolean | `1` |
+| `system_ntp` | boolean | `1` |
+| `system_cron` | boolean | `1` |
+| `l2guard` | boolean | `1` |
+| `guest_isolation` | boolean | `1` |
+| `rrm_enrichment` | boolean | `1` |
+| `rrm_request_interval` | integer | `3600` |
+| `sibling_exchange` | boolean | `1` |
+| `idle_scan_interval` | integer | `1800` |
+| `sibling_scan_interval` | integer | `1800` |
+| `wireless_uplink` | boolean | `0` |
+| `roam_assist_diff_db` | integer | `8` |
+| `upgrade_mode` | string | unset |
+| `advertise_updates` | boolean | `0` |
+| `advertise_interval` | integer | `21600` |
+| `version_scheme` | string | unset |
+| `state_file` | string | `/etc/openuf/state.json` |
+| `unhandled_file` | string | `/etc/openuf/unhandled.json` |
+| `debug_dump_file` | string | unset |
+| `debug_dump_requests` | boolean | `0` |
+| `debug_dump_max_bytes` | integer | `4194304` |
+
+`board` (unset: the board description's own value):
+
+| Option | Kind | Value | Lands in |
+|---|---|---|---|
+| `led` | option | an LED name: `^[A-Za-z0-9][A-Za-z0-9_:.\-@+]*$`, no `..` | `dev.conf.led` (string) |
+| `hwassign` | list | wifi-device names, `^[A-Za-z0-9_]+$` | `dev.conf.hwassign` (array of strings; absent or empty: every radio) |
+
+`radio_policy` (`ng`, `na`; unset: the controller decides). A section that sets no valid
+option produces no `dev.conf.radio.<band>` entry at all:
+
+| Option | Kind | Value | Lands in |
+|---|---|---|---|
+| `htmode_max` | option | `HT20`, `HT40`, or `VHT`/`HE`/`EHT` + `20`/`40`/`80`/`160`/`320` | `.htmode_max` (string) |
+| `htmode_floor` | option | as `htmode_max` | `.htmode_floor` (string) |
+| `acs_exclude_dfs` | option | boolean; false is a value (allow DFS), not absence | `.acs_exclude_dfs` (boolean) |
+| `channel` | list | channel numbers, integers 1–233 | `.channels` (array of integers, in order) |
+
+`debug` (unset: not claimed; `config.debug_caps` is absent when none is set):
+
+| Option | Value | Lands in |
+|---|---|---|
+| `fw_caps`, `wifi_caps`, `wifi_caps2` | a whole number ≥ 0, decimal or `0x` hex | `config.debug_caps.<option>` (integer) |
+
+**Derived fields**, computed after `local.json` and never settable:
+
+- `config.controller_system`: `true` when `system_timezone`, `system_ntp` and
+  `system_cron` are all true, `false` when all are false, else
+  `{timezone, ntp, cron}` with each boolean.
+- `config.unhandled_file`: `false` when the string is one of the false boolean words
+  (`off`, `0`, …), keeping the ledger in memory.
+- `config.bootstrap_adopt_user`: `"ubnt"` when `ssh_adopt`, else absent.
+
+**local.json.** UTF-8 JSON; the top level is an object. Validation runs over the whole
+document before anything is applied:
+
+- An error rejects the whole file: text that is not JSON, a top level that is not an
+  object, a value of the wrong type, or `null` where it is not allowed. The log lists
+  every error.
+- A key not in the schema below is logged and dropped; the rest applies.
+- `null` is allowed where the tables below say so.
+
+| Path | Type | `null` |
+|---|---|---|
+| `config` | object | no |
+| `config.<option>` (every `main` option) | its type as JSON: boolean, integer (a number with no fraction), string | the built-in default |
+| `config.debug_caps` | object of `fw_caps`, `wifi_caps`, `wifi_caps2`: JSON integers ≥ 0 (`null` removes one) | removes all |
+| `config.debug_payload_extra` | object, any content; its members become top-level payload fields, overwriting | removes it |
+| `dev` | object | no |
+| `dev.conf` | object | no |
+| `dev.conf.led` | string, as `board.led` | no LED (Locate does nothing) |
+| `dev.conf.hwassign` | array of strings, as `board.hwassign` | every radio |
+| `dev.conf.radio` | object of `ng`, `na` | no policy |
+| `dev.conf.radio.<band>` | object: `htmode_max`, `htmode_floor` (strings, as in UCI), `acs_exclude_dfs` (boolean), `channels` (array of integers 1–233); each may be `null` (removed) | no policy for the band |
+| `dev.conf.net` | object: `lan_name`, `lan_cpueth`, `wan_cpueth`, `identity_mac` (strings), `lan_vlanid` (integer), each may be `null`; `ports` (array of `{"idx": integer, "ifname": string}`, not `null`) | no |
+| `dev.identity` | object, merged over the presented UniFi model's catalogue entry | no |
+
+Merging, per RFC 7396, over the tables steps 1–2 produced: an object member merges
+recursively; `null` removes the member; any other value (string, number, boolean, array)
+replaces it. `[]` and `{}` differ: `[]` replaces with an empty array, `{}` merges nothing.
+Under `config` two rules come first: an option set to `null`, or a string option set to
+`""`, takes its built-in default (as an unset UCI option does). After the merge, a `dev.conf.radio.<band>`
+left with no members is removed: like an empty UCI section, it is no policy.
 
 ---
 
@@ -359,42 +661,47 @@ Confirm SSH works from the controller's network before attempting adoption.  A f
 > Once adopted, that field is ignored — key rotation only happens via the SSH
 > `set-adopt` path from that point on, matching real L2 hardware behavior.
 
-#### Optional: zero-touch bootstrap adoption (`--bootstrap-adopt`)
+#### Optional: zero-touch bootstrap adoption (`option ssh_adopt`)
 
 Real Ubiquiti hardware ships a factory-default `ubnt`/`ubnt` SSH account
 specifically so first adoption works without presetting anything — live testing
 against a real controller (see PROTOCOL-VALIDATION.md) confirmed the controller's
 SSH client tries exactly that account for L2-discovered, not-yet-adopted devices,
 regardless of any admin-configured "Device SSH Authentication" credentials.
-`install.sh install --bootstrap-adopt` sets up the same thing, scoped as tightly
-as this project can manage:
+`option ssh_adopt '1'` sets up the same thing, scoped as tightly as this project
+can manage:
 
 ```sh
-sh install.sh install --bootstrap-adopt
+uci set openuf.main.ssh_adopt=1 && uci commit openuf
 ```
 
 - The account is **non-root**, a member of a dedicated `openuf` group with
   write access to `/etc/openuf` only — no other privilege, ever, even
   transiently.
-- Its login shell (`openuf/hook/adopt-shell.sh`) is a forced-command wrapper
-  that permits exactly one thing: running `[/usr/bin/]syswrapper.sh set-adopt
-  <url> <key> [<mac>]`. Any other command, or a plain interactive login attempt, is refused
+- Its login shell (`/usr/share/openuf/hook/adopt-shell.sh`) is a forced-command wrapper
+  that permits exactly one thing: running `syswrapper.sh set-adopt <url>
+  <key>`. Any other command, or a plain interactive login attempt, is refused
   outright — the account can never be used as a general-purpose shell.
 - Once the device is adopted, `inform.lua` locks the account (`passwd -l`) —
   it detects this within one poll interval (~10s) of the SSH-driven
   `set-adopt` writing new state. It re-enables the account automatically on
   a factory reset (`reset-inform`, or a controller-initiated "Forget Device"),
   so re-adoption after a reset works the same zero-touch way.
-- This is entirely opt-in: a plain `install.sh install` (no flag) never
-  creates this account and behaves exactly as documented above — the admin
-  sets their own root password.
+- This is entirely opt-in: with the option off (the default) the account is
+  never created, and switching it off removes an account openUF created — the
+  admin sets their own root password instead.
+- The password hash is made with `openssl passwd -6`, from **`openssl-util`**
+  (`apk add openssl-util`, ~0.9 MiB). It is not a dependency, since most installs
+  adopt over L3 and never need the account; without it the account is not created
+  and the log says so (before, it was created with no usable password).
 
-`uninstall` always removes the bootstrap account if present, regardless of
-whether `--bootstrap-adopt` is passed to it.
+Removing the package removes the account too. Switching the option off and removing the
+package both restore dropbear's TCP forwarding settings, which the unlocked account had
+switched off.
 
 ### L2 adoption (device and controller on the same subnet)
 
-1. Start openUF (`/etc/init.d/openuf start` or `sh install.sh install`)
+1. Install the package (the service starts on its own; `/etc/init.d/openuf start` otherwise)
 2. The `announce.lua` process sends UDP broadcasts to port 10001 every 10 seconds
 3. The device appears in **UniFi Discover** with model "U6IW"
 4. Click **Adopt** in the controller
@@ -412,7 +719,7 @@ whether `--bootstrap-adopt` is passed to it.
 > times on the Adopt click, failed (`Login attempt for nonexistent user`), and
 > parked the device at **Connection Interrupted** while the inform loop kept
 > running normally. If SSH can't succeed on your device, set
-> `config.l2_announce = false` in `conf.lua` and restart: with no broadcasts the
+> `option l2_announce '0'` (`uci set openuf.main.l2_announce=0 && uci commit openuf`): with no broadcasts the
 > controller treats it as L3-discovered and delivers the key over the inform
 > channel instead. Forget any device record created while broadcasts were on
 > first — the controller remembers how it found it.
@@ -431,25 +738,28 @@ whether `--bootstrap-adopt` is passed to it.
 > controller explicitly logs `discovered via L3 inform, skip SSH adoption` and
 > never attempts SSH at all — unlike the L2 flow documented above. It delivers
 > the new `authkey` directly in the `mgmt_cfg` field of the `setparam` response
-> sent right after the Adopt click — confirmed against a real controller and
-> reproduced from a clean environment. openUF's `inform.lua` accepts this only
-> while unadopted. Adoption completes to **Connected** — provided the device can
-> encrypt with AES-GCM (see § 1). **A device that stays at "Adopting" forever has
-> no working GCM backend**, which is the one failure that looks like a
-> controller-side problem and is not.
+> sent right after the Adopt click — confirmed against a real controller
+> (`linuxserver/unifi-network-application:10.4.57`), reproduced from a clean
+> environment. openUF's `inform.lua` accepts this only while unadopted, matching
+> `amd989/unifi-gateway`'s reference behavior. Adoption completes to
+> **Connected** — provided the device can encrypt with AES-GCM (see § 1). An
+> earlier version of this guide reported every newly-adopted device getting stuck
+> at "Adopting"; that was the missing GCM backend, not a controller-side issue,
+> and it is resolved — see [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md).
 
 ---
 
 ## 5. State file
 
 Persistent state is stored at `/etc/openuf/state.json` — or wherever
-`conf.lua`'s `state_file` points, which the inform daemon, the L2 broadcaster
+the `state_file` option points, which the inform daemon, the L2 broadcaster
 and `syswrapper.sh` all read, so all three agree on one file. Change it before
 adoption: moving it afterwards leaves the authkey behind and the controller
 stops recognising the device.
 
-It is written through a sibling `.tmp` and renamed into place, so an
-interrupted write can never leave a half-file behind. That matters because a
+It is written through a sibling `.tmp.<pid>` and renamed into place, so an
+interrupted write can never leave a half-file behind, and a write or close that fails (a full
+overlay) is an error that leaves the old file in place. That matters because a
 `state.json` that will not parse is read as "start from defaults" — the device
 comes back up unadopted, with the well-known key. If that ever happens it is
 announced on stderr rather than passed off as a fresh install.
@@ -474,13 +784,16 @@ announced on stderr rather than passed off as a fresh install.
 | `authkey` | 32 hex chars (16-byte AES-128 key); default = pre-adoption key |
 | `cfgversion` | Opaque string the controller uses to push config updates |
 | `upgrade_requested_version` / `upgrade_requested_url` | Set when the controller sends an `upgrade` command; stored for visibility only — openUF never downloads or flashes firmware (see below) |
-| `inform_url` | URL for the inform heartbeat (every 10 s, or the interval the controller's `noop` names). Seeded from `conf.lua` on a first boot (or after a factory reset) and overwritten by the controller or by `syswrapper.sh set-inform`; once present here it always wins over `conf.lua` |
+| `inform_url` | URL for the inform heartbeat (every 10 s, or the interval the controller's `noop` names). Seeded from the `inform_url` option on a first boot (or after a factory reset) and overwritten by the controller or by `syswrapper.sh set-inform`; once present here it always wins over the option |
 | `use_gcm` | `true` when the controller has requested AES-128-GCM encryption (`use_aes_gcm=true` in mgmt_cfg) |
-| `blocked_stas` | MACs blocked from the controller's Clients view; re-applied to nftables on startup and to hostapd's deny list, so blocks survive restarts. The deny list is checked once a minute, at once when one of hostapd's control sockets in `/var/run/hostapd/` is replaced (hostapd restarted or an SSID rebuilt), and every heartbeat for 60 s after a config push or a Forget. A reload openUF did not run that keeps the SSID (LuCI, `wifi reload` by hand) is caught within a minute; until then the client can associate, but nftables drops its traffic. Replaced by the controller's `blocked_sta` list on every config push, so it can't drift from the controller's list |
-| `guest_wlans`, `guest_authorized`, `guest_portal`, `guest_token`, `guest_selfrun`, `guest_vaps_down`, `guest_wg_ips` | Guest portal state (⚠️ lab-validated only). `guest_wlans`: the wlanconf ids of the guest WLANs while the controller has the portal on, replaced on every config push. `guest_authorized`: each MAC the controller sent `authorize-guest` for, with the time it arrived; `unauthorize-guest` removes it and disconnects the guest. This map is where each station's `authorized` on a portal WLAN comes from (`true` everywhere else), and it fills the `authorized` nft set. It holds at most 512 entries; past that the oldest goes, and the controller re-authorizes it on the next heartbeat if its guest record is still active. `guest_portal`: what the enforcement is built from (portal URL, the portal's address and ports, restricted subnets), present only while the portal is on. `guest_token`: generated once, then reported while the portal is on. `guest_selfrun`: `pass` or `off`, from `mgmt_cfg`'s `selfrun_guest_mode`. `guest_vaps_down`: the guest WLANs `off` took down, until the controller answers again. `guest_wg_ips`: the walled garden's domain entries as resolved, `{allowed = {name = {ip, …}}, restricted = …}` — kept so a reboot rebuilds the rules without waiting on DNS, and so a name that stops resolving keeps the addresses it had. See § Guest portal |
+| `blocked_stas` | MACs blocked from the controller's Clients view; re-applied to nftables on startup and to hostapd's deny list on every heartbeat, so blocks survive restarts |
+| `guest_wlans`, `guest_authorized` | Guest portal bookkeeping (⚠️ lab-validated upstream only, unconfirmed on hardware). `guest_wlans` holds the wlanconf ids of the guest WLANs while the controller has the portal on, replaced on every full config push. `guest_authorized` maps each MAC the controller sent `authorize-guest` for to the time it arrived, and `unauthorize-guest` removes it and disconnects the guest. On a portal WLAN, each station's `authorized` is reported from this map; everywhere else it is `true`. It also fills the guest table's `openuf_authorized` set. At most 512 entries; past that the oldest goes, and the controller re-authorizes it on the next heartbeat if its guest record is still active |
 | `sta_rates` | Each client's own WiFi Speed Limit from `rate-update` (`up`/`down` in kbps, `-1` = no limit that way), for clients associated to this AP only. A client's entry goes when it leaves or reconnects, as the firmware's per-station class does; the controller sends it again on every connect |
-| `swvlan_backup` | Original `ports` strings of the stock `switch_vlan` sections, snapshotted before per-port VLAN assignment first modifies them; used to restore them (see § 6) |
-| `ip_mode`, `static_ip`, `static_netmask`, `static_gateway`, `static_dns` | The last "IP Settings" push. `ip_mode` is `"static"` or `"dhcp"`; the `static_*` fields are set only in static mode and cleared on a revert to DHCP. `static_dns` is an array in the controller's primary/secondary order, written to `/etc/resolv.conf`. On DHCP, DNS is left to the lease and openUF does not touch `resolv.conf`. In static mode these are **re-applied on every start**, because the address is `ip addr` state that a reboot discards and the controller does not re-push it (a matching `cfgversion` gets a `noop` back, carrying no `system_cfg` at all) — the same reason `blocked_stas` and `led_enabled` are reconciled at startup |
+| `guest_selfrun`, `guest_vaps_down` | `mgmt_cfg`'s `selfrun_guest_mode` (`pass` or `off`), and the guest VAP netdevs `off` took down while the controller was unreachable, until they are back on the air — also across a restart (⚠️ lab-validated upstream only) |
+| `guest_token` | Generated once, then reported while the captive portal is enforced. Without one the controller refuses every portal login on the AP ("Missing Guest Token in AP[…] during guest authorization") |
+| `atf_enabled` | The AP's Airtime Fairness switch (`atf.mode`) as last pushed; absent until the controller sends one. Written to mac80211's `airtime_flags` again on every start, because debugfs resets on reboot and the controller does not re-push it |
+| `dsa_brlan_ports` | `br-lan`'s port list as the board shipped it, snapshotted before per-port VLAN assignment first moves a socket; used to restore it (see § 6) |
+| `ip_mode`, `static_ip`, `static_netmask`, `static_gateway`, `static_dns` | The last "IP Settings" push. `ip_mode` is `"static"` or `"dhcp"`; the `static_*` fields are set only in static mode and cleared on a revert to DHCP. `static_dns` is an array in the controller's primary/secondary order. They are applied as UCI on the management interface (`network.<lan_name>`, default `lan`: `proto static`, `ipaddr`, `netmask`, `gateway`, `dns`; DHCP puts `proto dhcp` back), with a copy of `/etc/config/network` kept and restored unless an inform succeeds within `bridge_rollback_timeout`. On DHCP, DNS is left to the lease. At start, a static record whose UCI does not match is converged (a device upgraded from the `ip addr` days) |
 
 To reset to factory defaults:
 ```sh
@@ -490,16 +803,17 @@ syswrapper.sh reset-inform
 A reset, or the controller's **Forget** (`setdefault`), also removes what the controller set up.
 UniFi firmware erases its config and reboots. openUF undoes its own writes without the reboot:
 - all `openuf_` wifi-iface and VLAN network sections, then `wifi reload`
-- `minrssi_*`, `loadbalance_maxsta` and the stamped rate options on each `wifi-device`
-- per-port VLANs, band steering, l2guard, the guest portal and the 11k-scan cron job
-- Airtime Fairness and the LED are turned back on
+- `minrssi_*`, `loadbalance_maxsta` and the stamped rate, Minimum RSSI and `maxassoc` options on each `wifi-device`
+- per-port VLANs, band steering, l2guard, the guest table and the 11k-scan cron job
+- Airtime Fairness and the LEDs are turned back on
 - your own SSIDs that `use_only_unifi_wlan` disabled are switched back on
 
 What stays: timezone and NTP (§ 6), each radio's channel, width, power and country, the
-management address, and, after a Forget, the inform URL. A forgotten device keeps informing the same
-controller and shows up there ready to adopt. A `reset-inform` goes back to conf.lua's
-`inform_url`. If that names the controller by host name (the shipped `http://unifi:8080/inform`),
-an L3 adoption fails with HTTP 400 (`invalid inform_ip`), so run
+management address and the controller-owned bridge (`syswrapper.sh netmodel-restore` puts
+the board's own network and SSIDs back), and, after a Forget, the inform URL. A forgotten
+device keeps informing the same controller and shows up there ready to adopt. A
+`reset-inform` goes back to the configured `inform_url`; if that names the controller by
+host name, an L3 adoption fails with HTTP 400 (`invalid inform_ip`), so run
 `syswrapper.sh set-inform http://<controller IP>:8080/inform` first.
 
 Forget also deletes the device record on the controller. After re-adopting, set its name,
@@ -524,43 +838,45 @@ Settings carried through from the controller:
 | MAC Address Filter | `macfilter` (`disable`/`allow`/`deny`) + `maclist` |
 | WiFi Speed Limit (per WLAN, or per client) | `tc`, not a hostapd option: one HTB class **per client** on the SSID's netdev (download) and on its IFB (upload), see below. The WLAN's profile is stored as `openuf_ratelimit_down`/`openuf_ratelimit_up` (kbps) on the section; a client's own profile is `sta_rates` in `state.json` |
 | WPA2 / WPA3 / WPA2-WPA3 mixed | `encryption=psk2`/`sae`/`sae-mixed`, from the pushed AKM set **plus** `wpa3.transition` — SAE replaces WPA-PSK on the wire, so the AKM alone cannot tell mixed from WPA3-only. Depends on openUF advertising `radio_caps2` bit `0x1` |
-| SAE tuning | `sae.anti_clogging` → `sae_anti_clogging_threshold`, `sae.sync` → `sae_sync` (both as `hostapd_bss_options` raw lines), `sae.groups` → `sae_groups`; only on `sae`/`sae-mixed`. Needs the ucode wifi generator (24.10+). The controller sets them over REST only (`sae_anti_clogging`, `sae_sync`, `sae_groups`) |
-| Enhanced Open (OWE) | `encryption=owe`, from `wpa.key.1.mgmt=OWE` with no `aaa.<n>.wpa`. **Transition mode** arrives as two VAPs per radio with the same SSID (open + hidden OWE, linked by `owe_devname`). openUF writes them as one section with `owe_transition=1`, and OpenWrt's ucode generator (24.10+) builds both BSSes from it, naming the hidden one `<ssid>OWE`. Depends on openUF advertising `radio_caps2` bit `0x8`, which it does when `hostapd -vowe` passes |
-| Private Pre-Shared Keys | One `wifi-station` section per key (`openuf_<vap>_psk<k>`: `iface` = the VAP's section, `mac` = `00:00:00:00:00:00`, `key`, `vid` unless the key's network is VLAN 1) and one `wifi-vlan` per VLAN (`openuf_<vap>_vlan<vid>`: `name`/`vid` = the VLAN id, `network` = `openuf_vlan<vid>`), plus `dynamic_vlan=1` on the VAP, from `aaa.<n>.wpa.psk_file.<k>.psk`/`.vlanid`. OpenWrt turns them into hostapd's `wpa_psk_file` and `vlan_file`; the client's netdev is `<vap ifname>-<vid>`. The WLAN's own `wpa.psk` (a random passphrase the controller generates) stays the section's `key`. Needs a hostapd with VLAN support (the full `wpad-*` builds have it) and a `lan_cpueth` to build the VLANs on. `psk_radius=2` (keys from RADIUS only) skips the WLAN. The controller's `sae_psk` list (`sae.psk.<n>.psk/.mac/.vlan/.id`) feeds the same sections: with a `mac` the `wifi-station` carries that MAC instead of `00:00:00:00:00:00`; the `ff:ff:ff:ff:ff:ff` entry is the WLAN's own key and is skipped; a key also sent as `psk_file` is created once |
-| WPA-Enterprise (802.1X / RADIUS) | `encryption=wpa2+ccmp` / `wpa3` / `wpa3-mixed` / `wpa3-192`, chosen from the EAP AKM plus `wpa3.support`/`wpa3.transition`/`wpa3.enhanced_192` — the generator turns those into `auth_type` `eap`/`eap2`/`eap-eap2`/`eap192`. (`encryption=eap` looks right and is not: `auth_type` comes out `eap` but no `wpa` wildcard matches, so the BSS gets `wpa=0`.) Servers from `aaa.<n>.radius.auth.<k>.{ip,port,secret}` → `auth_server_addr` (list) / `auth_server_port` / `auth_server_shared_secret`, the `acct` twin → `acct_server_*`, `interim_update.{status,interval}` → `radius_acct_interim_interval`, `nas_identifier` → `nas_identifier`, `dynamic_vlan` → `dynamic_vlan`. No passphrase is ever written: the controller still sends a dummy `aaa.<n>.wpa.psk` on an EAP WLAN, and `wireless.<n>.security` reads `none` on the same push — neither is the discriminator. `ieee8021x`, `eapol_version` and the EAP key-mgmt list are the generator's own, so openUF writes none of them. `psk_radius=2` (PSK-from-RADIUS) is still skipped — that is a different feature |
-| RADIUS MAC authentication / Dynamic Authorization | `aaa.<n>.radius.macacl.status=enabled` → a raw `macaddr_acl=2` line, plus the same `radius.auth.<k>.*` servers as above — written as raw `auth_server_addr`/`auth_server_port`/`auth_server_shared_secret` lines on an open, PSK or SAE WLAN, where the generator never emits the UCI options. `aaa.<n>.radius.das.{client,secret}` → one `radius_das_client=<ip> <secret>`, `das.port` → `radius_das_port` (the controller uses 3800 + the WLAN index). Declined: `macacl.format`, `macacl.emptypassword` (UniFi hostapd patches, absent from OpenWrt's binary) and the whole `radius.dad.*` shape (it relays through the AP's own daemon from `127.0.0.1`). A WLAN that needs MAC authentication and cannot have it is skipped, not provisioned without it |
-| MAC-based VLANs ("Virtual Network Override") | `aaa.<n>.accept_mac.<k>.{mac,vlanid}` → one `<mac> <vlanid>` line of a hostapd **accept-MAC list**, plus a `wifi-vlan` section per VLAN (`openuf_<vap>_vlan<vid>`, shared with the private-pre-shared-key path) and `dynamic_vlan=1` on the VAP so OpenWrt emits `vlan_no_bridge`. The list file is openUF's own, `/etc/openuf/macvlan-<wifi-iface section>`, rebuilt on every push and removed when the WLAN has no overrides. How it reaches hostapd depends on the WLAN's MAC Address Filter: with **no filter** a raw `accept_mac_file=` line (no `macaddr_acl`, so hostapd's default still admits unlisted clients); with **`macfilter=allow`** the schema's `macfile` option, which OpenWrt appends to the accept file it writes itself — openUF then drops those addresses from `maclist` so each appears once, and skips any override the allow list does not already permit; with **`macfilter=deny`** the raw line again, minus any address on the deny list (the accept list is checked first and would otherwise let it in). `accept_mac.status` is **not** read: the controller emits it exactly when there is at least one entry, so the entries are the whole signal. Needs `fw_caps 0x80000000` (claimed) plus a site-wide quorum — see README — and a `lan_cpueth` to build the VLANs on |
-| Hotspot 2.0 / Passpoint | From the WLAN's embedded `hotspot2` object, pushed as `aaa.<n>.hs20.*`. Scalars become real wifi-iface options: `iw_enabled=1` (the generator's `iface_interworking()` gate, which emits `interworking=1`), `hs20=1`, `access_network_type`, `internet`/`asra`/`uesa` as 1/0, `venue_group`, `venue_type`, `disable_dgaf`, `hs20_deauth_req_timeout`, and `metrics.*` joined into one `hs20_wan_metrics` value (`<WAN info in hex>:<dl speed>:<ul speed>:<dl load>:<ul load>:<measurement>`). Every **cumulative** list is written as a raw `hostapd_bss_options` line instead: `ipaddr_type_availability`, `domain_name`, `venue_name=<lang>:<name>`, `venue_url=<i>:<url>`, `nai_realm=<encoding>,<realm>,<eap>[<id>:<val>]…`, `roaming_consortium=<oi>`, `anqp_3gpp_cell_net=<mcc>,<mnc>;…` (one line, semicolon-separated), `hs20_oper_friendly_name=<lang>:<text>`, `hs20_conn_capab=<proto>:<port>:<status>`. Needs `fw_caps` `0x800000` **and** `fw2_caps` `0x80000`; see the narrowings below |
+| Enhanced Open (OWE) | `encryption=owe` (bare, no cipher suffix), from `wpa.key.1.mgmt=OWE` with no `aaa.<n>.wpa`. **Transition mode** arrives as two VAPs per radio with the same SSID (open + hidden OWE, linked by `owe_devname`). openUF writes them as one section with `owe_transition=1`, and OpenWrt 25.12's ucode generator builds both BSSes from it, naming the hidden one `<ssid>OWE`. It does so only for `encryption` exactly `owe`, which is why no cipher is appended. Depends on openUF advertising `radio_caps2` bit `0x8`, which it does when `hostapd -vowe` passes |
+| Private Pre-Shared Keys | One `wifi-station` section per key (`openuf_<vap>_psk<k>`: `iface` = the VAP's section, `mac` = `00:00:00:00:00:00`, `key`, `vid` unless the key's network is VLAN 1) and one `wifi-vlan` per VLAN (`openuf_<vap>_vlan<vid>`: `name`/`vid` = the VLAN id, `network` = `openuf_vlan<vid>`, or the `vlan_filtering` plan's `openuf_v<vid>`), plus `dynamic_vlan=1` on the VAP, from `aaa.<n>.wpa.psk_file.<k>.psk`/`.vlanid`. OpenWrt turns them into hostapd's `wpa_psk_file` and `vlan_file`; the client's netdev is `<vap ifname>-<vid>`. The WLAN's own `wpa.psk` (a random passphrase the controller generates) stays the section's `key`. Needs a hostapd with VLAN support (the full `wpad-*` builds have it) and a `lan_cpueth` to build the VLANs on; with the `vlan_filtering` backend, openUF adds each key's VLAN to the bridge itself (tagged on the uplink, an `openuf_v<vid>` interface), since the push carries no bridge for a VLAN only a key uses. `psk_radius=2` (keys from RADIUS only) skips the WLAN |
+| WPA-Enterprise (802.1X) | `encryption=wpa2+<cipher>` (WPA2), `wpa3+<cipher>` (WPA3, PMF required), `wpa3-mixed+<cipher>` (WPA2/WPA3), `wpa3-192+gcmp256` (192-bit), picked by `wpa3.support`/`wpa3.transition`/`wpa3.enhanced_192` (the akm is `WPA-EAP` for all of them). RADIUS from `aaa.<n>.radius.*`: `list auth_server` + `auth_port` + `auth_secret`, `list acct_server` + `acct_port` + `acct_secret`, `acct_interval` (interim updates), `nasid`, `auth_cache` (OKC), `dynamic_ownip=1` (NAS-IP-Address is the egress address, not hostapd's 127.0.0.1), `dynamic_vlan` 1/2 with one `wifi-vlan` per VLAN this AP already carries (`openuf_<vap>_vlan<vid>`, as for Private Pre-Shared Keys). OpenWrt takes one port and secret per list, so servers that differ from the first are left out. With Fast Roaming, `key` = the RADIUS secret: 25.12's `ap.uc` derives the FT key holders from `auth_secret ?? key`, but its schema has already renamed `auth_secret`, so without `key` the BSS fails with `FT_KEY_CANT_BE_DERIVED`. Skipped and logged when the push names no usable server. Needs a full `wpad` build |
+| RADIUS CoA / Disconnect (DAS) | Per Enterprise WLAN: `dae_client=127.0.0.1`, `dae_port=<3800+n>`, `dae_secret`. The `announce` process listens on UDP **3799** (point the RADIUS server's CoA/Disconnect at the AP's address and 3799), accepts requests from the WLAN's accounting servers only, and relays each to the WLAN named by NAS-Identifier or Called-Station-Id SSID, else to every WLAN (first ACK wins). The plan is `/etc/openuf/das.json`, rewritten on provisioning |
+| RADIUS MAC Authentication | `auth_server`/`acct_server` as above plus `list hostapd_bss_options 'macaddr_acl=2'` (a raw line, so it wins over a MAC filter's `macaddr_acl` and also applies on an Enterprise BSS, where `ap.uc` writes none). hostapd sends the MAC as `%02x` ×6 and as the password; any other `radius.macacl.format`, or the empty-password option, skips the WLAN. A UID IoT WLAN with keys from RADIUS only (`wpa.psk_radius=2`) gets `ppsk=1` (`wpa_psk_radius=2`) |
 | PMF (802.11w) | `ieee80211w` (0 disabled / 1 optional / 2 required) |
-| Fast Roaming (802.11r) | `ieee80211r`. The controller carries **two** toggles — `ft.status` for the WLAN and `wpa3.ft.status` for the SAE akm alone (SAE pushes only). OpenWrt has one switch feeding hostapd's `key_mgmt`, and on `sae-mixed` it yields FT-PSK *and* FT-SAE together, so FT is enabled if **either** asks for it and a disagreement is logged. Both keys arrive `disabled` on a WPA3-only WLAN unless openUF advertises `radio_caps2` bit `0x2`, which it does wherever it advertises `0x1`. Key holders: `r0kh`/`r1kh` wildcard lists keyed with `aaa.<n>.iapp_key` (see below). Also `pmk_r1_push=1`, `reassociation_deadline=3000`, as UniFi firmware |
+| Fast Roaming (802.11r) | `ieee80211r`. The controller carries **two** toggles — `ft.status` for the WLAN and `wpa3.ft.status` for the SAE akm alone (SAE pushes only). OpenWrt has one switch feeding hostapd's `key_mgmt`, and on `sae-mixed` it yields FT-PSK *and* FT-SAE together, so FT is enabled if **either** asks for it and a disagreement is logged. Both keys arrive `disabled` on a WPA3-only WLAN unless openUF advertises `radio_caps2` bit `0x2`, which it does wherever it advertises `0x1` |
 | BSS Transition (802.11v) | `bss_transition` — **needs a full `wpad` build** |
-| 802.11k (per WLAN, `rrm_enabled`, REST only) | `ieee80211k`, `rrm_neighbor_report`, `rrm_beacon_report` = `1` when on; left unset (OpenWrt's default, off) when off. Band Steering and Roaming Assistant force all three on whatever the WLAN says. Neighbor reports list other APs only while usteer runs, since usteer is what fills hostapd's list (`ubus call hostapd.<iface> rrm_nr_list`) |
 | Band Steering | `usteer` config, not a hostapd option. On when any WLAN's Band Steering is on, or the AP's own setting is Prefer 5G |
-| Airtime Fairness (device panel) | Not UCI: `/sys/kernel/debug/ieee80211/phy*/airtime_flags`, `3` (TX+RX, the kernel default) for on and `0` for off, from `atf.mode`. Kept as `atf_enabled` in `state.json` and rewritten at every start, because debugfs resets to `3` on reboot. Forgetting the device puts `3` back. Depends on openUF advertising `wifi_caps` bit `0x20`, which it does when that debugfs file exists |
 | Roaming Assistant (per WLAN, 5 GHz) | `openuf_roam_assist=<dBm>` on the 5 GHz section (openUF's own marker, absent when off); enforced by openUF over hostapd's ubus, not by a hostapd option — see below |
+| Airtime Fairness (device panel) | Not UCI: `/sys/kernel/debug/ieee80211/*/airtime_flags` (any phy name: `phy0`, or `wl0` on boards that rename their wiphys, like the E8450), `3` (TX+RX, the kernel default) for on and `0` for off, from `atf.mode`. Kept as `atf_enabled` in `state.json` and rewritten at every start, because debugfs resets to `3` on reboot. Forgetting the device puts `3` back. Depends on openUF advertising `wifi_caps` bit `0x20`, which it does when that debugfs file exists |
 | Auto/Custom DTIM Period | `dtim_period` |
-| U-APSD | `uapsd` (`0`/`1`; on 25.12 an alias of `uapsd_advertisement_enabled`). Off unless the WLAN enables it, the controller's default |
-| Group Rekey Interval | `wpa_group_rekey` (seconds, `0` = never). WPA WLANs only. Without it hostapd's default (86400) applies. A WLAN may store 0, which means no rotation |
-| Key caching (`auth_cache`, REST only, default **on**) | `okc` (`0`/`1`). Sent only on a WPA-Enterprise WLAN — a PSK WLAN's push carries no `auth_cache`, so nothing is written there and OpenWrt's own default applies (on for sae/owe and for FT). `disable_pmksa_caching` is not in the 25.12 schema, so an explicit `okc=0` is the whole of "off" that is available |
-| TDLS (`tdls_prohibit`, REST only) | `tdls_prohibit` (`0`/`1`), 1:1. On every WLAN's push, so this always writes |
-| Country IE / 802.11d (`country_beacon`, REST only) | per-**radio** `ieee80211d` (`0`/`1`). The wire key is per WLAN; `ieee80211d` is a wifi-device option, so openUF turns it on for a radio if **any** WLAN on that radio asks for it. A radio no WLAN carried the key for is left alone. It only reaches hostapd once a regulatory domain is set — the generator drops it otherwise, which is also what keeps hostapd from treating it as fatal. **On a 5 GHz radio the "off" setting is ignored and `ieee80211d=1` is written anyway**, because OpenWrt emits `ieee80211h=1` for every 5 GHz radio with a country and hostapd refuses the whole interface with *"Cannot enable IEEE 802.11h without IEEE 802.11d enabled"* — the symptom is `hostapd.add_iface failed` in `logread` and a radio with no SSID. openUF logs `Country IE off is not applicable on 5 GHz` once when it overrides. A radio whose band cannot be determined is treated as 5 GHz, for the same reason |
-| Pairwise cipher (`wpa.1.pairwise`, from wlanconf `wpa_enc`, REST only) | the second token of `encryption`: `psk2+gcmp`, `psk2+ccmp256`, `wpa2+gcmp`, … `CCMP` (the controller's `auto` and `ccmp`) writes no suffix, since it is the generator's own default. `gcmp-256` never arrives — the controller refuses the value. **Gated on the radio's cipher suites**, read over `ucode -l nl80211` (`iw` 6.17 prints none): a cipher the phy does not report keeps the default and logs `controller asked for pairwise cipher … -- keeping …`, because hostapd treats an unprogrammable cipher as fatal and the BSS would never come up. Where two radios serve one band the band's set is the intersection; an unknown probe never vetoes. OWE, and the 192-bit suite (which the generator pins to GCMP-256 itself), are left alone |
 | Multicast Enhancement | `multicast_to_unicast` |
 | Minimum Data Rate | per-**radio** `basic_rate` / `supported_rates` / `legacy_rates` / `beacon_rate` |
-| Multicast Suppression | nftables rules, not a hostapd option. `openuf_bcfilt`, `openuf_bcfilt_macs`, `openuf_bcfilt_bypass` and `openuf_mcast_suppress` on the section are the persisted record: the ruleset dies with a reboot, so openUF rebuilds it from those four options on every start |
+| Multicast and Broadcast Blocker | nftables rules, not a hostapd option. `openuf_bcfilt`/`openuf_bcfilt_macs` on the section are the persisted record: the ruleset dies with a reboot, so openUF rebuilds it from those two options on every start |
+| Multicast Suppressor (Conservative / Aggressive) | nftables, in the blocker's `bridge openuf_bcfilt` table. **Aggressive** arrives as the blocker (`bcfilt.*`, its allowlist filled by the controller with the site's device MACs) plus `bcfilt.bypass_types=ARP\|NSNA\|DHCPV4\|DHCPV6`: openUF accepts those (ARP, IPv6 neighbour solicitation/advertisement, UDP 67/68, UDP 546/547) ahead of the drop. **Conservative** arrives as `wireless.<n>.multicast.suppressor=enabled` alone: openUF reads it as storm control and drops group-addressed frames to the VAP beyond 200 per second (burst 400), after the exemptions (so DHCP, ARP and ND are never rate-limited) and before the allowlist drop. ⚠️ That threshold is openUF's choice: the controller sends none. Every rule names the VAP: frames between wired ports, UniFi's AP-to-AP group `239.254.127.63` UDP 48000 among them, are never touched. Recorded as `openuf_mcast_suppressor`/`openuf_bcfilt_bypass` for the startup rebuild. Needs `wifi_caps2` `0x400000`, always claimed, and `kmod-nft-bridge` |
+| MAC-based VLANs (a client's Virtual Network Override, "VLAN Magic") | `aaa.<n>.accept_mac.<m>.mac`/`.vlanid` → `/etc/openuf/macvlan-<section>-<hash>.list` (`<mac> <vid>` per line; the hash of the list is in the name, so a list-only change changes the section and `wifi reload` re-reads it), named by `list hostapd_bss_options 'accept_mac_file=…'`, plus `dynamic_vlan=1` and one `wifi-vlan` per VLAN (`openuf_<vap>_vlan<vid>`, as for Private Pre-Shared Keys; VLAN 1 is the untagged network). hostapd accepts a listed client onto its VLAN and everyone else as before. Left out: a MAC the WLAN's deny filter or Lock to Access Point refuses, a MAC not on an allow filter, the WLAN's own VLAN, every entry on a WLAN with RADIUS MAC authentication (an accept-list hit would skip RADIUS), and open/OWE WLANs (OpenWrt sets up hostapd's VLAN bridging only for PSK, SAE and Enterprise). The list is on flash because hostapd reads it at boot, before openUF runs; it is written only when it changes, and a list no WLAN names any more is removed once `wifi reload` has succeeded. Needs `fw_caps` `0x80000000`, claimed where hostapd has VLAN support (the PPSK probe) |
+| WLAN Schedule | `openuf_schedule` on the section (the schedule, encoded) and `disabled=1` + `openuf_sched_off=1` while the schedule has the WLAN off. Checked once a minute on the device's local time (the controller's timezone, `system_timezone`); a change is one `wifi reload`, which on 25.12 should add or remove just that BSS (read in the 25.12 `hostapd.uc`, not observed). A WLAN the controller disabled is never brought up by its schedule. See below |
+| Hotspot 2.0 / Passpoint | Raw hostapd lines in `list hostapd_bss_options` on the Enterprise section (`interworking=1`, `hs20=1`, `access_network_type`, `internet`, `venue_group`/`venue_type`, `venue_name`, `venue_url`, `hessid`, `domain_name`, `nai_realm`, `roaming_consortium`, `anqp_3gpp_cell_net`, `hs20_oper_friendly_name`, `hs20_conn_capab`, `hs20_wan_metrics`, `qos_map_set`, `ipaddr_type_availability`, `network_auth_type`, `disable_dgaf`, `anqp_domain_id`, GAS limits, Terms and Conditions filename/timestamp), from `aaa.<n>.hs20.*`. Not OpenWrt's `hs20`/`iw_*` options: 25.12's `ap.uc` overwrites `domain_name` with the 3GPP list and joins list options onto one line. Online sign-up (OSU providers, icons) is not carried; an OSEN WLAN is skipped. Needs `fw_caps` `0x800000`, claimed where `hostapd -vhs20` passes (the full `wpad-*` builds) |
+| RADIUS Filter-Id | `list radius_auth_req_attr '11:s:<uid-wifi\|wpa-eap>'` on the Enterprise section, from `aaa.<n>.filter_id` (sent only while the gateway runs the RADIUS server). Every Access-Request then names the service, which the gateway's RADIUS accounts are scoped to. Needs `fw_caps` `0x20000000`, always claimed |
 | Proxy ARP | `proxy_arp` — **needs a full `wpad` build** |
 | Client Isolation | `isolate` (hostapd `ap_isolate`) |
-| Network / VLAN assignment | a per-VLAN bridge (`br-openuf<id>`) holding the tagged uplink sub-device (`eth1.<id>`), which the VAP joins — plus a `switch_vlan` trunk on swconfig boards. See below |
+| Group Key Update Period | `wpa_group_rekey` (seconds; `0` = never), from `aaa.<n>.wpa.group_rekey`. The controller sends `3600` unless the WLAN says otherwise; hostapd's own default is 86400 |
+| TDLS Prohibit | `tdls_prohibit`, from `aaa.<n>.tdls_prohibit` |
+| U-APSD | `uapsd` (25.12 maps it to `uapsd_advertisement_enabled`), from `wireless.<n>.uapsd`. **Off by default in the controller**, where OpenWrt defaults it on |
+| 802.11k (per WLAN) | `ieee80211k`, from `aaa.<n>.11k.status`; OpenWrt derives `rrm_neighbor_report`/`rrm_beacon_report` from it. Band Steering or Roaming Assistant forces it on whatever the WLAN says |
+| SAE groups | `list hostapd_bss_options 'sae_groups=<g> <g>'` on SAE WLANs, from `aaa.<n>.sae.groups.<i>.group` + `sae.has_groups=enabled`. Not a wifi-iface option |
+| 802.11d (per WLAN in the controller) | per-**radio** `country_ie` (alias of `ieee80211d`): on if any enabled WLAN on the radio has it on, off if all say off. Off is applied on 2.4 GHz, and on 5/6 GHz only with `doth`/`ieee80211h` set to `0` (hostapd will not start 802.11h without 802.11d). The board's previous value is kept in `openuf_country_ie` (`none` = unset) and restored when no WLAN carries the key |
+| Network / VLAN assignment | a per-VLAN bridge (`br-openuf<id>`) holding the tagged uplink sub-device (`eth1.<id>`), which the VAP joins. See below |
 | Channel, TX power | `wifi-device` channel/txpower; the controller's **Auto** channel is written as the literal `channel=auto`, engaging hostapd ACS (the AP surveys the band at radio bring-up and picks the least-busy channel). **Auto** TX power *deletes* the `txpower` option (UCI has no auto value; absent = driver default/max), so reverting from a fixed dBm actually takes effect |
+| Auto-channel exclusions / DFS (Radio AI, `radio.<n>.blklst` / `radio.<n>.acsdfs`) | Only while the channel is **Auto**. Excluded channels come off the `wifi-device` `channels` list (hostapd `chanlist`, stamped `openuf_channels`): on 2.4 GHz off the 1/6/11 plan, elsewhere written as the ranges between them (`1-51 53-55 57-233`). DFS off sets `acs_exclude_dfs=1`, stamped `openuf_acs_dfs`. Both are torn down when the keys go or the channel is fixed; a hand-set value without a stamp is left alone (on 2.4 GHz too, where openUF otherwise writes 1/6/11), and a board radio policy (§ 3) wins. Needs `wifi_caps2` `0x10`, which openUF claims. ⚠️ Not yet confirmed on the wire |
 | Radio enable/disable (TX Power → Disabled) | `wifi-device` `disabled`; the radio's WLANs get `wifi-iface` `disabled` too, keeping their config for a later re-enable |
 | Channel width | `wifi-device` htmode, from the radio's `ieee_mode` token, **clamped to what the radio can actually do** — see below |
 | IoT Optimization: Lock 2.4 GHz to Channel 6 | nothing new — arrives as `channel=6` on the 2.4 GHz radio |
 | IoT Optimization: DTIM Interval Lock | nothing new — arrives as `dtim_period=3` on the 2.4 GHz SSID |
 | IoT Optimization: Force WiFi 4 Mode | `bss_load_update_period=0` (suppresses the QBSS Load IE) + an `openuf_iot` marker |
 | Minimum RSSI | per-**radio**: `wifi-device` `rssi_reject_assoc_rssi` + `rssi_ignore_probe_request` at threshold + 3 dBm (stamped `openuf_minrssi`), plus openUF deauthenticating a client below the threshold for 30 s |
-| Load balance (REST `radio_table[].loadbalance_enabled` + `maxsta`) | per-**radio** `wifi-device` `loadbalance_maxsta` (openUF's own option, no hostapd setting), deleted when off. openUF deauthenticates the most idle clients above it |
-| WiFi Blackout Schedule (Settings → WiFi → *WLAN*) | per-WLAN `wifi-iface` `openuf_schedule` (openUF's own option, the firmware's `d=HH:MM-HH:MM` on-times, space-separated), absent without a schedule. Enforced by openUF with `ip link set <bss> down/up`, not by hostapd options |
-| Per-port VLAN (Ports → *port* → Native VLAN) | swconfig `switch_vlan` sections named `openuf_swvlan<id>` — see below |
+| Max Clients (Radios → load balancing) | per-**radio** `wifi-device` `loadbalance_maxsta` (openUF's own option, no hostapd setting), deleted when off. openUF deauthenticates the most idle clients above it |
+| Per-port VLAN (Ports → *port* → Native VLAN) | the socket moved out of `br-lan` into `br-openuf<id>` — see below |
 
 **Channel width is clamped to the hardware.** openUF presents itself as a
 U6-InWall (802.11ax) whatever the host radios really are, so a controller will
@@ -606,149 +922,9 @@ shows the width, which was right) and visible only in `iw dev`. An explicit
 > two SSIDs differing only in punctuation (`Guest WiFi` and `Guest-WiFi`) sanitized onto
 > one section and the second silently overwrote the first.
 
-**WPA-Enterprise: two narrowings worth knowing before you enable it.** Both are
-limits of what the UCI schema can express, not of the RADIUS config the
-controller sends.
-
-- **One port and one shared secret per server list.** OpenWrt's generator writes
-  `auth_server_port`/`auth_server_shared_secret` once and reuses them for every
-  address in `auth_server_addr`, so two servers that differ in either cannot be
-  expressed. openUF takes the port and secret from the **first** server, puts
-  every later server that agrees into the list, and drops the rest with a log
-  line naming the index (never the secret). Same for accounting. **A RadSec/TLS
-  server is dropped too**, with a log line: the controller sends only the
-  *filenames* of certificates it transfers by another channel, so the server
-  cannot be completed, and treating it as plain RADIUS would put the shared
-  secret on the wire in the clear. A WLAN whose every auth server is dropped is
-  skipped loudly rather than brought up as a BSS nobody can join.
-- **A RADIUS-assigned VLAN only works for VLANs this AP already has.** openUF
-  passes the profile's mode through as `dynamic_vlan` (1 optional / 2 required)
-  but writes no `wifi-vlan` section for it, because the push enumerates no
-  VLANs. hostapd's VLAN map therefore holds only the VLANs the WLAN itself or a
-  private pre-shared key brought, and with "RADIUS assigned VLAN: required" a
-  station assigned anything else is refused. That is deliberate: failing closed
-  beats putting the client on the wrong network, past the segmentation the
-  setting exists for.
-
-RadSec certificates themselves are not implemented, and are ignored rather than
-half-applied.
-
-### RADIUS MAC authentication and Dynamic Authorization (CoA / Disconnect)
-
-Two settings of the same RADIUS profile, and **neither is limited to a
-WPA-Enterprise WLAN** — the controller offers MAC Authentication on an open or
-WPA-PSK WLAN just as readily, with no capability gate.
-
-| Controller setting | Wire keys | UCI / hostapd |
-|---|---|---|
-| WLAN → Security → **MAC Authentication** | `aaa.<n>.radius.macacl.status` plus the full `aaa.<n>.radius.auth.<k>.*` block | `macaddr_acl=2`, and the auth servers as raw lines on a non-EAP WLAN |
-| RADIUS profile → **RADIUS DAS** (needs accounting on) | `aaa.<n>.radius.das.{status,port,client,secret}` | `radius_das_port`, `radius_das_client=<ip> <secret>`, one UDP port per WLAN (3800 + its index) |
-
-- **It fails closed.** A WLAN that asks for MAC authentication and cannot have
-  it is **not provisioned**: the log says `skipping WLAN "<ssid>" -- it requires
-  RADIUS MAC authentication, and ...`, naming either the RADIUS problem or a
-  `wpad` with no RADIUS client. An open WLAN brought up without its MAC ACL
-  would admit everyone the setting exists to screen, so a missing WLAN an admin
-  can see beats a silently open one.
-- **The MAC *formatting* keys are declined**, because OpenWrt's hostapd has no
-  option for them: it always sends the MAC lower-case colon-separated as both
-  User-Name and User-Password. **A RADIUS server configured for another format
-  will reject the client** — set the profile's MAC format to colon-separated
-  lower case, or add that form to the server's user list.
-- **Dynamic Authorization needs `fw_caps` `0x100000`**, which openUF claims, and
-  hostapd itself is the listener.
-- **A RADIUS-assigned VLAN is not honoured on a MAC-authenticated WLAN.** The
-  profile's `dynamic_vlan` is written only on an Enterprise WLAN; on any other,
-  `2` (required) would make hostapd reject every client of a WLAN that worked a
-  moment earlier, since openUF writes no VLAN map for RADIUS-assigned VLANs.
-
-Why the servers go in raw, why `das.*` is used and `dad.*` declined, and what
-the firmware does with each key: see
-[the wire reference](docs/WIRE-REFERENCE.md#radius-mac-authentication-and-dynamic-authorization).
-
-### MAC-based VLANs ("Virtual Network Override")
-
-A client given a **Virtual Network Override** (on the client's own page, not on
-a WLAN) belongs on that network's VLAN whatever SSID it joins. The controller
-groups every overridden client by its override network and sends the whole map
-to **every** WLAN, as `aaa.<n>.accept_mac.{status,<k>.{mac,vlanid}}`. The
-override network must be a *corporate* network — the controller refuses a
-VLAN-only one with `api.err.NetworkAssignedAsVlanOverrideIsNotCorporate`.
-
-- **Two gates, and the second is site-wide.** `fw_caps` `0x80000000` is the
-  device's own claim. Beside it the controller requires a ubios gateway that
-  claims the bit or is one of 23 listed models (a UCG Ultra, model `UDRULT`, is
-  both), **and** that no client-bearing AP or switch in the site fails to claim
-  it. **One old AP therefore switches the feature off for every device in the
-  site.**
-- **An unlisted client is unaffected.** hostapd consults the accept-MAC list
-  before `macaddr_acl`, and a match returns "accept" carrying that VLAN, so a
-  file of its own assigns VLANs without restricting access.
-- **Each VLAN also needs a `wifi-vlan` section**, because hostapd refuses a
-  station whose VLAN is not in its `vlan_file` ("Invalid VLAN %d received from
-  RADIUS server" in `logread`, however little RADIUS is involved). openUF builds
-  them as the private-pre-shared-key path does, into the same `br-openuf<id>`,
-  and one section serves both features when they name the same VLAN. An override
-  whose VLAN openUF cannot build — no `lan_cpueth` — is left out and logged,
-  never downgraded onto the SSID's own network.
-- **The MAC Address Filter owns the same file**, so the route depends on it (see
-  the UCI-mapping row above for the three cases). Two of them *narrow* the list:
-  an override the allow list does not permit is skipped, and so is one the deny
-  list names — the accept list is checked first and would otherwise let a denied
-  client in.
-- **Refused outright on a WLAN with RADIUS MAC authentication**, where an
-  accept-list entry would return "accept" before the server is asked. openUF
-  logs the WLAN and the count and writes nothing.
-- **The file is written before anything points at it**, and every address is
-  validated at the parser: an `accept_mac_file=` hostapd cannot read, or one
-  malformed line, fails the whole BSS and the WLAN disappears.
-
-⚠️ **Not confirmed:** the capture used a placeholder MAC belonging to no device,
-so **no real client has been moved to a VLAN by MAC**. The validation lab can
-never exercise this either — its site has no gateway, so its controller refuses
-to emit the keys at all.
-
-**Hotspot 2.0 / Passpoint: what openUF claims, what it drops.** A Passpoint
-WLAN is a WPA-Enterprise WLAN with an ANQP/GAS profile on top, so everything in
-the WPA-Enterprise section above applies first.
-
-- **Two capability bits, one of them for a feature openUF does not have.** A
-  Passpoint WLAN is refused with `api.err.DevicePasspointNotSupported` unless
-  openUF claims `fw_caps` `0x800000` *and* `fw2_caps` `0x80000` (RadSec), which
-  it does when the local hostapd has the interworking options and `CONFIG_HS20`,
-  although it implements no RadSec. The trade, stated rather than hidden: the
-  claim makes a RadSec RADIUS server arrive with its certificate *filenames*,
-  which is the only way openUF can tell it from a plaintext one — and it then
-  drops that server with a log instead of sending the shared secret in the
-  clear. Without the claim it was indistinguishable.
-- **Lists are raw hostapd lines, not UCI lists**, because OpenWrt joins a list
-  option's values with spaces into one line, which is not what any cumulative
-  interworking option means.
-- **Dropped individually, never silently mangled.** Any value carrying a
-  control character is dropped (it would end the hostapd config line and let
-  the rest be read as further options), as is a language code longer than three
-  characters, a roaming-consortium OI that is not 3–15 hex bytes, an MCC that
-  is not three digits, a connection-capability status that is not
-  open/closed/unknown, and an incomplete WAN-metrics block (it is all or
-  nothing). A disabled NAI realm, and one with no EAP method, are left out.
-- **Not implemented, because the controller does not send it on a WLAN:**
-  HESSID, ANQP domain id, network auth type, terms-and-conditions, GAS timings
-  and QoS maps all exist in the controller's standalone Hotspot 2.0 profile
-  schema but not in the subset a WLAN carries, so no key ever arrives. OSU
-  (online sign-up) and Passpoint icons are not implemented either, and could
-  not be: OpenWrt's hostapd has no `osu_server_uri`, `osu_ssid` or `hs20_icon`
-  option at all, and icons would need files on disk the controller transfers by
-  another channel. An `esr` key is read by nothing, because the generator never
-  emits it.
-- **Only on an EAP WLAN.** hostapd refuses a configuration with `hs20=1` and
-  anything but WPA2-Enterprise/CCMP, so an hs20 block arriving on a
-  PSK WLAN is dropped with a log line rather than written out into a BSS that
-  would never start.
-
 **Fast Roaming (802.11r) and the `ft_psk_generate_local` trap.** openUF sets
 `ieee80211r`, a `mobility_domain` derived from the SSID (so every AP computes the same one
-with no coordination), `ft_over_ds=0`, and UniFi firmware's `pmk_r1_push=1` and
-`reassociation_deadline=3000` (OpenWrt: 0 and 20000 TU) — and deliberately does **not** set
+with no coordination) and `ft_over_ds=0` — and deliberately does **not** set
 `ft_psk_generate_local`. That option looks harmless and is not:
 
 - It means "derive PMK-R0/R1 locally from the PSK", which only exists for **FT-PSK**. FT-SAE
@@ -758,15 +934,12 @@ with no coordination), `ft_over_ds=0`, and UniFi firmware's `pmk_r1_push=1` and
   defaults it to 0 when nothing has overridden it. Setting it to 1 therefore silently
   disables fast roaming for every WPA3 client on a `sae-mixed` WLAN — which is most of them.
 
-Left unset, `hostapd.sh` / `ap.uc` key it on the auth type (`psk` → 1, anything else → 0),
-and only at 0 do they write key holders. openUF supplies those as wildcard `r0kh`/`r1kh`
-lists whose secret is the controller's `aaa.<n>.iapp_key`. That's a random 128-bit key per
-WLAN, the same one UniFi firmware uses for its own inter-AP FT traffic, so every openUF AP on
-the WLAN agrees with no coordination. If the push carries no `iapp_key` (`iapp_enabled` off),
-OpenWrt falls back to deriving the key from `md5(mobility_domain/psk)`. That one works too,
-but anyone who knows the passphrase can compute it. Fast transitions between openUF and real
-UniFi APs are not possible: those learn their peers through a Ubiquiti-only hostapd
-extension (PROTOCOL-VALIDATION.md, "802.11r key holders").
+Left unset, `hostapd.sh` keys it on the auth type (`psk` → 1, anything else → 0) and, at 0,
+derives wildcard key holders from `md5(mobility_domain/psk)`. That is deterministic, so
+independent APs sharing an SSID and passphrase arrive at the same key — the same reasoning
+behind the derived mobility domain. Worth knowing: that key is therefore derivable by anyone
+who knows the passphrase, i.e. anyone already on the network; a real UniFi controller
+distributes a random one instead.
 
 **How to tell whether a transition was actually fast**, since nothing in the controller
 shows it — force one and read the target AP's log:
@@ -782,25 +955,15 @@ logread | grep AP-STA-CONNECTED
 followed by a 4-way handshake is the fallback — the client roamed, it just paid full
 authentication for it. `hostapd_cli -i <vap> sta <mac>` shows the negotiated
 `AKMSuiteSelector`: `00-0f-ac-4` is FT-PSK, `00-0f-ac-9` FT-SAE, `00-0f-ac-8` plain SAE.
+openUF reports the same selector to the controller as the client's `is_11r`. The client's
+power-save flag (`state` bit `0x10`) comes from mac80211's debugfs
+(`/sys/kernel/debug/ieee80211/<phy>/netdev:<vap>/stations/<mac>/flags`, line `PS_STA`). Without
+debugfs mounted, or on a radio whose `/sys/kernel/debug/ieee80211/<phy>/hwflags` lists
+`AP_LINK_PS` (ath10k, mt76: the driver tracks power save and does not report it), `state` is
+not sent, and the controller shows power save as off.
 
-If cross-AP roams always fall back to a full handshake and the target logs
-`l2_packet_send - send: No such device or address`, hostapd's FT socket is stale. hostapd
-binds its RRB socket (ethertype `0x88b7`, which carries the PMK-R1 pull and push between APs)
-to `br-lan` once, at start, and keeps it across wifi reloads. If `br-lan` is replaced after
-that (seen once, on an AP that had run for weeks; a clean reboot did not reproduce it), the socket stays bound to the old bridge. Check `/proc/net/packet`: the `Iface` column of the `88b7` row must show `br-lan`'s current
-ifindex (`cat /sys/class/net/br-lan/ifindex`), not `-1`. Fix it with
-`/etc/init.d/wpad restart; sleep 6; wifi up` (`wifi up` alone does not restart hostapd).
-
-openUF does this itself (`rrbguard.lua`). Once a minute it reads `/proc/net/packet`; two
-readings in a row with the `88b7` row on `-1` log `rrbguard: hostapd's 802.11r key-exchange
-socket (0x88b7) has lost its interface`. The restart takes every SSID on the AP down for about
-10 s, and a DFS radio for another 60 s of channel check, while the fault only makes roams
-slower. So openUF runs it when no client is connected, or otherwise during the 04:00 local
-hour, and at most once every 6 hours. `rrbguard: the 802.11r key-exchange socket is bound
-again` confirms the repair. Nothing is spawned while the socket is healthy.
-
-**VLAN-tagged SSIDs** (assigning a WiFi network to a non-native network) need three
-things on the AP, and openUF builds all three:
+**VLAN-tagged SSIDs** (assigning a WiFi network to a non-native network) need two
+things on the AP, and openUF builds both:
 
 1. a tagged sub-device on the uplink — `eth1.<vlan>`;
 2. a **bridge** holding it, `br-openuf<vlan>`, which the VAP joins. This is the part
@@ -808,43 +971,12 @@ things on the AP, and openUF builds all three:
    netifd brings the interface up, `ip link` shows both netdevs, hostapd starts, and a
    client associates and gets *nothing* — because the VAP and the uplink are two
    separate masterless interfaces. Everything looks healthy except `ip link`'s missing
-   `master`;
-3. on swconfig boards, a `switch_vlan` **trunk** so the switch passes the VID at all.
-   Without it an ASIC that filters unknown VIDs drops every frame (confirmed: 100%
-   packet loss on an AR8327 until the entry existed). openUF tags exactly two ports —
-   the CPU port and the uplink socket, the latter found at runtime by
-   `sysinfo.uplink_phys_port()`. That is the whole path a tagged SSID's frames take
-   (`VAP → br-openuf<id> → eth0.<id> → CPU → uplink → gateway`); no LAN socket is on it.
-   If the uplink cannot be resolved openUF leaves any existing trunk alone rather than
-   guessing.
+   `master`.
 
-   **On a DSA board step 3 does not exist and is not needed.** With bridge VLAN
-   filtering off — the OpenWrt default, and the state a `config bridge-vlan`-free
-   `br-lan` is in — the switch passes tagged frames straight through, and the
-   sub-device on the uplink socket (`wan.<vlan>` on an AX3000T) takes its VID
-   before the bridge ever sees it. Steps 1 and 2 are the whole path there.
-
-> **Why not simply tag every socket.** openUF used to, and it broke every untagged
-> wired client behind an AP running a tagged SSID: on the `ar8216`/`ar8226`/`ar8229`/
-> `ar8236` driver family the tag flag is one **global per-port bitmask**, not a property
-> of (port, VLAN), so tagging a socket into VLAN 10 made it egress-tagged in VLAN 1 too
-> and the host plugged into it went deaf while still transmitting. The AR8327 has a real
-> per-(port, VLAN) table and showed none of it. A consequence worth knowing on the
-> global-bitmask chips: a port cannot be untagged in VLAN 1 *and* tagged in VLAN 10, so
-> running a tagged wireless VLAN necessarily leaves the **uplink** socket egress-tagged
-> for VLAN 1 as well. UniFi gateways accept that, and it is confined to the one port
-> facing the gateway. Details in
-> [PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md#a-tagged-ssids-trunk-deafened-every-wired-client-on-the-ap).
-
-> **Keep VLAN ids below the switch's VLAN table size.** netifd has no `vid` option
-> (`strings /sbin/netifd` lists only `vlan` and `ports`), so a `switch_vlan` section's
-> `vlan` value is *both* the table slot and the VLAN id. Small switches have small
-> tables — the TL-WDR3500's AR8229 reports `vlans: 16` in `swconfig dev switch0 help` —
-> and a section naming a slot the hardware lacks is skipped by netifd **silently**.
-> openUF reads that size and logs the mismatch instead of writing config that will be
-> ignored. Whether it actually breaks traffic depends on the ASIC: the AR8327 filters
-> unknown VIDs and needs the entry, the AR8229 forwards them and the SSID works without
-> one. Choosing a VLAN id under 16 keeps both boards properly configured.
+No switch trunk is needed. With bridge VLAN filtering off — the OpenWrt default, and the
+state a `config bridge-vlan`-free `br-lan` is in — the switch passes tagged frames straight
+through, and the sub-device on the uplink socket (`wan.<vlan>` on an AX3000T) takes its VID
+before the bridge ever sees it.
 
 Changing a network's VLAN id, or deleting the WLAN, tears the old bridge and interface
 down again — only `openuf_`-prefixed sections are ever removed.
@@ -855,12 +987,7 @@ down again — only `openuf_`-prefixed sections are ever removed.
 device-level box is ticked the per-port VLAN controls stay greyed out and nothing reaches
 the wire.
 
-openUF applies it only on **swconfig** boards (ath79-era). It writes one
-`config switch_vlan` section per VLAN, named `openuf_swvlan<id>`, translating the
-controller's `untagged`/`tagged`/`exclude` per-port modes into swconfig's port syntax
-(`1`, `1t`, omitted) with the CPU port always tagged in.
-
-**On a DSA board it works differently, and deliberately not via `config bridge-vlan`.**
+**It works by moving the socket, deliberately not via `config bridge-vlan`.**
 The socket assigned to VLAN 10 is moved out of `br-lan` and into `br-openuf10` — the
 bridge that already holds the tagged uplink sub-device `wan.10`, and the IoT VAP if a
 tagged SSID sits on the same VLAN:
@@ -874,14 +1001,22 @@ not a coincidence: they are one broadcast domain and the controller models them 
 network. `br-lan` keeps the uplink socket, the unassigned sockets and the AP's management
 address, untouched.
 
+> **This fork adds that route as a second backend** (`bridge_backend = "vlan_filtering"`,
+> chosen automatically when the uplink already sits in a vlan-filtering bridge) -- see
+> [Controller-owned bridge](#controller-owned-bridge-vlan_filtering-backend) below for how it
+> answers both objections. The per-VLAN-bridge design described here stays the default
+> everywhere else.
+
 The `bridge-vlan` + `vlan_filtering` route was rejected for two reasons, both worth knowing
-if you are tempted to add it: `br-lan` carries the AP's own management address, so turning
-`vlan_filtering` on there means every VLAN — the management one included — must be declared
-exactly right or the device is stranded at the far end of a cable; and it would silently
-fight the tagged-SSID path, since `wan.10` takes VLAN 10 frames before `br-lan` ever sees
-them, so a `bridge-vlan` declaring VLAN 10 would receive nothing while looking perfectly
-correct. The full reasoning, netifd bugs included, is in
-[PROTOCOL-VALIDATION.md](PROTOCOL-VALIDATION.md#why-learning-1-cannot-come-back).
+if you are tempted to add it:
+
+1. `br-lan` carries the AP's own management address. Turning `vlan_filtering` on there means
+   every VLAN — the management one included — must be declared exactly right, or the device
+   is stranded at the far end of a cable. Nothing openUF does should be able to do that.
+2. It would silently fight the tagged-SSID path. `wan.10` is an 8021q device on the `wan`
+   **bridge port**, and `vlan_do_receive()` runs ahead of the bridge's `rx_handler`, so
+   VLAN 10 frames are taken by `wan.10` before `br-lan` ever sees them. A `bridge-vlan`
+   declaring VLAN 10 on `br-lan` would receive nothing while looking perfectly correct.
 
 Scope on DSA: **Native VLAN only.** A bridge gives a port exactly one untagged home, which
 is what a Native VLAN is and what an AP's downstream socket needs. A port given nothing but
@@ -921,11 +1056,12 @@ drops it rather than passing it to the CPU, where the software bridge would have
 it. It is the same one-FDB hazard as the tagged uplink's own `learning '0'`, reached from
 the other side.
 
-The failure is brutal to diagnose because **outbound is perfect throughout**: with learning
-on, DHCP DISCOVERs leave the socket, arrive on the tagged uplink and go out correctly tagged
-— and nothing comes back, not even on the physical port, because a frame dropped in hardware
-never reaches the CPU to be captured, so every counter, every log line and the controller all
-say the port move worked. With learning off: DISCOVER → OFFER → REQUEST → ACK in 2 ms.
+The failure is brutal to diagnose because **outbound is perfect throughout**. Captured on
+an AX3000T with an IKEA Trådfri hub on port 2, learning on: four DHCP DISCOVERs leave the
+socket, arrive on `wan.10`, leave the uplink correctly tagged — and nothing comes back, not
+even on the physical port, because a frame dropped in hardware never reaches the CPU to be
+captured. Every counter, every log line and the controller all say the port move worked.
+With learning off: DISCOVER → OFFER → REQUEST → ACK in 2 ms.
 
 Two consequences worth knowing:
 
@@ -1005,45 +1141,34 @@ running Network 10.6.
 > several link bounces during this investigation stopped transmitting entirely — zero
 > packets in 60 s on a live 100 Mbps link — and only a power cycle brought it back.
 
-Three things must line up or the port is skipped rather than guessed at:
+The port must not be the uplink — reassigning the uplink's VLAN would cut the device off
+the network, so that is refused outright. The uplink is whichever socket the default
+gateway is reached through (found in the bridge FDB); if that cannot be determined,
+**every** port is refused rather than risking the wrong one.
 
-- `dev.conf.vlan` must exist in your modelmap (`cpu_lan` + a `ports` name→number map).
-  Without it openUF has no idea what the physical switch ports are, and guessing strands
-  the device.
-- the port needs a `swport` in `dev.conf.net.ports`, naming its `dev.conf.vlan.ports` key.
-- the port must not be the uplink — reassigning the uplink's VLAN would cut the device off
-  the network, so that is refused outright. On a modelmap that declares sockets rather
-  than netdevs, the uplink is whichever socket the default gateway is reached through
-  (found in the switch's ARL table); if that cannot be determined, **every** port is
-  refused rather than risking the wrong one.
+Inspect the result with `uci show network` and `bridge link`.
 
-Because assigning a port to a VLAN means removing it from the stock VLAN's port list
-(swconfig allows one *untagged* VLAN per port), this is the one place openUF modifies UCI
-sections it did not create: a port moved untagged onto an openUF VLAN loses its untagged
-membership in every other `switch_vlan` section, and an explicit *exclude* drops the
-port's membership from that VLAN. Two safety refusals apply — an exclude that would leave
-the port untagged **nowhere** is ignored, and the management VLAN is never stripped of
-its last downstream port. openUF snapshots the original `ports` strings into `state.json`
-(`swvlan_backup`) before the first change, and `switchvlan.restore()` puts them back.
-Unticking the device-level **Port VLAN** box runs that restore automatically: both gates at
-`disabled` is the explicit off signal, and a push that carries no `switch.*` block at all
-also counts as off **while openUF holds a reversibility ledger** — a device that has had Port
-VLAN on and then has it unticked gets exactly that, a full `system_cfg` with the keys simply
-gone. With no ledger, nothing is torn down, so an older controller cannot trigger a teardown
-openUF never applied. Inspect the result with `uci show network` and
-`swconfig dev switch0 show`.
-
-> The generated UCI is unit-tested, but **openUF has no switch hardware to verify against** —
-> that these sections actually program the switch ASIC, and that
-> `/etc/init.d/network reload` behaves on real ath79, are unconfirmed.
+LuCI's *Network → Switch/VLAN config* page shows "No managed switch found" on these APs:
+it only takes a bridge whose members are all Ethernet or DSA ports, and the controller-owned
+bridge also holds every SSID. `luci-theme-openuf` replaces it with a copy that leaves the
+SSIDs out and shows the ports and VLANs. Port VLANs on an adopted AP are still the
+controller's (*Ports* in UniFi): the next push that changes the network model rewrites what
+the page changes.
 
 **Band Steering** has two switches in the controller: the per-WLAN toggle, and the AP's
 own setting in its device panel (Off / Prefer 5G / Balance). Either one turns steering on
 for the whole AP, because usteer is a single daemon. Balance is not supported (see
 Troubleshooting). Steering itself is `usteer`'s decision, not openUF's: openUF configures the daemon
-(`usteer.local.band_steering_interval`: `0` when off, unset so usteer's own
-default applies when on) and forces 802.11k neighbour reports plus
-`bss_transition=1` onto every VAP, since usteer cannot work without them. If a client is
+(`usteer.local.band_steering_interval`: `0` when off, and the daemon is stopped unless
+Roaming Assistant needs it; unset when on, so usteer's own default applies) and forces 802.11k neighbour reports plus
+`bss_transition=1` onto every VAP, since usteer cannot work without them. Settings of your
+own go in the device's own usteer section, not in `local`. `/etc/init.d/usteer` merges every
+section into one config and sends each list option from each section, even an empty one,
+and usteerd keeps the last copy, which is `local`'s. So openUF copies `ssid_list` and
+`event_log_types` from the other sections into `local` (and `aggressiveness_mac_list`, see
+§ Lock to Access Point), and restarts usteer only when the copy changes. An edit to them is
+picked up on the next WiFi config push. `ubus call usteer get_config` shows what usteerd
+actually uses. If a client is
 not being steered, check `ubus call usteer get_clients` for a 5 GHz sighting of it and
 `ubus call hostapd.<iface> get_clients` for its `rrm` bits and the BSS-Transition bit in
 `extended_capabilities` — a client with neither cannot be steered by any AP, and usteer's
@@ -1053,8 +1178,9 @@ not a useful health check. A successful steer looks like
 
 **Roaming Assistant** (Settings → WiFi → *WLAN* → Advanced, 5 GHz) moves a weak client to
 an AP that hears it clearly better. It does nothing to a client that has no better AP to go
-to. It is per WLAN and runs in openUF (`openuf/roamassist.lua`), not in usteer, because usteer's own
-roam trigger can only be switched on for the whole device. For each client on a WLAN with it on:
+to. It is per WLAN and runs in openUF (`openwrt/roamassist.lua`), not in usteer, because
+usteer's own roam trigger can only be switched on for the whole device. For each client on a
+WLAN with it on:
 
 1. Its signal has been below the WLAN's threshold for 30 s, it has been associated for at
    least 60 s, and it was not moved in the last 120 s.
@@ -1066,10 +1192,21 @@ roam trigger can only be switched on for the whole device. For each client on a 
    back. That is also how a client without 802.11v gets moved.
 
 It needs `usteer` running on every AP (openUF starts it whenever Roaming Assistant or Band
-Steering is on) and a full `wpad` build. Each action is logged:
-`logread | grep roamassist`. usteer's readings are up to two minutes old, so a client that has
-just walked away can be pointed at an AP that is no longer better. The disassociation then
-lets it pick for itself, which is where a UniFi AP would leave it too.
+Steering is on, with band steering itself left off when only Roaming Assistant asks) and a
+full `wpad` build; like Band Steering, it forces 802.11k and `bss_transition=1` onto every
+VAP while it is on. The AP never leaves its channel for this: the readings are the ones
+usteer already shares between APs. Each action is logged: `logread | grep roamassist`.
+A refusal is normal and not a failure: on real hardware a client at −80 dBm answered
+`BSS-TM-RESP <sta> status_code=4`, was disassociated by openUF and reassociated on the other
+AP within a second, at −61 dBm. Whether a client answers at all is not predictable from the
+BSS-Transition bit in its `extended_capabilities` — that client did not advertise it.
+usteer's readings are up to two minutes old, so a client that has just walked away can be
+pointed at an AP that is no longer better. The disassociation then lets it pick for itself,
+which is where a UniFi AP would leave it too.
+
+The controller only sends this setting to a device that claims `wifi_caps2` bit `0x20`,
+which openUF does. A device adopted before that claim gets it on its first start after the
+upgrade: the release asks the controller for its whole configuration again.
 
 | Setting | Meaning |
 |---|---|
@@ -1103,14 +1240,18 @@ it beacons (OUI `00:15:6d`, its device MAC in TLV `0x81`), so on a mixed site op
 as a UniFi AP of the site. The reverse does not hold: a real UniFi AP still reports openUF APs
 as third-party, since openUF does not beacon Ubiquiti's element. A UniFi AP that belongs to a
 different site is tagged too; the controller finds no such device in this site and falls back
-to its usual SSID check, so it changes nothing there. The element is read once per BSSID,
-not every heartbeat: a sibling's tag is kept for an hour, and a BSS without one is read again
-after ten minutes. So an AP that starts beaconing the element under a BSSID already seen (a
-neighbour just switched to openUF) can stay flagged for up to ten minutes.
+to its usual SSID check, so it changes nothing there.
+
+The element is read back from the kernel's scan cache with ucode's `nl80211` module, which
+OpenWrt's own wifi scripts depend on, and not from `iw`: OpenWrt's `iw` build does not print
+vendor elements it does not know, `-u` or not. `uci get wireless.<section>.vendor_elements`
+shows the element an AP beacons: `dd0d026f556f554601` followed by its device MAC.
 
 openUF closes that gap the way Ubiquiti's Channel AI describes — *"neighbor reports and
 automated RRM scans"* — rather than by scanning. Every `rrm_request_interval` seconds
-(default 3600) it asks **one** 802.11k-capable client for an active beacon measurement: the
+(default 3600: hostapd logs every report it receives as ~15 long `BEACON-RESP-RX` lines,
+which at 600 took three quarters of the logread buffer, and the controller keeps a reported
+neighbour about a day) it asks **one** 802.11k-capable client for an active beacon measurement: the
 *client* leaves the channel, sweeps, and reports what it saw, while the AP keeps serving.
 One answer returned 15 BSSes across both bands at once, and a client sitting on 5 GHz
 routinely reports 2.4 GHz too — so a single report enriches both radios. It took that
@@ -1119,7 +1260,7 @@ empty 5 GHz list from 0 neighbours to 4, one of them an AP the radio cannot hear
 | Setting | Meaning |
 |---|---|
 | `rrm_enrichment` | `true` by default. Set `false` to never send a beacon request. Switching it off also tears down the background collector on the next cycle, and `/etc/init.d/openuf stop` does the same |
-| `rrm_request_interval` | Seconds between requests, across all radios and clients combined — they are asked one at a time, round-robin. Default 3600. hostapd writes each answer to syslog as ~15 long `BEACON-RESP-RX` lines, so a short interval pushes everything else out of `logread`. The controller keeps a reported neighbour for about a day, so going below an hour buys nothing visible |
+| `rrm_request_interval` | Seconds between requests, across all radios and clients combined — they are asked one at a time, round-robin |
 
 Reports are collected two ways, into one spool, `/tmp/openuf-rrm.jsonl`, which openUF
 drains and truncates on every inform:
@@ -1132,13 +1273,6 @@ drains and truncates on every inform:
   security and channel width come from. A monitor exits when its interface is torn down
   (`wifi down`/`up`, or a config push that rebuilds it), and openUF starts a new one within
   a minute. A `wifi reload` that changes nothing keeps them. Each uses about 0.9 MB.
-  The same hook also passes hostapd's `DFS-*` events, for the radar report below; it drops
-  everything else, so the spool stays beacon reports and DFS lines only.
-
-Because the monitors are the only source of the DFS radar event, they also run when a radio
-is on (or can land on) a DFS channel with `rrm_enrichment` off — see
-[DFS radar reporting](#dfs-radar-reporting). The `ubus subscribe` child is not started in
-that case: the radar event comes off the control socket.
 
 hostapd sends every report both ways, and the two copies can reach the spool on different
 informs. A bodiless copy never erases the SSID, security, width or channel the full one
@@ -1189,234 +1323,160 @@ Rows sourced this way carry what the client's report proves, and no more:
 - **Channel** is the primary from HT operation. Clients put an 80 MHz BSS's *centre*
   channel (42 for a BSS on 36) in the report itself.
 
-Two kinds of reported BSS are left out. One is **this AP's own BSSIDs**, which its clients
-naturally report. The other is **sibling APs** (usteer's remote nodes). A UniFi AP never lists
-either. Once the SSID is known, an untagged sibling carrying the site's SSID is what the
-controller flags as *"a third-party access point broadcasting your network's SSID"*. If usteer
-is not answering, a reported BSS carrying one of this site's SSIDs is listed **without** its
-name, for the same reason. The trade: an evil twin that only a client ever saw is not flagged.
+This AP's own BSSIDs, which its clients naturally report, are left out: a UniFi AP never
+lists its own. **Sibling openUF APs** stay in, with their SSID: they are tagged `is_unifi` from
+the BSSIDs siblings announce on the LAN (`sibling_exchange`), as every other sighting of them is.
+Any other reported BSS carrying one of this site's SSIDs is listed **without** its name, since an
+untagged BSS with the site's SSID is what the controller flags as *"a third-party access point
+broadcasting your network's SSID"*. The trade: an evil twin that only a client ever saw is not
+flagged.
 
 To see the machinery: `pgrep -f 'ubus subscribe hostapd'` and `pgrep -f '[h]ostapd_cli'` are
 the collectors that receive the reports (hostapd delivers them as ubus *notifications*, so `ubus listen` shows nothing
 — only `ubus subscribe` works), `logread | grep BEACON-REQ-TX-STATUS` shows requests going
 out, and `/tmp/openuf-rrm.jsonl` is the spool, drained on every inform.
 
-Use the controller's Airtime Scan ("Scan Now", the `spectrum-scan` command) when you want
-a full sweep with per-channel utilization and noise. A UniFi AP takes its WLANs down for
-the scan (minutes, per the controller's warning) and uses Qualcomm spectral analysis.
-openUF keeps the WLANs up: it scans one channel at a time (`iw dev <if> scan freq <f>
-duration 200 ap-force`, about 200 ms away), goes back to its own channel for 0.3 s, and
-moves on. Clients see round trips of a few hundred ms during their band's part of the
-scan, but stay connected; a two-band AP takes about 30 s. The figures come from the
-radio's channel survey (busy time over that 200 ms listen, and the noise floor), so they
-are coarser than a UniFi AP's: good for spotting a busy channel, not for identifying an
-interferer. The log shows `inform: cmd: spectrum-scan`.
-It's in AirView → Environment → Airtime Scan. The AP reports the scan as running for the
-length of the sweep, and the controller refuses a second request until then.
-A refusal that lasts much longer means the AP isn't informing. The panel keeps showing
-"Scanning..." until you reload the page; the results are there after the reload. The
-controller's own scan settings in the payload (`spectrum-cfg`) are not applied.
+Use the controller's Airtime Scan ("Scan Now" in AirView → Environment, the `spectrum-scan`
+command) when you want a full sweep with per-channel utilization and noise. A UniFi AP
+takes its WLANs down for the scan and uses Qualcomm spectral analysis; openUF keeps the
+WLANs up and scans each channel on its own (`iw dev <if> scan ap-force freq <f> duration
+200`, about 200 ms away), back on its own channel for 0.3 s before the next. The figures
+come from the radio's channel survey (busy time over that listen, and the noise floor), so
+they are coarser than a UniFi AP's: good for spotting a busy channel, not for identifying an
+interferer. The controller refuses a second request while the scan runs, and its panel
+keeps showing "Scanning..." until you reload the page. The controller's own scan settings
+in the payload (`spectrum-cfg`) are not applied. (`ap-force` sweeps the same channels as a
+plain scan on both tested boards, and it guards against a driver that refuses to scan on a
+beaconing AP.) A radio where iw refuses logs `spectrum-scan: iw refused to scan <if>`, and
+reports only the survey counters it already had.
 
-The controller's `scan` command (REST `cmd/devmgr {"cmd":"scan","mac":…}`, optionally with
-`radio_name` or `freq`) and Radio AI's full scan (`scan_band`) also sweep for real: openUF
-runs `iw dev <if> scan ap-force` on the requested radio or band before the next inform.
-Each request is logged, e.g. `inform: scan_band: scanned 1 of 1 radio(s)`, and an iw
-refusal is logged as `iw refused to scan <if>`.
+Every such sweep runs in **chunks of four channels** (`iw dev <if> scan ap-force freq …`),
+one chunk at most every 5 seconds, so a radio with clients is never off its channel for
+more than about half a second at a time: a whole band in one go keeps an AP-only radio
+silent for seconds, long enough for every client to give it up (seen on the yesrab fork,
+whose chunking this is). The channel list is the radio's usable channels from
+`iw phy#N info` (disabled ones left out); where it cannot be read the band is swept in one
+go, as before. While a sweep is running the daemon informs every 5 seconds, whatever the
+controller's interval, and `spectrum_scanning` is true until its last chunk.
+`logread | grep swept` shows the chunks (`swept 4 channel(s), 2 passive on wlan1 (12
+channel(s) left)`); a 5 GHz band is six or seven chunks, about half a minute. The
+idle-radio sweep (`idle_scan_interval`) is not chunked: it runs only on a radio no client
+is on.
 
-### Auto-channel limits: the site's DFS switch and channel blacklist
+A `quick-scan` (the RF view's Scan, the nightly 03:00 scan and Radio AI's prescan) runs the
+same sweep, but on the radios of the band it names only (`scan-band` 0/1/2 = 2.4/5/6 GHz),
+and not inside the command handler: the next inform reports `quickscan_scanning: true`, the
+sweep starts once that inform has gone out, the flag stays true while its chunks run, and
+the inform after the last chunk carries the results with the flag false. The controller sends it only to an AP claiming `wifi_caps2` `0x80`,
+which openUF claims, so the AP also takes part in the controller's 03:00 sweep (while Radio
+AI is off) and Radio AI's prescans (see PROTOCOL-VALIDATION.md, *Quick scan*). The pending scan
+is held in memory: a daemon restart in between drops it, and the controller marks it done.
 
-Settings → Radios carries two things that only matter while a radio is on **Auto**: whether
-auto-channel may land on a DFS channel, and a per-band list of channels it must not pick.
-The controller sends both per radio, and only to a device claiming `wifi_caps2` `0x10`
-(`supportsAcsDfs()`), which openUF does since 2026-10-27.
+Radio AI's **neighbour isolation** (per band) needs every AP on the band to claim
+`wifi_caps2` `0x200` ("neighbour in scan"). A claiming AP gets no `scan_band` command during
+a Radio AI run: the controller builds its isolation matrix from the sibling sightings every
+inform's `scan_radio_table` already carries (`is_unifi` entries, kept an hour). openUF's come
+from the sibling scans and idle sweeps above, so it claims the bit while
+`idle_scan_interval` is above 0, or `sibling_scan_interval` is with `sibling_exchange` on
+(without the exchange there are no sibling channels to scan). Only openUF siblings are tagged
+as UniFi neighbours; a genuine UniFi AP nearby shows as a third-party BSS, and the matrix
+lacks that pair.
 
-| Wire key | When it is sent | UCI (`wifi-device`) | hostapd |
-|---|---|---|---|
-| `radio.<n>.acsdfs=enabled\|disabled` | 5 GHz radio, always | `acs_exclude_dfs` 0/1 | `acs_exclude_dfs` |
-| `radio.<n>.blklst=12,2,13,…` | any radio, only while its channel is `auto` | `chanlist` (+ `openuf_chanlist`) | `chanlist` |
+The **Multicast and Broadcast Blocker** has no hostapd or OpenWrt equivalent — hostapd
+can suppress group-addressed frames wholesale but has no notion of an allow-list — so
+openUF enforces it with nftables, in its own `bridge openuf_bcfilt` table (separate
+from the client-blocking `bridge openuf` table, which is rebuilt wholesale on every
+block/unblock and would otherwise wipe these rules). Frames leaving a filtered SSID are
+dropped unless the *sender's* MAC is allow-listed.
 
-`blklst` is a **blacklist**, and hostapd has no blacklist — only `chanlist`, the list ACS may
-choose from. So openUF inverts it against the channels the radio's regdomain actually allows,
-read from `iw phy` (which already drops what the domain forbids, and openUF drops "no IR"
-channels on top: an AP may not beacon there). The order the controller sends does not matter;
-the list is written ascending.
-
-Three deliberate refusals, each logged:
-
-- **A blacklist that excludes nothing the radio could have used** (say channel 14 in a
-  regdomain without it) writes no `chanlist` at all, instead of churning the band's whole
-  channel list into UCI on every push.
-- **Every channel of the band blacklisted** leaves auto-channel unrestricted: an ACS with no
-  candidate is a radio that does not come up.
-- **A radio on Auto whose UCI declares no `band`/`hwmode`** is left alone. The band would
-  have to be guessed from the channel, and `auto` is not a channel — the guess answers
-  "5 GHz" for every radio, which would hand a 2.4 GHz radio a list of 5 GHz channels.
-
-`openuf_chanlist` records that openUF wrote the list, so when the site clears its blacklist
-(the key simply vanishes) the `chanlist` is removed again — while a `chanlist` set by hand on
-an unstamped radio is never touched.
-
-Both keys are inert on a radio pinned to a fixed channel: they are written, visible in UCI,
-and read by nothing until that radio is switched back to Auto. U7LR 6.8.2 does the same work
-through `wifitool <dev> block_acs_channel`, with the DFS list hardcoded for `acsdfs=disabled`.
-
-### DFS radar reporting
-
-On a DFS channel (52–144) the radio must leave the channel for 30 minutes when it detects
-radar. hostapd does that by itself; what was missing is telling the controller, which
-otherwise logs nothing and the channel change looks unexplained.
-
-openUF reads `DFS-RADAR-DETECTED` off hostapd's control socket — the same
-`hostapd_cli -a /tmp/openuf-bresp.sh` monitors the 802.11k enrichment uses — and sends it
-as the AP's own event:
-
-```
-inform_as_notif = true, notif_reason = "event",
-notif_payload = {event_string = "EVT_AP_RadarDetected",
-                 channel = "100", freq = 5500, vap = "phy1-ap0"}
-```
-
-The controller logs *"&lt;AP&gt; detected radar on channel 100 (5500 MHz)"* under the wlan
-subsystem and raises the matching alert. `channel` is a **string** and `freq` a number,
-because that is how 10.6.106's handler reads them; with either missing the controller
-discards the event. The channel is derived from `freq`, which is where the radar was seen —
-not the BSS's centre frequency (`cf1`), which differs on a wide channel.
-
-Nothing to configure. There is no switch for it, and it does not need
-`capability=notif,notif-assoc-stat`: unlike the connection and roam reports, the controller
-asked for nothing. Because the monitors are the only producer, they are kept running
-whenever a radio is on a DFS channel or set to `auto` on 5 GHz, even with
-`rrm_enrichment = false` and `assoc_tracker = false`.
-
-What to expect in the log:
-
-```
-inform: DFS radar detected on channel 100 (5500 MHz) on phy1-ap0 -- reported to the controller
-```
-
-One detection is reported once even when the radio carries several BSSes (hostapd prints the
-event on each BSS's socket). At most 16 events are queued if the controller is unreachable;
-a failed POST keeps them for the next heartbeat.
-
-The other DFS events (`DFS-CAC-START`, `DFS-CAC-COMPLETED`, `DFS-NEW-CHANNEL`,
-`DFS-NOP-FINISHED`) reach the spool too, and are dropped: 10.6.106 has no handler for them.
-They are let through so that `grep DFS- /tmp/openuf-rrm.jsonl` after a hostapd start on a
-DFS channel shows the path works without waiting for real radar.
-
-### WiFi Connectivity (connection stages)
-
-Insights → AirView → Connectivity shows each client connection as five stages:
-Association, Authentication, DHCP, DNS and Success, each with a success ratio and a latency.
-The controller can't see any of that itself. A UniFi AP sends one *notif inform* per
-connection attempt (`STA_ASSOC_TRACKER`), and the controller asks for them in every
-`mgmt_cfg` (`capability=notif,notif-assoc-stat`). Without them the view reads 0 % with
-"Initial WiFi Connections (0)". That means no data, not failed connections.
-
-| Setting | Meaning |
-|---|---|
-| `assoc_tracker` | `true` by default, and also when the key is missing from an older `conf.lua`. Set `false` to send nothing; the nft table is removed on the next cycle |
-
-Where each stage comes from:
-
-| Stage | Source |
-|---|---|
-| Association, Authentication | hostapd's `auth`, `assoc` and `sta-authorized` ubus notifications, timestamped from `/proc/uptime` as they arrive (10 ms resolution). `sta-authorized` arrives after the 4-way handshake |
-| DHCP | The station's first DHCP request, and the server's unicast ACK or else the station's first frame from a real IPv4 source address |
-| DNS, Success | The station's first DNS query and the first DNS answer sent back to it, with a packet count |
-
-The DHCP and DNS stages come from `table bridge openuf_assoc`. It has five dynamic sets keyed
-on the station MAC (`dhcp_req`, `dhcp_ack`, `ip_seen`, `dns_q`, `dns_resp`), filled with
-`add`, which never refreshes an element. So each element's remaining `expires` dates the
-first matching frame to the millisecond, and its counter counts the rest. The table never
-drops or changes a frame. When hostapd reports a new 802.11 authentication, the event collector
-clears that station's elements right away, before the station can send any data.
-
-The verdict is reached once the station gets a DNS answer (success). Otherwise it comes when
-the station leaves or 30 s have passed since it was authorized:
-
-- DHCP request but no lease: a DHCP failure.
-- DNS queries but no answer: a DNS failure.
-- Associated but never authorized (a wrong passphrase looks like this): a WPA failure.
-- A fast (802.11r) roam with no DNS: "soft failure, roam". The controller counts that as
-  a successful connection.
-- Each decided attempt is logged as `openuf: assoctrack: <mac> <ifname> vap=<vap> -> <verdict>`
-  (`logread | grep assoctrack`; `no event` is the rule below).
-- **No DHCP and no DNS at all: nothing is sent.** The controller's Success rule needs DNS
-  answers, so a sensor that never resolves a name can't pass, and openUF won't invent a
-  pass or a failure for it.
-
-The collector is the same detached `ubus subscribe hostapd.*` that 802.11k enrichment uses
-(above). It now runs from `/tmp/openuf-collect.sh` and keeps running while either feature is
-on. Each notif is its own inform POST, sent after the regular heartbeat, at most 8 per
-cycle; a backlog of more than 64 drops the oldest.
-
-Troubleshooting:
-- `grep notif_assoc_stat /etc/openuf/state.json` must read `true`. It is set from the
-  controller's `mgmt_cfg`. A Force Provision resends it.
-- `nft list table bridge openuf_assoc` must exist. Its sets fill while a client connects.
-- `head /tmp/openuf-rrm.jsonl` lines must start with a number (the uptime stamp). Unstamped
-  lines come from a collector an older openUF started. It is replaced within a minute.
-  The file is drained every 250 ms and the collector drops probe requests, which nothing
-  reads, so it is usually empty; lines appear around a connection or a beacon report.
-- A connection on a BSS that has no `vap_table` entry yet (right after a config push) is
-  dropped rather than filed under the wrong band.
-
-**Multicast Suppression** (Settings → WiFi → [WLAN] → Advanced; the control the
-controller used to call "Multicast and Broadcast Blocker") has no hostapd or OpenWrt
-equivalent — hostapd can suppress group-addressed frames wholesale but has no notion of
-an allow-list, a bypass list or a rate — so openUF enforces all of it with nftables, in
-its own `bridge openuf_bcfilt` table (separate from the client-blocking `bridge openuf`
-table, which is rebuilt wholesale on every block/unblock and would otherwise wipe these
-rules).
-
-The control has three positions and **the wire never names the mode**. Both keys need
-`wifi_caps2 0x400000`, which openUF claims:
-
-| Mode | Keys that arrive | What openUF does |
-|---|---|---|
-| Off | nothing | nothing; the table is left empty |
-| Conservative | `wireless.<n>.multicast.suppressor=enabled` **only** | rate-limits group-addressed frames leaving that VAP: `limit rate over 100/second burst 50 packets drop` |
-| Aggressive | that key **plus** `wireless.<n>.bcfilt.status`, `bcfilt.bypass_types=ARP\|NSNA\|DHCPV4\|DHCPV6` and the `bcfilt.<k>.mac` allow-list | drops group-addressed frames leaving that VAP unless the *sender's* MAC is allow-listed, after letting the four bypass types through |
-| (older controller) | `bcfilt.status` with no suppressor key | the pre-2026-10 behaviour, unchanged — see the warning below |
-
-So Aggressive is distinguished from Conservative by the *presence of the `bcfilt` block*,
-not by any value. The allow-list the controller sends is not only the one you typed: it
-adds every UniFi device MAC in the site and the gateway's LAN peers, which is why the UI
-says gateways need not be added by hand.
-
-The four bypass types become four `accept` rules placed **before** the drop, each pinned
-to that VAP's own `oifname`: `ether type arp`, `ether type ip6 icmpv6 type { nd-neighbor-solicit,
-nd-neighbor-advert }`, `ether type ip udp dport { 67, 68 }` and `ether type ip6 udp dport
-{ 546, 547 }`. That is what makes the controller's own description true — "Limits
-multicast and broadcast traffic to reduce WiFi airtime usage. Conservative prevents
-storms; Aggressive blocks all except DHCP and ARP".
-
-**The Conservative rate is openUF's own number, not the controller's.** The wire carries
-a bare `enabled` with no parameters, so 100 packets/second with a 50-packet burst was
-chosen against a measurement: both production bridges carry 1.4–3.6 multicast frames per
-second at idle (read from `/sys/class/net/<br>/statistics/multicast` over 60 s on an
-ath79 and a filogic board), so the ceiling sits roughly 30× above real discovery traffic
-while still capping what a storm can take. It is a ceiling, not a target. If your site
-needs a different one, it is the `LIMIT_RATE`/`LIMIT_BURST` pair at the top of
-`openuf/bcfilter.lua`.
-
-This needs **`kmod-nft-bridge`**, as does the L2 hardening below. The `meta pkttype` rule
-is a bridge-family `meta` match, and `nft_meta_bridge` is a separate module that
+This needs **`kmod-nft-bridge`**, as does the L2 hardening below. The drop rule is
+a bridge-family `meta` match, and `nft_meta_bridge` is a separate module that
 `nftables` does not depend on — absent from a stock filogic *and* ath79 image alike. The
 failure is quiet in the worst way: the table, the chain and the per-VAP allow-list set
-are all created and populated, and only that rule is rejected, so the control reads
+are all created and populated, and only the drop rule is rejected, so the control reads
 as enabled in the controller and `nft list table bridge openuf_bcfilt` shows a table that
-filters nothing. openUF logs `nft rejected the pkttype rule for <ifname> -- install
+filters nothing. openUF now logs `nft rejected the drop rule for <ifname> -- install
 kmod-nft-bridge` when this happens.
 
-> **A controller that sends no bypass types still breaks DHCP for wireless clients
-> unless you add the DHCP server's MAC to the excepted-devices list.** That is Ubiquiti's
-> own documented behaviour for the older control, and openUF reproduces it faithfully
-> rather than inventing an exemption that controller never asked for — a silent exemption
-> would be harder to debug than the documented breakage, and would change a WLAN that was
-> working as documented. Aggressive on a current controller does send the bypass types, so
-> there the carve-out is the controller's instruction, not openUF's guess. Inspect the live
-> rules with `nft list table bridge openuf_bcfilt`.
+> **This deliberately breaks DHCP for wireless clients unless you add the DHCP server's
+> MAC to the excepted-devices list.** That is Ubiquiti's own documented behavior for
+> this control, so openUF reproduces it faithfully rather than adding DHCP/ARP
+> exemptions of its own — a silent exemption would be harder to debug than the
+> documented breakage. Inspect the live rules with `nft list table bridge openuf_bcfilt`.
+
+The **Multicast Suppressor** (WiFi → Advanced → Multicast Suppression, 10.6) lives in the
+same table. Aggressive is the blocker with the controller's exemptions: ARP, IPv6
+neighbour discovery and DHCPv4/v6 are accepted ahead of the drop, and the controller adds
+every device of the site to the allowlist ("Aggressive blocks all except DHCP and ARP,
+unless a device is allowlisted"). Conservative ("prevents storms") arrives with no
+parameters at all, so openUF rate-limits group-addressed frames to each such VAP at 200
+per second, burst 400 (`bcfilter.lua` `STORM_PPS`/`STORM_BURST`); traffic below that passes
+untouched. Checked in a container against real `nft` and real bridged traffic: UDP
+broadcasts to port 67 pass under Aggressive and to other ports are dropped, and a
+2000-frame burst under Conservative delivers about 400. The ARP, IPv6 neighbour discovery
+and DHCPv6 accepts are read in nft's documentation and load without error, but were not
+observed passing traffic (no ARP, ND or DHCPv6 sender in the container).
+
+### WLAN Schedule
+
+The controller's schedule (WiFi → Advanced → WiFi Blackout Schedule) reaches the AP as
+`wireless.<n>.schedule_<day>.<i>=HHMM-HHMM` blocks. openUF claims `fw_caps` `0x1000` (every
+block of a day, not just the last) and `0x400000` (the blackout blocks as they are, with
+`schedule_invert=enabled`; without it the controller sends their complement, the times the
+WLAN is on). Both readings are implemented (`unifi/schedule.lua`).
+
+- The section carries the schedule (`openuf_schedule`, e.g. `inv|mon=2200-2359|tue=0000-0700`),
+  so nothing else is kept and a restart resumes it.
+- The inform loop checks it once a minute. Off: `disabled=1` and `openuf_sched_off=1`. On:
+  back to `disabled=0`, but only where that mark says the schedule took it down, so a WLAN
+  the controller itself disabled stays down. One `wifi reload` covers every change; on
+  25.12's hostapd.uc should remove or add just that BSS and leave the radio and its other
+  WLANs up (read in source, not observed on hardware).
+  The WLAN's speed limit (tc) and filters are rebuilt once its netdev exists again (checked
+  every heartbeat, at most 5 minutes).
+- Times are the device's local time, which is the controller's timezone when
+  `system_timezone` is on (`date` on the AP shows it). A pushed timezone change applies
+  without a restart: musl re-reads `/etc/TZ` on every conversion (checked in the 25.12
+  rootfs). Until the clock is set (before 2024: no NTP yet) no schedule is acted on and
+  scheduled WLANs stay up.
+- An enabled schedule with no valid block is ignored and logged, never read as "off all
+  week".
+- Removing the schedule rebuilds the section without it: the SSID comes back.
+
+### SNMP Monitoring
+
+Settings → System → SNMP sends `snmp.status=enabled`, `snmp.version` (`1_2c`, `3` or
+`all`), `snmp.community`, `snmp.location`/`snmp.contact` and, for v3, `snmp.user.1.name`/
+`password`, in every full push; SNMP off is the absence of the block. With `snmpd` installed
+(`apk add snmpd-ssl`), openUF keeps the device's `/etc/config/snmpd` once in
+`/etc/openuf/snmpd.orig` (mode 0600, written only when no copy exists yet), notes whether
+snmpd was enabled (`snmp_was_enabled`), and rewrites the config from the push: one read-only community
+(`com2sec`/`com2sec6`, v1 and v2c groups, a read-all view), one v3 user (`config v3`: SHA
+authentication and AES privacy, the password for both, as UniFi gateways are configured),
+`sysLocation`/`sysContact`, and `snmp_version` for the init script. No community or user
+the controller does not know about is left answering. snmpd restarts only when the push
+changes (`snmp_applied` in `state.json`, a SHA-256 of the settings: the community and
+password are not stored there). Turning SNMP off, which only a full push (one carrying
+`ebtables.status`) can say, restores the kept file and restarts snmpd on it, or stops and
+disables it if it was not enabled before. SNMP on with nothing usable (a v3 password under
+8 characters, v3 on `snmpd-nossl`, a community with quotes or spaces) stops and disables
+snmpd rather than leaving its stock config, which answers `public`, and logs why. Checked against 25.12's real `snmpd-ssl` in a container: the
+controller's community answers, `public` does not, and v3 authPriv SHA/AES answers.
+
+v1/v2c needs no capability bit; v3 is sent only to a device claiming `fw_caps` `0x4000`,
+which openUF claims when `snmpd-ssl` is installed. The agent listens on UDP 161 on every
+interface; an AP in the usual bridged setup has no firewall in front of it.
+
+### Hotspot 2.0 / Passpoint
+
+A Hotspot 2.0 WLAN is an Enterprise WLAN with `aaa.<n>.hs20.*` on top; the controller
+drops it from the push unless the device claims `fw_caps` `0x800000`, which openUF claims
+where hostapd is built with Hotspot 2.0 (`hostapd -vhs20`). openUF writes the whole block
+as raw hostapd lines (table above); hostapd itself refuses Hotspot 2.0 on anything but
+WPA2-Enterprise with CCMP/GCMP. The site's "Passpoint" feature additionally needs RadSec
+(`fw2_caps` `0x80000`), which openUF does not claim: OpenWrt 25.12 has no RadSec client
+(no `radsecproxy` package, and hostapd speaks RADIUS over UDP only), so Passpoint setups
+that need RADIUS over TLS stay unavailable even though the WLANs are no longer dropped.
 
 **Minimum Data Rate** is set per WLAN in the controller but OpenWrt's rate options
 (`basic_rate`, `supported_rates`, `legacy_rates`, `beacon_rate`) are `wifi-device`
@@ -1426,16 +1486,22 @@ it — because the stricter choice would silently lock clients out of a co-hoste
 that was meant to admit them. Give a WLAN its own radio if it needs its floor enforced
 exactly. Note also that the floor is enforced by making it the sole *basic* rate (a
 station must support every basic rate to associate); the "advertising rates" sub-toggle
-additionally trims `supported_rates`. Rate options openUF writes are stamped with an
+additionally trims `supported_rates`. The ladder is taken in rate order and CCK (1, 2, 5.5,
+11 Mb/s) exists only on a 2.4 GHz radio (its UCI `band`), so a 6 or 9 Mb/s floor makes 6 or
+9 basic, never 11. Rate options openUF writes are stamped with an
 `openuf_rates` marker on the radio section: turning the control off (the wire simply
 omits every `minrate_*` key) tears down exactly the marked options, while rate options
 you hand-tuned on an unmarked radio are never touched.
 
 Minimum RSSI is a *radio* setting in the controller UI (Devices → AP → Radios), not a per-WLAN one. The wire value is the dBm threshold + 95; openUF converts it back. It works in two halves, as on a UniFi AP: hostapd ignores probe requests and refuses association below the threshold **+ 3 dB** (`rssi_reject_assoc_rssi`, `rssi_ignore_probe_request` on the `wifi-device`, stamped `openuf_minrssi`), and a connected client whose average signal stays below the threshold for **30 s** is deauthenticated once. Changing the setting restarts that radio, as any `wifi-device` option does. The controller signals *disable* by omitting the whole `stamgr.<n>` block from the next config push; openUF treats that as an explicit off, clears `minrssi_enabled` and removes the stamped hostapd options (the stored threshold stays parked for a later re-enable). Hand-set `rssi_reject_assoc_rssi` values on a radio without the stamp are left alone.
 
-Load balance caps the clients on one radio. 10.6's UI has no control for it, so set it on the device over REST: `PUT /api/s/<site>/rest/device/<device_id>` with the whole `radio_table`, the radio's entry carrying `"loadbalance_enabled": true, "maxsta": <1-200>`. It arrives in the same `stamgr.<n>` block as Minimum RSSI, and openUF stores the cap as `loadbalance_maxsta` on the `wifi-device`. On each heartbeat, a radio with more clients than the cap (over all its SSIDs) has the excess deauthenticated once, the clients with the longest `inactive time` first, as UniFi's firmware does. It refuses no association: a kicked client may rejoin, and the next heartbeat kicks whichever client is then the most idle.
-
-A WLAN's WiFi Blackout Schedule takes it off the air during the windows you set. The controller turns the windows into the times the WLAN is on, one key per block (`wireless.<n>.schedule_<day>.<i>=HHMM-HHMM`), and openUF stores them on the WLAN's `wifi-iface` as `openuf_schedule`. On every heartbeat, a WLAN outside its on-times has its BSS netdevs taken down (`ip link set <bss> down`), as UniFi's firmware does with `ifconfig`. When an on-time starts, they come back up and hostapd is told to start their beacons again (`hostapd_cli raw STOP_AP` + `update_beacon`). Times are the site's timezone, which openUF already applies to the system. Both ends of an on-time count as on, so a blackout from 22:00 takes effect at 22:01. Nothing is taken down until a controller answer has confirmed the AP's clock (`/var/run/openuf.clock-ok`), so a box that booted with a stale clock keeps its WLANs up meanwhile. The BSSes it took down are listed in `state.json` (`sched_vaps_down`), so a restart in between still brings them back. The `syswrapper.sh schedule-action` cron job the controller sends is not installed: the heartbeat does that check.
+Max Clients sits in the same `stamgr.<n>` block (`loadbalance.status`/`loadbalance.maxsta`) and
+is also per radio. openUF stores the cap as `loadbalance_maxsta` on the `wifi-device`. On each
+heartbeat, a radio with more clients than the cap (over all its SSIDs) has the excess
+deauthenticated once, the clients with the longest `inactive time` first, as UniFi's firmware
+does. It refuses no association: a kicked client may rejoin, and the next heartbeat kicks
+whichever client is then the most idle. A `maxassoc` an older openUF wrote (stamped
+`openuf_maxassoc=1`) is removed on the next push; one you set by hand is left alone.
 
 A **WiFi Speed Limit** profile caps each client on the SSID at the profile's rates, not the SSID as a whole, as UniFi firmware does (read from 4.0.15's `libubnt`) and as the controller's UI describes it. Every heartbeat openUF gives each client listed on a limited SSID its own HTB class, matched on its MAC address: download on the SSID's netdev, upload on an IFB device its incoming frames are redirected to. Both directions are queued, with an `fq_codel` leaf per client, so latency stays low at the cap. A client that connected since the last heartbeat shares a class at the WLAN's rate until then. Broadcast and multicast are not shaped. A client's own profile (Clients → *client* → WiFi Speed Limit), and a guest's limit from the portal, arrive as `rate-update` whenever the client connects, roams or reconnects, and replace the WLAN's limit for that client, also on an SSID without one. Two firmware behaviours carried over on purpose: moving a client back to the Default profile lifts its limit altogether until it reconnects (the controller sends `-1`), and the controller's 64 kbps guaranteed minimum is not applied. A client joining or leaving changes only its own class.
 
@@ -1453,36 +1519,9 @@ uci show wireless | grep openuf_
 
 To remove all provisioned SSIDs:
 ```sh
-lua -e "dofile('/opt/openuf/ucihelper.lua').wlan_clear()"
+cd /usr/share/openuf && lua -e "dofile('ucihelper.lua').wlan_clear()"
 # or simply reset-inform and re-adopt
 ```
-
-### Roaming events
-
-Insights → AirView → Roaming lists each client move between APs: Success or Failed (with the
-disconnect time), and the Fast Roaming, Roaming Assistant and Minimum RSSI tags. A UniFi AP
-reports arrivals and departures as they happen (`association`, `sta_leave`, `sta_roam`
-notifs), and the controller pairs the two within 10 s. openUF does the same whenever it sends
-the connection-stage notifs above, and only then claims `wifi_caps2` `0x2000`, which tells the
-controller to use those reports instead of guessing roams from heartbeats.
-
-| Event | Sent by | When |
-|---|---|---|
-| `association` | the new AP | hostapd reports the client authorized; carries the signal and the auth algorithm (`ft` = Fast Roaming) |
-| `sta_leave` | the old AP | hostapd reports a disassociation; carries why openUF sent it away, if it did (Minimum RSSI kick, Roaming Assistant) |
-| `sta_roam` | the old AP | the client's address arrives from the uplink while hostapd still lists it: it is behind another AP now |
-
-- A departure arriving more than a second before its arrival makes the roam Failed, so these
-  are sent the moment they happen, not with the 10 s heartbeat. The inform daemon looks at the
-  event collector every 250 ms for that.
-- The `sta_roam` signal comes from `bridge monitor fdb` (package `ip-bridge`), started with
-  the event collector. A client roaming by 802.11r tells its old AP nothing, and hostapd keeps
-  it listed for 6–40 s, past the controller's 10 s window. Without `ip-bridge` such roams are
-  still reported by the new AP, but the old AP's late `sta_leave` misses the pairing and the
-  roam is not listed.
-- A move between the bands of one AP is not a roam, as on a UniFi AP.
-- Turn it off with `assoc_tracker = false` (it goes with the connection stages). The capability
-  bit goes too, and the controller falls back to guessing roams from heartbeats.
 
 ### L2 hardening: BPDU and VLAN-tag drop on the SSIDs
 
@@ -1505,7 +1544,8 @@ The intent and the VAP list are recorded in `state.json` (`l2guard`), and the ta
 rebuilt on every start. The daemon also re-reads the VAP list once a minute and rebuilds
 when it changed. That covers an SSID added by a push whose `wifi reload` had not
 finished yet, and wireless coming up after the daemon at boot. A factory reset
-(`setdefault`, or `syswrapper.sh reset-inform`) removes the table.
+(`setdefault`, or `syswrapper.sh reset-inform`) removes the table, and so does
+`option l2guard '0'` at the next start.
 
 Needs **`kmod-nft-bridge`**: `iifname`/`oifname` in the bridge family live in
 `nft_meta_bridge`. Without it every rule is rejected and openUF logs
@@ -1514,180 +1554,6 @@ Needs **`kmod-nft-bridge`**: `iifname`/`oifname` in the bridge family live in
 ```sh
 nft list table bridge openuf_l2guard
 ```
-
-### Guest portal (Hotspot): ⚠️ lab-validated only
-
-Never run against a real guest WLAN on hardware; treat it as a preview. It turns on by
-itself when the controller pushes a guest WLAN with the portal enabled
-(`redirector.status=enabled` plus the guest `ebtables.*` rules). It turns off, removing
-everything, when the portal or the guest WLAN goes away, or on a factory reset.
-
-**What runs.** `guestportal.lua` builds two nftables tables from the pushed rules.
-
-`bridge openuf_guest` hooks every live netdev of the guest WLANs. For an unauthorized guest:
-- **Allowed:** EAPOL, the portal's ports on the controller, broadcast DHCP, ARP and DNS.
-- **Dropped:** IPv6, other broadcast, multicast, and the restricted subnets
-  (`10/8`, `172.16/12`, `192.168/16` by default).
-- **Plain HTTP:** marked and handed to the bridge's own IP stack.
-- **Everything else:** dropped.
-
-A MAC in the `authorized` set (filled from `state.json`'s `guest_authorized`) may reach
-any host other than the AP, but the restricted subnets still apply.
-
-**The walled garden ("Pre-Authorization Access").** The controller splits the site's
-`allowed_subnet_<n>` / `restricted_subnet_<n>` list by what each entry *looks like*, not
-by which list it is in, and sends the two halves by different routes:
-
-| Entry | How it arrives | What openUF does |
-|---|---|---|
-| IP or CIDR | `ebtables.<n>.cmd` — `-I GUESTIN -p 0x800 --ip-dst <net> -j ACCEPT` and its `-I GUESTOUT … --ip-src` twin, or `-A GUESTIN … -j DROP` for a restricted one | one `ip daddr … accept` / `ip saddr … accept` / `ip daddr … drop`, above every drop (allowed) or among the restricted-subnet drops |
-| domain name | `dnsmasq.walled_garden.1.site.<n>.{allowed,restricted}`, plus empty `ALLOWED_DOMAIN_IN` / `ALLOWED_DOMAIN_OUT` / `RESTRICTED_DOMAIN_IN` chains the firmware would fill | resolved on the AP with `nslookup`, then the same rules inline |
-
-Two traps worth knowing:
-
-- **An IP entry carries no port**, unlike the portal's own accepts (`8880`, `8843`,
-  `8881`). A parser that requires one reads both the entry and the egress rule that lets
-  its replies back as unknown shapes and silently enforces neither.
-- **Re-resolution is on the controller's own cadence.** Along with the garden it pushes
-  `*/10 * * * *  syswrapper.sh refresh-walled-garden 1`. openUF does that work in the
-  inform loop (`GUEST_WG_INTERVAL`, 600 s) and on every config push, so `sysconf.lua`
-  installs no crontab line for the job — the same treatment `syswrapper.sh
-  schedule-action` gets. Each name is asked twice per round, as the firmware's
-  `walled_action.sh` does, so a round-robin record does not shrink the set.
-
-`nslookup` **blocks**, and the inform loop is single-threaded, so the garden is bounded
-on three sides — a dead resolver must not cost the AP its heartbeat:
-
-| Bound | Value | What it does |
-|---|---|---|
-| `guestportal.WG_MAX_SITES` | 32 per list | names past it are dropped with a log line naming the first one |
-| `inform.GUEST_WG_BUDGET` | 5 s per pass | past it no further name is asked; the rest keep their last answer, exactly as a name that failed to resolve does. One name can overrun by a single lookup |
-| the name list's signature | — | a push repeats the whole garden whether or not it changed, and a Force Provision loop repeats it every few seconds. An unchanged list inside the refresh window is not re-asked at all |
-
-A pass that ran out of time opens a two-minute window (`GUEST_WG_RETRY`) instead of the
-usual ten, so the names it never reached are picked up soon — without letting the pushes
-in between re-ask. On the Archer C5 a blackholed lookup takes 5 s (musl's resolver cap),
-so the worst a push can cost is about 10 s.
-
-The answers live in `state.json` as `guest_wg_ips` (`{allowed = {name = {ip, …}},
-restricted = …}`), which makes two things true: a reboot rebuilds the rules from the last
-good answers instead of waiting on DNS, and a name that *stops* resolving keeps the
-addresses it had. A name that has never resolved is simply not enforced, and the log says
-which one.
-
-`ip openuf_guest` redirects the marked HTTP to port **8820**. The inform daemon answers
-there between heartbeats with a `302` to the controller's portal, adding:
-- `?id=<guest MAC>`, looked up in `/proc/net/arp`;
-- `&ap=<AP MAC>`;
-- `&t=<now>`: the controller refuses a `t` more than 60 s off its own clock, so the AP's clock must be right;
-- `&url=<what the guest asked for>`;
-- `&ssid=…`.
-
-Logging in on the portal makes the controller send `authorize-guest`. The guest is let
-through within one heartbeat.
-
-When a guest's authorization ends (`unauthorize-guest`: an admin revoked it, it expired or
-it went over its quota), openUF takes the MAC out of the `authorized` set and disconnects the
-guest from every SSID, as UniFi firmware does. On reconnecting, the device's
-captive-portal check runs again and shows the portal. A repeat for the same MAC within 60 s
-is not kicked again.
-
-**Per-guest speed limit.** When a guest is authorized with a limit (a REST
-`authorize-guest` with `up`/`down` in kbps, or the guest's user group), the controller
-sends `rate-update` right after `authorize-guest`, and again whenever the guest reconnects.
-It is a client's own WiFi Speed Limit like any other (see "WiFi Speed Limit" above): a
-queue per direction for that MAC, `-1` meaning unlimited that way.
-
-**Without the controller (`selfrun_guest_mode`).** Every `mgmt_cfg` carries
-`selfrun_guest_mode`. It is `pass` unless the site's `config.properties` sets
-`config.selfrun_guest_mode` to something else, and then it is `off`. openUF does what
-UniFi firmware does (read from its `mcad` and `syswrapper.sh`, builds 3.9.27–4.0.15):
-selfrun starts after **3 informs in a row** go unanswered (`GUEST_SELFRUN_FAILS`). With the
-backoff (10, 20, 40 s) that is about 70 s after the last answer, or about 130 s when the
-controller answered HTTP 503 (it is shedding load, so the wait goes to 60 s at once). Selfrun ends with the first
-answer, and it only does anything while the portal is on.
-- **`pass`, or never received:** openUF adds `meta pkttype other accept` to the `selfrun`
-  chain. Every guest then gets through, as an authorized one would: the restricted subnets
-  and the AP itself stay behind the portal's rules. Nobody could log in meanwhile, because
-  the portal is the controller's. The first answer empties the chain again.
-- **`off`:** the guest WLANs are taken down (`ip link set <vap> down`) and brought back up
-  with the first answer: the netdev comes up and hostapd is told to start its beacon again
-  (`hostapd_cli raw STOP_AP` + `update_beacon`, as when a Blackout Schedule ends). Their
-  names are kept in `st.guest_vaps_down`, so a daemon restart in between leaves them down
-  until the controller answers, and then brings them up. One whose beacon does not restart
-  goes down again and stays in that list, and every later answer tries again.
-- One deliberate difference: when the controller comes back, UniFi firmware forgets every
-  authorized guest and waits for the controller to re-authorize them. openUF keeps its
-  list, and the controller re-sends `authorize-guest` for the same guests anyway.
-- `off` is tested on hardware (ath9k, ath10k, mt76) on its own, with a temporary WLAN; the
-  rest of the guest portal has not run on hardware. Without `hostapd-utils` the WLANs cannot
-  come back on the air: they stay down, and the log says so once.
-
-The daemon also reports a random `guest_token`. Without one, the controller refuses
-every portal login on the AP and logs "Missing Guest Token in AP[…] during guest
-authorization".
-
-**Where it differs from UniFi firmware, on purpose:**
-- **DNS passes for every guest.** UniFi firmware answers an unauthorized guest's DNS
-  itself; openUF runs no resolver.
-- **HTTPS is dropped, not answered.** The client's plain-HTTP connectivity check is what
-  finds the portal.
-- **The redirect needs an IPv4 address on the guest network's bridge.** The answer
-  leaves from there. A guest WLAN on a VLAN where the AP has no address keeps its
-  guests blocked, and they never see the portal.
-- **The walled garden is IPv4 only and resolved on the AP.** AAAA answers are
-  discarded, because both the firmware's chains and openUF's are IPv4. A name whose
-  answer differs from the client's — a CDN, geo-DNS, short-TTL round robin — can be
-  reachable at an address openUF never saw, and the ten-minute refresh is the only thing
-  that catches up. UniFi firmware has exactly the same limit; a DNS-intercepting garden
-  would need a resolver on the AP, which openUF does not run.
-- **A domain-only restricted list never arrives.** The controller emits the whole
-  `dnsmasq.walled_garden` block only when the *allowed* list contains at least one
-  domain (10.6.106), so restricted domains alone are dropped on its side. Put one
-  allowed domain in the list, or express the restriction as a subnet.
-
-**Needs** `kmod-nft-bridge` (for `iifname`/`oifname`), and `kmod-nft-nat` for the
-redirect. firewall4 already pulls in `kmod-nft-nat`.
-
-**Check it:**
-
-    nft list table bridge openuf_guest      # selfrun is empty unless guests are let through
-    nft list table ip openuf_guest
-    netstat -lnt | grep 8820
-
-**Log lines and what they mean:**
-- `guestportal: … not bridged`: those guests are blocked but not redirected.
-- `nft rejected …`: a rule failed. The log says which one and why.
-- `guestportal: 3 informs unanswered, selfrun_guest_mode=pass -- letting guests through`:
-  the portal is open until the controller answers again
-  (`… guest portal enforced again`).
-- `guestportal: 3 informs unanswered, selfrun_guest_mode=off -- guest WLANs down (…)`:
-  the guest WLANs are down until the controller answers again
-  (`guestportal: guest WLANs back up (…)`).
-- `guestportal: unrecognised guest rule shape`: the controller pushed a rule openUF
-  doesn't know. It was not applied.
-- `guestportal: walled garden: <name> did not resolve -- keeping the last N address(es)`:
-  DNS failed for that name this round; the rules it had still stand.
-- `guestportal: walled garden: <name> did not resolve and has no earlier answer -- not
-  enforced`: that site is not in the garden at all. Check the AP's own resolver
-  (`nslookup <name>` on the device) before blaming openUF.
-- `guestportal: ignoring malformed walled-garden site`: the name did not pass openUF's
-  check (spaces, an IPv4 literal, a label over 63 characters). It never reaches a
-  command line.
-- `guestportal: walled garden: out of time at <name> -- the names from here on keep
-  their last answer until the next refresh`: the pass spent its `GUEST_WG_BUDGET`. The
-  usual cause is a resolver that is not answering; check `nslookup <name>` on the
-  device. The remaining names are retried two minutes later.
-- `guestportal: walled garden: more than 32 allowed sites pushed`: the list is longer
-  than `WG_MAX_SITES`. Express the tail as subnets instead.
-- `guestportal: walled-garden addresses changed -- rebuilding`: the ten-minute refresh
-  found a different address set and rebuilt the chains.
-
-**Check the garden:**
-
-    nft list chain bridge openuf_guest guestin | head -20   # allowed sites, above every drop
-    nft list chain bridge openuf_guest guestout             # their replies
-    grep -o '"guest_wg_ips":[^}]*}}' /etc/openuf/state.json # the last good answers
 
 ### Hairpin on SSIDs with Proxy ARP or Multicast Enhancement
 
@@ -1699,10 +1565,40 @@ A later reconfigure that re-adds the port to the bridge resets both flags to 0, 
 nothing in OpenWrt sets them again. Same-radio clients are then cut off from each other
 without any log line.
 
-`l2guard.lua` checks every BSS in `/var/run/hostapd-phy*.conf` once a minute and writes a
+`l2guard.lua` checks every BSS in `/var/run/hostapd-<phy>.conf` once a minute (whatever the phy is called: `phy0` by default, `wl0` on the E8450) and writes a
 flag back only when it has gone missing. Each correction is logged as
 `l2guard: re-asserted hairpin_mode on <ifname>`. That line means the race happened. It is
 not an openUF fault.
+
+### Lock to Access Point
+
+The controller enforces a client's lock with the MAC filter of every **other** AP (table
+above). The AP the client is locked to receives nothing. Its usteer would still send the
+client BSS Transition requests toward APs that refuse it, and kick it, and Roaming Assistant
+would do the same, so the client would bounce. So each openUF AP keeps the push's lock
+entries in `state.json` (`lock2ap`) and announces them to the other openUF APs
+(`sibling_exchange`). The lock lists travel only in authenticated packets, keyed from the
+site key the controller sends as `unifi.key` while the site's UniFi IDP setting is on, and a
+sibling whose clock is more than 10 minutes off is not believed. Once a minute, a client that
+a sibling denies and this AP does not is treated as locked here:
+
+- **usteer:** `usteer.local.aggressiveness_mac_list` gets `<mac>,0` for it. Entries from the
+  device's own usteer sections are carried over, because usteerd keeps only the last
+  section's list, which is openUF's `local`. usteer reads a client's entry only when it first
+  sees the client, so a changed list restarts usteer. The list is part of the same write
+  that starts usteer for Band Steering or Roaming Assistant, so a lock learnt while usteer was
+  stopped is in place the moment it starts. A lock is announced to the siblings only once the
+  push that carries it has applied, and a full push with no WLAN clears it. Aggressiveness 0 stops the roam trigger
+  (`roam_trigger_snr`) and band steering for that client. It does not stop `min_snr` kicks,
+  load kicks or `assoc_steering`, so leave those off.
+- **Roaming Assistant:** skips it.
+- **Minimum RSSI:** skips it too. Every other AP denies the client, so a kick would only
+  bounce it straight back here, or off the network.
+
+The log says `openuf: locked to this AP: <macs>` when the list changes. Check it with
+`uci get usteer.local.aggressiveness_mac_list`, and on another AP with `uci show wireless |
+grep maclist`. This only works between openUF APs: an openUF AP whose locked client's other
+APs are real UniFi ones never hears of the lock.
 
 ### usteer's AP-to-AP sync stays off the air
 
@@ -1723,104 +1619,400 @@ receives everything over the wired uplink. The table is rebuilt once a minute wh
 VAP list changes, and removed when usteerd is stopped. It needs `kmod-nft-bridge`.
 Check it with `nft list table bridge openuf_usteer`.
 
+### Guest WLANs: the controller's guest restrictions
+
+A WLAN the controller treats as a guest WLAN arrives with `wireless.<n>.is_guest=true`,
+and the same `ebtables.*` block then carries the stock firmware's guest chains: each
+guest VAP is hooked into `GUESTIN` (frames from guests) and `GUESTOUT` (frames to them),
+filled from the site's guest-access settings (`allowed_subnet_<n>`,
+`restricted_subnet_<n>`, `restricted_dns_enabled` / `restricted_dns_servers`).
+`unifi/guest.lua` replays those rules in wire order and `guestguard.lua` builds them as
+one nftables transaction in a dedicated `bridge openuf_guest` table, hooked on the guest
+WLANs' VAP netdevs (found by SSID, plus their private-pre-shared-key VLAN netdevs). What
+a guest gets, exactly as on a UniFi AP:
+
+| Traffic from a guest | |
+|---|---|
+| DHCP (broadcast), ARP requests, EAPOL | allowed |
+| DNS (UDP/TCP 53) | allowed; with **restricted DNS** on, only to the listed servers |
+| Pre-authorization access (allowed subnets) | allowed, ahead of every drop |
+| Post-authorization restrictions (restricted subnets), `224.0.0.0/4` | dropped |
+| Other broadcasts, **all IPv6** | dropped |
+| Everything else (the internet through the gateway) | allowed |
+
+Towards guests: DHCP replies and ARP pass, other broadcasts, IPv4 multicast and IPv6 are
+dropped. A device that claims `fw_caps 0x40000` gets the subnets as `ipset.*` sets
+instead of inline rules; both forms are read (openUF does not claim the bit, so it gets
+the inline form).
+
+**Not implemented:**
+
+- Allowed/restricted **hostnames** (`ALLOWED_DOMAIN_*`, `RESTRICTED_DOMAIN_IN`): on a
+  UniFi AP dnsmasq fills those chains at runtime; here they stay empty.
+- A **wired** guest network (`--logical-in br<n>`) — logged as not enforced.
+- An SSID used by both a guest and a non-guest WLAN: the VAPs are matched by SSID and
+  cannot be told apart, so it is refused and logged rather than guessed.
+
+The restrictions and the guest VAP list are recorded in `state.json` (`guest`), rebuilt
+on every start, and re-checked once a minute (a guest VAP that came up after the push).
+A full push without a guest WLAN removes the table, as do a factory reset and
+`option guest_isolation '0'` at the next start.
+
+Needs **`kmod-nft-bridge`**. The table is applied all or nothing and then read back; a
+refusal is logged as `guest network: nft refused the guest restrictions … NOT
+restricted`, and no half-built table is left. Check with:
+
+```sh
+nft list table bridge openuf_guest
+```
+
+### Guest portal (Hotspot): ⚠️ lab-validated upstream only
+
+**Unconfirmed on hardware.** Upstream validated it in its Docker lab (10.4.57) and has never
+run it against a real guest WLAN; treat it as a preview. It turns on by itself when the
+controller pushes a guest WLAN with the portal enabled (`redirector.status=enabled`, a
+`redirector.url`, and `GUESTIN -P DROP` in the guest `ebtables.*` rules), and goes with the
+portal, the guest WLAN, `option guest_isolation '0'` or a factory reset. Without a usable
+`redirector.url` the portal cannot be shown, and the guests are restricted as above and let
+through (logged as `… but no usable redirector.url`).
+
+**What runs.** The controller's guest chains are replayed as above, now with the portal's
+default-deny in force, and the device's own parts of its four portal chains filled in
+(`guestguard.lua`). For an unauthorized guest:
+- **Allowed:** EAPOL, the portal's ports on the controller, broadcast DHCP, ARP and DNS.
+- **Dropped:** IPv6, other broadcast, multicast, and the restricted subnets.
+- **Plain HTTP:** marked and handed to the bridge's own IP stack (the firmware's ebtables
+  `redirect`), then NAT-redirected by a second table, `ip openuf_guest`, to port **8820**.
+- **Everything else:** dropped.
+
+A MAC in the `openuf_authorized` set (filled from `state.json`'s `guest_authorized`) may
+reach any host other than the AP, but the restricted subnets still apply. An
+`authorize-guest` rebuilds the table in one transaction, so there is no moment of open access.
+
+The inform daemon answers on 8820 between heartbeats (`guestportal.lua`) with a `302` to
+the controller's portal, adding:
+- `?id=<guest MAC>`, looked up in `/proc/net/arp`;
+- `&ap=<AP MAC>`;
+- `&t=<now>`: the controller refuses a `t` more than 60 s off its own clock, so the AP's clock must be right;
+- `&url=<what the guest asked for>`;
+- `&ssid=…`.
+
+Logging in on the portal makes the controller send `authorize-guest`. The guest is let
+through within one heartbeat. The daemon also reports a random `guest_token`; without one,
+the controller refuses every portal login on the AP.
+
+When a guest's authorization ends (`unauthorize-guest`: an admin revoked it, it expired or
+it went over its quota), openUF takes the MAC out of the `openuf_authorized` set and
+disconnects the guest from every SSID, as UniFi firmware does. On reconnecting, the
+device's captive-portal check runs again and shows the portal. A repeat for the same MAC
+within 60 s is not kicked again.
+
+**Per-guest speed limit.** When a guest is authorized with a limit (a REST
+`authorize-guest` with `up`/`down` in kbps, or the guest's user group), the controller
+sends `rate-update` right after `authorize-guest`, and again whenever the guest reconnects.
+It is a client's own WiFi Speed Limit like any other (see "WiFi Speed Limit" above): a
+queue per direction for that MAC, `-1` meaning unlimited that way.
+
+**Without the controller (`selfrun_guest_mode`).** Every `mgmt_cfg` carries
+`selfrun_guest_mode`. It is `pass` unless the site's `config.properties` sets
+`config.selfrun_guest_mode` to something else, and then it is `off`. openUF does what
+UniFi firmware does (read upstream from its `mcad` and `syswrapper.sh`, builds
+3.9.27–4.0.15): selfrun starts after **3 informs in a row** go unanswered
+(`GUEST_SELFRUN_FAILS`). With the backoff (10, 20, 40 s) that is about 70 s after the last
+answer. Selfrun ends with the first answer, and it only does anything while the portal is
+enforced.
+- **`pass`, or never received:** the guest table's `selfrun` chain, jumped from
+  `authorized_guests`, accepts. Every guest then gets through, as an authorized one would:
+  the restricted subnets and the AP itself stay behind the portal's rules. Nobody could log
+  in meanwhile, because the portal is the controller's. The first answer empties the chain
+  again.
+- **`off`:** the guest WLANs are taken down (`ip link set <vap> down`) and brought back
+  with the first answer: the netdev comes up and hostapd is told to start its beacon again
+  (`hostapd_cli raw STOP_AP` + `update_beacon`). Their names are kept in
+  `guest_vaps_down`, so a daemon restart in between leaves them down until the controller
+  answers. One whose beacon does not restart goes down again and stays in that list, and
+  every later answer tries again. Without `hostapd-utils` the WLANs cannot come back on the
+  air: they stay down, and the log says so once.
+- One deliberate difference: when the controller comes back, UniFi firmware forgets every
+  authorized guest and waits for the controller to re-authorize them. openUF keeps its
+  list, and the controller re-sends `authorize-guest` for the same guests anyway.
+- Upstream tested the `off` bring-up on hardware on its own (ath9k, ath10k, mt76, with a
+  temporary WLAN); the rest of selfrun only in its lab, and this port only in unit tests.
+  ⚠️ Unconfirmed on hardware here.
+
+**Where it differs from UniFi firmware, on purpose:**
+- **DNS passes for every guest.** UniFi firmware answers an unauthorized guest's DNS
+  itself; openUF runs no resolver.
+- **HTTPS is dropped, not answered.** The client's plain-HTTP connectivity check is what
+  finds the portal.
+- **The redirect needs an IPv4 address on the guest network's bridge.** The answer
+  leaves from there. A guest WLAN on a VLAN where the AP has no address keeps its
+  guests blocked, and they never see the portal.
+
+**Needs** `kmod-nft-bridge` (for `iifname`/`oifname`), and `kmod-nft-nat` for the
+redirect. firewall4 already pulls in `kmod-nft-nat`.
+
+**Check it:**
+
+    nft list table bridge openuf_guest      # selfrun is empty unless guests are let through
+    nft list table ip openuf_guest
+    netstat -lnt | grep 8820
+
+**Log lines and what they mean:**
+- `guest: captive portal on for <SSID> …`: the portal is enforced, at every push.
+- `guest portal: … not bridged`: those guests are blocked but not redirected.
+- `guest portal: nft refused the NAT redirect`: guests are blocked but not redirected.
+- `guestportal: cannot listen on port 8820`: likewise; said once until it changes.
+- `guestportal: 3 informs unanswered, selfrun_guest_mode=pass -- letting guests through`:
+  the portal is open until the controller answers again (`… guest portal enforced again`).
+- `guestportal: 3 informs unanswered, selfrun_guest_mode=off -- guest WLANs down (…)`:
+  the guest WLANs are down until the controller answers again
+  (`guestportal: guest WLANs back up (…)`, or `could not put guest WLANs back on the air`).
+
+---
+
+### Controller-owned bridge (`vlan_filtering` backend)
+
+Set `option bridge_backend 'vlan_filtering'` (or leave it on `auto` on a board
+whose uplink is already in a vlan-filtering bridge). From the first provisioning push on,
+`netmodel.lua` realises the controller's own description of the AP's layer 2 --
+`vlan.*`, `bridge.*`, `netconf.*`, `dhcpc.*` and the `switch.*` port matrix, captured in
+[docs/GAP-ANALYSIS-10.6.md §4](docs/GAP-ANALYSIS-10.6.md) -- as:
+
+| UCI section | What it is |
+|---|---|
+| `network.openuf_br` | the bridge (`bridge_name`, default `br-lan`) with every socket of the board, `vlan_filtering 1`, the identity MAC pinned |
+| `network.openuf_bv<vid>` | one `bridge-vlan` per VLAN: the uplink carries VLAN 1 untagged and every other VLAN tagged; each downstream socket follows the `switch.*` matrix (native = `u*`, tagged = `t`, excluded = absent), or `port_default` while Port VLAN is off |
+| `network.<lan_name>` | management, on `br-lan.<vid>` -- `br-lan.1`, or the **Management VLAN** -- with the pushed DHCP/static addressing written as UCI (so it survives reboots) |
+| `network.openuf_v<vid>` | `proto none` on `br-lan.<vid>`, what a WLAN on that VLAN names as its network (VLAN 1 too, once management is tagged -- the controller's `br-trunk`) |
+
+The two objections to vlan filtering above, answered:
+
+1. **Stranding the AP.** Nothing is guessed: management is wherever the controller's
+   `dhcpc`/`netconf` put it, and the uplink always carries every VLAN. And every change
+   is applied with a **rollback**: the previous `/etc/config/network` is kept, and unless an
+   inform succeeds within `bridge_rollback_timeout` seconds (180) it is restored and
+   reloaded. A plan that lost the controller is remembered by fingerprint and not
+   re-applied until the controller sends a different one (`syswrapper.sh netmodel-retry`
+   forces a retry).
+2. **Fighting the tagged-SSID path.** There is no tagged-SSID path to fight: this backend
+   creates no `<uplink>.<vid>` sub-devices. A VAP joins `openuf_v<vid>` and netifd makes it
+   a bridge port with that VLAN as its PVID.
+
+**Takeover.** With `bridge_takeover = true` (the default) any bridge that holds one of the
+board's sockets is replaced, together with its `bridge-vlan` sections. Interfaces that pointed
+at it or at its VLAN sub-devices (`switch.3`) are re-pointed at `br-lan.<vid>` and their
+VLANs kept in the table, so hand-made networks keep working; an L3 interface straight on a
+socket (a stock `wan`) is disabled. The board's original config is saved once to
+`/etc/openuf/network.pre-openuf`; `syswrapper.sh netmodel-restore` puts it back.
+
+Trunk ports come for free (a socket can be native on one VLAN and tagged on others), and the
+switch ASIC does the VLAN work, so none of the learning-off/nft-tap machinery above is used.
+Wired clients are still reported per socket from the bridge FDB.
+
+### Controller wake-up (STUN)
+
+`stun.lua` keeps a binding to the controller's `stun_url` from a stable local port
+(`stun_local_port`, 3478) and reports the address the controller saw as
+`connect_request_ip`/`_port`. When the controller sends its connection request (a bare
+`0x8888` STUN header), the daemon informs immediately. On 10.6 that happens for upgrades
+and when a device misses a heartbeat. `option stun '0'` turns it off. Only a request from
+the address `stun_url` resolves to is believed (a NAT in between keeps that address, since
+the request must come back through the binding's own mapping), and wakes start at most one
+inform every 2 s; one that comes sooner waits out the gap. The binding is refreshed every 30 s
+(5 s after a send fails), as UniFi firmware does, and a new or changed mapped address also
+triggers an inform, so the controller learns it before it next needs it.
+
+### OpenWrt upgrades through UniFi
+
+See `openuf/src/openwrt/upgrade.lua`'s header and [openuf/contrib/asu](openuf/contrib/asu/README.md). In short:
+`option upgrade_mode 'owut'` makes a controller upgrade run an attended sysupgrade of this
+board, leaving openUF's own packages out of the ASU request (the package's bootstrap
+reinstalls them on the new image); `option advertise_updates '1'` shows UniFi's "Upgrade available" badge while `owut check` finds
+a newer build. By default the controller's catalogue version is learned from its own
+upgrade commands and reported, so no stale version keeps the badge up.
+
+### Client connection events
+
+A UniFi AP reports every association, successful connection and departure as a separate
+notification inform (`inform_as_notif: true`, `notif_reason: "event"`, a `notif_payload`
+with `message_type: STA_ASSOC_TRACKER`). The controller builds a client's connection
+timeline from them, and detects a roam by pairing one AP's `sta_leave` with another AP's
+`association` for the same client, within 10 s, and calls the roam failed when the
+departure came more than a second ahead. So the roam reports go out as they happen: the
+collector (`openuf-phases`, `staphase.uc`) logs hostapd's assoc / sta-authorized / disassoc to
+`/tmp/openuf-roam.log` and the bridge's address moves (`bridge monitor fdb`, through a child
+shell) to `/tmp/openuf-fdb.log`, and the daemon looks at both every 250 ms between
+heartbeats. A client that is authorized is an `association` (with its RSSI, which the
+roaming detector needs, and `auth_algo`, `ft` for Fast Roaming); one that disassociates is a
+`sta_leave`, with `last_seen` in device uptime; one whose address is learned on the uplink
+while hostapd still lists it has roamed away silently and is a `sta_roam`, and is left out
+of the heartbeat until hostapd drops it. Moving to another SSID or band on the same AP is
+not a roam. The `success` of each connection still comes from diffing the station list
+between heartbeats, up to eight events after each successful inform. Events queue while
+the controller is unreachable (200 at most, roam reports first). `sta_events = false` turns
+them off.
+
+Every departure carries `assoc_status`, the cause bits the controller's roaming detector
+reads: `16` when openUF's Minimum RSSI kicked the client, `8192` when its Roaming Assistant
+moved it (a BSS Transition request, or the forced disassociation after one), within the
+last two minutes. They show in the roam records as triggered by Minimum RSSI or by Roaming
+Assistant. A client that left on a BSS Transition request, before any forced
+disassociation, is also reported as `sta_roam` just before its `sta_leave`; the controller
+counts a roam whose left half is a `sta_roam` as seamless. openUF claims `wifi_caps2`
+`0x2000` (roam topology stats) while events are on: the controller then reads `sta_roam`
+and joins roams from `association` events, which carry `auth_rssi`, instead of `success`.
+
+The `success` carries the connection's timing, which is what fills the WiFi Connectivity
+view (Association, Authentication, DHCP, DNS and their latencies). The controller takes
+cumulative microseconds from the client's first Authentication frame: `assoc_delta` to
+association, `wpa_auth_delta` to the end of the key handshake, `ip_delta` to the DHCP ACK
+and `traffic_delta` to the first DNS answer, and for an AP on firmware 6.2.1 or later it
+counts a connection only when `traffic_delta` and `dns_responses` are there. openUF
+measures them on the AP:
+
+- the 802.11 steps from hostapd's ubus notifications (`auth`, `assoc`, `sta-authorized`,
+  `key-mismatch`), stamped by a small ucode collector the service runs next to the daemon
+  (`/usr/share/openuf/openwrt/staphase.uc`, writing `/tmp/openuf-phases.json`). It answers
+  every notification with success at once: with usteer running, hostapd waits for each
+  subscriber's answer to an `auth` or `assoc` and rejects the client on a non-zero one;
+- the first DHCP ACK and DNS answer forwarded to each client from nftables (`table bridge
+  openuf_ev`), whose timed sets date the packet by what remains of the timeout.
+
+A connection with no DNS answer within a minute is not reported: the controller would drop
+an unverified success anyway. A wrong passphrase is a `failure` (`auth_failures` when SAE
+rejected it before association, `wpa_auth_failures` when the 4-way handshake did), one event
+per client per minute with the count.
+
 ### Controller-managed system settings (timezone, NTP, nightly scan)
 
-Every full `system_cfg` push also carries three blocks, which `sysconf.lua` applies:
+Every full `system_cfg` push also carries three blocks, which `sysconf.lua` applies, each
+behind its own option (`system_timezone`, `system_ntp`, `system_cron`):
 
 | Wire keys | Applied to | Undo trail |
 |---|---|---|
-| `system.timezone` (and its twin `locale.timezone`), a POSIX TZ string such as `CET-1CEST,M3.5.0,M10.5.0/3` | UCI `system.@system[0].timezone`, then `/etc/init.d/system reload`. The stale Olson `zonename` is moved aside, because it now names a different zone | `openuf_timezone_orig` / `openuf_zonename_orig` on the same section (the first original is kept) |
+| `system.timezone` (and its twin `locale.timezone`), a POSIX TZ string such as `CET-1CEST,M3.5.0,M10.5.0/3` | UCI `system.@system[0].timezone`, then `/etc/init.d/system reload`. The stale Olson `zonename` is moved aside, because it now names a different zone. The same zone in a less precise form keeps the board's string: the controller sends `GMT0BST,M3.5.0,M10.5.0` for London, an hour off OpenWrt's `GMT0BST,M3.5.0/1,M10.5.0` at each clock change | `openuf_timezone_orig` / `openuf_zonename_orig` on the same section (the first original is kept) |
 | `ntpclient.status`, `ntpclient.<n>.server` | UCI `system.ntp.server` (a list, in slot order), then `/etc/init.d/sysntpd restart`. An explicit `ntpclient.status=disabled` puts the board's own list back | `openuf_ntp_orig` + the `openuf_ntp_managed` marker on `system.ntp` |
-| `cron.<n>.job.<m>.schedule` / `.cmd` | A marked block in `/etc/crontabs/root` (`# openuf-cron-begin` … `# openuf-cron-end`), then `cron enable` + `restart`. Lines outside the markers are never touched. The block is removed once a push stops carrying jobs | the markers themselves |
+| `cron.<n>.job.<m>.schedule` / `.cmd` | A marked block in `/etc/crontabs/root` (`# openuf-cron-begin` … `# openuf-cron-end`), then `cron enable` + `restart`. Lines outside the markers are never touched. The block is removed once a push stops carrying jobs, when `system_cron` is switched off, and when the package is removed | the markers themselves |
 
 Nothing is written when the pushed value already matches, so the identical pushes of
 a steady state cost no flash writes. Malformed values (a timezone with a quote, a
 server name with a space, a schedule that is not five plain fields) are logged and
 refused.
 
-**Cron runs only commands openUF provides.** 10.6.106 can push exactly four, and this
-is the whole list (every `syswrapper.sh` string in the controller — see
-PROTOCOL-VALIDATION.md § *Firmware as a source*):
+**Cron runs only commands openUF provides.** The one the controller pushes today is
+`syswrapper.sh 11k-scan` at `0 4 * * *`, the nightly neighbour scan. Anything else is
+logged as `not a command this build provides` and never written: crond runs it as
+root. The pushed `cron.<n>.user` is ignored, since that account does not exist here.
 
-| Pushed command | Schedule | Pushed when | openUF |
-|---|---|---|---|
-| `syswrapper.sh schedule-action` | `1-59/5 * * * *` | any WLAN has a schedule | **No crontab line:** the WiFi Blackout Schedule is re-checked on every heartbeat (`wlansched.lua`) |
-| `syswrapper.sh refresh-walled-garden 1` | `*/10 * * * *` | a guest portal with a walled garden | **No crontab line:** the garden's domains are re-resolved on the same ten minutes (`inform._guest_wg_resync`) |
-| `syswrapper.sh dfs-reset` | `0 2 * * *` | a 5 GHz radio pinned to a DFS channel the site's country allows | **Installed** — see below |
-| `syswrapper.sh 11k-scan` | `0 4 * * *` | Fast Roaming on any WLAN | **Installed** — see below |
-
-Anything else is logged as `not a command this build provides` and never written: crond
-runs it as root. The pushed `cron.<n>.user` is ignored, since that account does not
-exist here.
-
-`syswrapper.sh 11k-scan` does not scan by itself. As UniFi firmware does (`elevenk_scan`),
-it picks two scan times within the next hour: the first 10 s plus a random delay out,
-the second 10 s plus another random delay after that. It writes them, one epoch per
-line, to `/tmp/openuf-scan-request`, replacing any request still pending. On the first
-heartbeat after a time falls due, the inform daemon
-runs `iw dev <if> scan ap-force` on every reported radio right before building the
-payload, so that inform's `scan_table` carries the fresh results. (`ap-force` sweeps
-the same channels as a plain scan on both tested boards, and it guards against a
-driver that refuses to scan on a beaconing AP.) A radio where iw refuses logs
-`iw refused to scan <if>`, and the count leaves it out. A scan time more than ten minutes
-in the past (say, one left behind by a stopped daemon) is dropped rather than fired at
-boot. Running `syswrapper.sh 11k-scan` by hand schedules the same two scans within the hour
-(it prints both delays). To scan on the next heartbeat instead, write the current time
-as the only line:
+`syswrapper.sh 11k-scan` does not scan by itself. It leaves a dated request in
+`/tmp/openuf-scan-request`, and the inform daemon consumes it on its next heartbeat by
+making the next 802.11k beacon request due at once (with `rrm_enrichment` on): a client
+sweeps and reports back, and the AP never leaves its channel. Upstream openUF answers
+the same job with `iw dev <if> scan ap-force` on every radio. openUF deliberately asks a
+client instead, because a measured off-channel sweep cost an associated client 12%
+packet loss for the ~3 s it ran (PROTOCOL-VALIDATION, *Enriching it without scanning*). A request older than ten minutes (say, one left behind by a stopped daemon),
+or dated more than a minute ahead, is discarded rather than served. You can run it by
+hand:
 
 ```sh
-date +%s > /tmp/openuf-scan-request
-logread -e openuf | grep 11k-scan   # "11k-scan requested -- scanned 2 radio(s)"
-```
-
-#### `dfs-reset`: back onto a pinned DFS channel
-
-A radar detection takes a 5 GHz radio off its channel for at least 30 minutes, and
-nothing brings it back: the radio keeps serving clients on whatever channel the driver
-moved to, so a planned DFS cell quietly stays wrong until someone re-provisions the AP.
-That is what this job is for, and the controller schedules it on its own as soon as a
-radio is pinned to a DFS channel — no configuration here.
-
-Like `11k-scan`, the hook does no radio work. It writes one timestamp to
-`/tmp/openuf-dfs-reset-request` and the inform daemon acts on the next heartbeat; a
-request older than 30 minutes (the daemon or the AP was down when crond fired) is
-dropped rather than carried out hours late. Per enabled 5 GHz radio, in the order the
-UniFi firmware's own `dfs_reset` checks:
-
-1. the radio must be **pinned**: a channel of `auto` (or `0`) is the controller's
-   intent to let the driver choose, and is left alone, silently;
-2. the live channel (`iw dev <if> info`) is compared with the configured one
-   (`wireless.<radio>.channel`) — equal means there is nothing to do, which is the
-   case on every night but the one after a radar hit;
-3. if the configured channel is a DFS channel, mac80211's per-channel state
-   (`iw phy phyN channels`) must not be `unavailable` — that is the non-occupancy
-   list, and the kernel would refuse the switch. The job logs how long is left and
-   waits for the next night;
-4. otherwise the BSS is told to move: `hostapd_cli -i <bss> chan_switch 5 <freq>
-   sec_channel_offset=± center_freq1=<c> bandwidth=<w> ht|vht`, rebuilt from the live
-   operating width so an 80 MHz cell comes back as 80 MHz.
-
-UCI is never written — it already holds the configured channel. The radio does go
-quiet for the channel-availability check on arrival (60 s on most DFS channels), which
-is why the controller schedules this at 02:00.
-
-```sh
-/usr/bin/syswrapper.sh dfs-reset               # ask for it now
-logread -e openuf | grep dfs-reset
-# "phy1-ap0 switching back from channel 36 to the configured 100 (5500 ...)"
-# "100 is still on the non-occupancy list for another 1766 s -- waiting for the next run"
-iw phy phy1 channels | grep -A5 "5500 MHz"     # the kernel's own DFS state
+syswrapper.sh 11k-scan
+logread | grep 11k-scan   # "11k-scan requested -- asking a client for a beacon report now"
 ```
 
 To take a board back from the controller's timezone, copy `openuf_timezone_orig` back
 to `timezone` (`uci get system.@system[0].openuf_timezone_orig`). For NTP, copy
 `openuf_ntp_orig` back to `server`, delete both stamps, and run `uci commit system`.
-The controller re-applies its values on the next full push. Three things remove
-the marked cron block: `install.sh uninstall`, a controller *Forget* (`setdefault`) and
-`syswrapper.sh reset-inform`. All three leave the timezone and NTP values in place:
-those are sane settings for the board either way, and the originals stay stamped.
+Switch the matching `system_*` option off first, or the controller re-applies its
+values on the next full push. Three things take the marked cron block out: removing the
+package, a controller *Forget* (`setdefault`) and `syswrapper.sh reset-inform`. All three
+leave the timezone and NTP values in place: those are sane settings for the board either
+way, and the originals stay stamped.
 
----
+### Wireless uplink (mesh)
+
+⚠️ Opt-in (`uci set openuf.main.wireless_uplink=1`), ported from yesrab/openUF and
+**not yet confirmed on this project's hardware** (PROTOCOL-VALIDATION.md § Wireless uplink).
+
+UniFi's mesh is a 4-address WDS link, not 802.11s: a parent beacons a hidden WPA2-PSK
+network named `vwire-<16 hex>` with a site-wide key, and a child joins it with a 4-address
+station, so the link is a transparent L2 pipe. With the option on, openUF claims
+`wifi_caps` `0x1` (VWIRE) and `0x800` (MESHV3); the controller turns the device's
+"mesh-connect" flag on by itself and every push then carries both ends, which openUF writes
+as two `wifi-iface` sections on the 5 GHz radio:
+
+| Section | What it is | When it is up |
+|---|---|---|
+| `openuf_bh_dl_<radio>` | the **downlink**: `mode ap`, `hidden 1`, `wds 1`, `psk2`, the sibling element (`vendor_elements`) | whenever the push carries it — a wired mesh-capable AP is a parent by default |
+| `openuf_bh_ul_<radio>` | the **uplink**: `mode sta`, `wds 1`, same SSID and key | only while the wired uplink socket has no link |
+
+Both join the management network (`lan`, or the `vlan_filtering` plan's management
+interface), are rewritten on every push like the WLANs, carry `openuf_backhaul` and the
+controller's devname (`openuf_devname`), and are kept out of the L2 hardening and guest rule
+sets: a 4-address link carries other devices' frames and BPDUs by design. A push without the
+`mesh.*` block (the option off again) removes both.
+
+**The uplink policy** (`openwrt/backhaul.lua`, once per heartbeat) is wired-first. openUF
+remembers the socket the gateway was last seen behind (`state.json` `backhaul_wired_port`;
+the board's uplink socket until then). When that socket has had no link for two heartbeats
+the station is enabled and the radio reloads; when the link is back the station is disabled
+on the next heartbeat. The two uplinks are never up together: every UniFi push runs STP off,
+so that would be a bridge loop. The mode in effect is `state.json` `backhaul_mode`, and
+`logread -e backhaul` shows each switch. While the station is up, the radio's SSIDs follow
+the parent's channel.
+
+**What the inform reports.** While on the wireless uplink and associated, the top-level
+`uplink` is the uplink VAP's name (the controller's devname, `ath4`), and that VAP's one
+station is the parent's downlink BSS, its `serialno` the parent's MAC, taken from the BSS
+actually joined: its sibling element in the station's scan cache, else the sibling exchange
+(`sibling_exchange`, which announces every AP's BSSIDs, the hidden downlink included), and
+only then the parent the last push named (`backhaul_parent`) — a child that boots straight
+onto the air gets no push to name it. A downlink reports its children, each named from the bridge FDB behind its WDS
+netdev intersected with the sibling APs this AP knows. Minimum RSSI, Roaming Assistant,
+connection events and the Experience score never count a backhaul peer.
+
+**Only the management network crosses the hop.** The downlink's children are parked by
+hostapd on per-station netdevs (`<bss>.sta<N>`) in the management bridge, with no VLAN
+membership; in the `bridges` backend the VLAN bridges ride `<uplink socket>.<vid>`, which has
+no link on a wireless child, and in `vlan_filtering` the per-station netdevs join only the
+bridge's default VLAN (1) — so there, with a Management VLAN set, not even management is
+expected to cross (read from hostapd's and the kernel's behaviour, not observed). In the
+`bridges` backend a wirelessly uplinked AP keeps its management address and informs, but its
+VLAN-tagged SSIDs do not reach their networks. (yesrab/openUF's boards rode `br-lan.<vid>`,
+which carried tags over the hop.)
+
+**Turning it off** removes both sections with the next push. An AP that is on its wireless
+uplink at that moment loses it: plug its cable in first.
+
+If a child never associates, check `iw dev <station> info` says `4addr: on`, compare the two
+sections' `ssid` and `key`, and see that the parent's
+`/var/run/hostapd-<phy>.conf` has `wds_sta=1` for its downlink BSS.
+
+### Config pushes that fail to apply
+
+Every push is judged once all of its steps have run. If one raised an error (the WiFi
+config, the network plan), openUF keeps reporting the **previous** `cfgversion`. The
+controller only re-sends a config while the device reports a different version, and it
+deduplicates identical pushes for ten minutes, so the push arrives again about ten minutes
+later. After `cfg_retries` rounds the new version is echoed anyway, so a config the device
+cannot apply stops cycling. `cfgversion_effective` always names the last push that applied
+cleanly; the controller's "last config applied successfully" compares the two. A network
+plan that is rolled back (§ Controller-owned bridge) sets `cfgversion_effective` back as well.
+
+### Updating openUF in place
+
+`apk upgrade` from the package feed (§ 2). From a development machine,
+`sh tools/deploy.sh <dir> <ap>...` installs packages built with
+`.github/scripts/sdk-build.sh` on each AP in turn, stopping at the first that does not
+complete an inform.
+
+For a test AP between packages, `sh tools/hotpatch.sh <ap>` copies this checkout's `src/`,
+stripped as the package build strips it, into `/usr/share/openuf`: every `.lua` file is
+compiled with the AP's own Lua first (one that does not load means nothing is replaced),
+only the files that differ are replaced, the packaged originals go to
+`/usr/share/openuf.pre-hotpatch` (the first time only), and the daemon is restarted and
+waited on. Init scripts and `/etc/config/openuf` are left alone. `apk fix openuf` puts the
+package back.
 
 ## 7. LLDP topology
 
@@ -1838,10 +2030,9 @@ The neighbour table is included in every inform, but `lldpctl` is only re-run
 once a minute rather than on every 10-second heartbeat: `lldpd` advertises on a
 30-second interval, so polling it faster only cost a process spawn and a JSON
 decode. A topology change — a new neighbour, or a moved cable — can therefore
-take up to a minute to show up on the controller's map, and so can the first
-neighbour on a port that had none. Only an answer from `lldpd` is cached: when
-`lldpd` isn't running yet, `lldpctl` prints nothing, so a device that starts
-before `lldpd` picks its neighbours up on the very next heartbeat.
+take up to a minute to show up on the controller's map. An *empty* answer is
+never cached, so a device that starts before `lldpd` picks its neighbours up on
+the very next heartbeat.
 
 ### Point lldpd's chassis ID at the same interface as `lan_cpueth`
 
@@ -1893,7 +2084,7 @@ address"** against a network that is perfectly configured.
 `ucihelper.ensure_bridge_identity` runs once at daemon start and pins the bridge's
 `macaddr` to `lan_cpueth`'s MAC when — and only when — the two differ, so identity, LLDP
 and management traffic all agree, the way they do on a real UniFi AP. Boards where they
-already match (every swconfig one) are untouched and no reload is issued. It logs what it
+already match are untouched and no reload is issued. It logs what it
 pinned; adoption is keyed on `lan_cpueth`'s MAC, which it never changes.
 
 > If the board takes its management address by **DHCP**, the new L2 identity means a new
@@ -1912,68 +2103,55 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 
 | Symptom | Likely cause |
 |---|---|
-| Device doesn't appear in UniFi Discover, or WiFiman's Discovery tab lists it without model or name | `announce.lua` not running (`l2_announce = false` turns it off, responder included), or UDP port 10001 blocked. A failed listener bind is logged once (`announce: cannot listen on udp/10001`) and the broadcast carries on |
+| An Auto radio never picks a DFS channel, or avoids channels nobody excluded | `uci show wireless.<radio>` — `openuf_acs_dfs=1` means the site's 5 GHz DFS switch is off (Radio AI; a site that never stored a choice sends off), `openuf_channels=1` with a `channels` list means the site excludes channels. No stamp: the value was set by hand or by a board radio policy (`uci show openuf.na`). `grep chanlist /var/run/hostapd-<phy>.conf` shows what hostapd got |
+| Device doesn't appear in UniFi Discover | `announce.lua` not running, or UDP port 10001 blocked |
 | Controller shows device as "Disconnected" | `inform.lua` not running, or wrong `inform_url` |
-| Adoption fails with SSH error | SSH not reachable from controller, or root password not set — run `passwd root` on the device, or reinstall with `--bootstrap-adopt` |
+| Adoption fails with SSH error | SSH not reachable from controller, or root password not set — run `passwd root` on the device, or switch on the adoption account (`uci set openuf.main.ssh_adopt=1 && uci commit openuf`) |
 | Device stays stuck at "Adopting" forever | No AES-GCM backend — `lua-openssl` missing or built without AEAD support. The CLI `openssl-util` fallback is CBC-only and will not work (see § 1) |
-| Controller rejects device ("firmware incompatible") | Adjust `fw.ver` in `ufmodel/u6iw.lua` |
-| hostapd fails: "unknown configuration item 'bss_transition'" | A `wpad-basic-*` build is installed. Re-run `sh install.sh install`, or swap it by hand: `apk add wpad-mbedtls '!wpad-basic-mbedtls'` (opkg: `opkg remove wpad-basic-mbedtls && opkg install wpad-mbedtls`), then `/etc/init.d/wpad restart` |
-| SSIDs stay up after the AP's uplink cable is pulled | Expected, and what UniFi firmware does with the same config. The firmware drops its SSIDs on uplink loss only when the controller pushes `connectivity.status=enabled`, and the controller pushes that only to devices that claim wireless uplink (`wifi_caps` `0x1`). openUF can't do wireless uplink, so it gets `disabled`. See PROTOCOL-VALIDATION.md § `connectivity.*` |
-| Multicast Suppression is on in the controller but nothing is filtered | `nft list table bridge openuf_bcfilt` shows the mode: `limit rate over` rules mean Conservative, `drop` rules mean Aggressive, an empty chain means nothing arrived. An empty chain with the control on means the keys were not pushed — Force Provision, and check `uci show wireless \| grep -E "openuf_mcast_suppress\|openuf_bcfilt"`. A table with the sets and no `meta pkttype` rule is the missing `kmod-nft-bridge`, which openUF logs by name |
-| Aggressive suppression still breaks DHCP or ARP | Check the controller actually sent the carve-out: the push must carry `wireless.<n>.bcfilt.bypass_types`, and the live rules must show four `accept` lines **above** the drop for that VAP. An older controller sends `bcfilt.status` alone, in which case the drop applies to DHCP and ARP too — Ubiquiti's documented behaviour for that control — and the DHCP server's MAC has to go on the excepted-devices list |
-| Conservative suppression drops traffic that was fine before | The ceiling is 100 packets/second with a 50-packet burst, and it is openUF's number, not the controller's — the wire sends none. Measured idle rates are 1.4–3.6 frames/s, so a site hitting it has real group-addressed volume. Raise `LIMIT_RATE`/`LIMIT_BURST` at the top of `openuf/bcfilter.lua`, or set the WLAN to Off |
+| Controller rejects device ("firmware incompatible") | Regenerate `unifi/catalog.lua` with `--fw` (§ 3); openUF also learns the version from the controller's upgrade commands |
+| hostapd fails: "unknown configuration item 'bss_transition'" | A `wpad-basic-*` build is installed. Swap it for the full build in one transaction: `apk add wpad-mbedtls '!wpad-basic-mbedtls'` (a plain `apk add wpad-wolfssl` conflicts with the basic build and installs nothing), then `/etc/init.d/wpad restart` |
 | openUF does not start; `logread` says "not starting: /usr/sbin/hostapd has no 802.11v" | Deliberate: with a `wpad-basic-*` build every controller-pushed WLAN would take its radio down, so the init script refuses and the device's own WiFi keeps working. Swap in a full build as in the row above, then `/etc/init.d/openuf start` |
-| An Enhanced Open WLAN is missing from the AP, or a transition one is plain open | The radio does not claim `radio_caps2` bit `0x8`. Check `hostapd -vowe; echo $?` (must print 0; `wpad-basic-*` or `-mini` builds may lack OWE) and that `/usr/share/ucode/wifi/hostapd.uc` exists (OpenWrt 24.10+). Force Provision after fixing it |
-| A WLAN with Private Pre-Shared Keys is missing, or a key does not work | Missing: openUF does not claim `wifi_caps` bit `0x100000` (the controller logs "PPSK is not supported … will be skipped"). `grep -c vlanid= /usr/share/ucode/wifi/ap.uc` and `grep -c "from wpa_psk_file" /usr/sbin/hostapd` must both be non-zero. A VLAN key does not work: `uci show wireless | grep psk` should list it, `cat /var/run/hostapd-<ifname>.psk` should have its `vlanid=` line, and `logread | grep "from wpa_psk_file"` shows the VLAN hostapd assigned. openUF logs a key it left out because the VLAN had no network |
-| A WPA-Enterprise WLAN is on the air but no client can authenticate | Read hostapd's own truth: `grep -E "wpa_key_mgmt\|auth_server_addr\|auth_server_port\|acct_server_addr\|radius_acct_interim_interval\|dynamic_vlan\|nas_identifier\|wpa_passphrase" /var/run/hostapd-phy*.conf`. Expect `wpa_key_mgmt=WPA-EAP` (plus `FT-EAP` with 802.11r), the server lines, and **no** `wpa_passphrase`. `logread \| grep -i radius` shows what hostapd made of each exchange. If the server lines are there but nothing is answered, the AP cannot reach the server, or its shared secret differs — the server's own log is the place to look, and openUF never logs a secret |
-| A WPA-Enterprise WLAN exists but `hostapd-phy*.conf` has no `auth_server_addr` | A `wpad-basic-*` build: it has no RADIUS client. openUF logs `WLAN "<ssid>" is WPA-Enterprise, but this hostapd has no RADIUS client` and provisions anyway, since the controller applies no capability gate here. `grep -c auth_server_addr /usr/sbin/hostapd` must be non-zero; swap in a full `wpad-*` as in the `bss_transition` row above |
-| A WPA-Enterprise WLAN is skipped with `no usable RADIUS authentication server` | Every server the profile names was dropped. The log line gives the reason per index: a RadSec/TLS server (not supported), no usable IPv4 address, or a missing/oversized shared secret. A second server dropped for `has its own port/secret` is the schema limit described in § 6 |
-| A Passpoint WLAN cannot be saved: `api.err.DevicePasspointNotSupported` | The controller needs **both** Hotspot 2.0 (`fw_caps` `0x800000`) and RadSec (`fw2_caps` `0x80000`) claimed. openUF claims them only when `/usr/share/ucode/wifi/ap.uc` knows `iw_enabled` and the hostapd binary carries `hs20_conn_capab` (`grep -c hs20_conn_capab /usr/sbin/hostapd`) — a `wpad-basic-*` build has neither, so swap in a full `wpad-*`. The capability fields openUF reports are in the inform payload (`tools/heartbeat-probe.lua`) |
-| A Passpoint WLAN is on the air but clients see no ANQP data | Read hostapd's own truth: `grep -E "^(interworking|hs20|nai_realm|venue_name|venue_url|roaming_consortium|domain_name|anqp_3gpp_cell_net|hs20_oper_friendly_name|hs20_conn_capab|hs20_wan_metrics)=" /var/run/hostapd-phy*.conf`. New wifi-iface options need a **Force Provision** from the controller; a restart alone does not apply them. Plain `iw` will not show you the elements — ANQP answers are sent on request, not beaconed |
-| The Passpoint WLAN's BSS does not come up at all after a profile change | A malformed value in a hostapd config is a **parse error, and hostapd then refuses the whole BSS**, not just the line. `logread | grep -i "Line \|Invalid"` right after a provision names the offending line. If it is one openUF wrote, report it: every mapped line is validated against a real hostapd, so a rejected one is a bug, not a setting |
-| A WLAN with MAC Authentication on never appears | It is skipped on purpose when openUF cannot set the ACL up. `logread | grep "requires RADIUS MAC authentication"` gives the reason: no usable RADIUS server in the profile, or a `wpad-basic-*` with no RADIUS client (`grep -c auth_server_addr /usr/sbin/hostapd`). Provisioning it without the ACL would leave the WLAN open to everyone |
-| Every client is rejected on a MAC-authenticated WLAN | The RADIUS server is being asked in a format it does not know. OpenWrt's hostapd always sends the MAC lower-case colon-separated as both User-Name and User-Password; the controller's `radius.macacl.format` (and `emptypassword`) only reach UniFi's own patched hostapd and are ignored here. Match the server's user list to `00:00:5e:00:53:01` (lower case, colon-separated), or set the profile's MAC format to colon-separated lower case |
-| CoA/Disconnect from the RADIUS server does nothing | Check `grep radius_das /var/run/hostapd-phy*.conf`: the line must read `radius_das_client=<server ip> <secret>` with a `radius_das_port`. If both are missing, the WLAN's profile has no accounting server or "RADIUS DAS" is off — the controller sends the keys only then. If the server sends from a different address than its accounting address, hostapd drops the request: the controller fills the DAS client from the **first accounting server**, and hostapd accepts only that one |
-| EAP clients authenticate but are then refused | The RADIUS profile has "RADIUS assigned VLAN: required" (`dynamic_vlan=2` in `hostapd-phy*.conf`) and the server returned a VLAN this AP has no network for — `cat /var/run/hostapd-<ifname>.vlan` lists the only ones it can honour. Set the mode to optional, or put the WLAN on a network that already carries those VLANs |
-| A client's Virtual Network Override does nothing | Every AP and switch in the site must claim `fw_caps 0x80000000`, beside a ubios gateway — one device without it disables the feature site-wide, so a non-openUF AP on an old firmware is enough. Check the controller's own view: `curl -sk -b … /api/s/default/stat/device` and test each `fw_caps` for the sign bit. If the gate passes, the keys arrive as `aaa.<n>.accept_mac.*`; `grep accept_mac` the `debug_dump_file` capture to see whether the controller sent them at all |
-| The override arrives but the client stays on the SSID's network | Read the accept list hostapd actually loaded: `cat /etc/openuf/macvlan-openuf_*` (openUF's own file) and `cat /var/run/hostapd-<ifname>.maclist` (the one OpenWrt writes when the WLAN also has a MAC Address Filter). An address openUF refused is logged with the reason — a VLAN it could not build (no `lan_cpueth`), an allow list that does not permit it, a deny list that names it, or RADIUS MAC authentication on the WLAN, which refuses the whole feature |
-| A WLAN with an override vanished from the air | `logread \| grep -i "maclist\|accept_mac"`. hostapd fails the whole BSS over an accept file it cannot read or a line it cannot parse, so this means the file went missing after it was written, or something else rewrote it. openUF writes the file before it emits the option and validates every address, so its own output cannot cause this |
-| A 5 GHz radio is on the wrong channel after a radar hit and stays there | `sed -n '/openuf-cron-begin/,/openuf-cron-end/p' /etc/crontabs/root` must carry `0 2 * * * /usr/bin/syswrapper.sh dfs-reset`; if it does not, the controller is not pushing the job — it only does so for a radio pinned to a DFS channel the site's country allows (`uci get wireless.<radio>.channel` must be a number, not `auto`). Run `/usr/bin/syswrapper.sh dfs-reset` to ask for it now; `logread \| grep dfs-reset` gives the reason it was left alone. The commonest one is the non-occupancy list: `iw phy phy<N> channels` shows the channel as `DFS state: unavailable` with the time left, and openUF waits for that rather than announce a switch the kernel will refuse |
-| Auto-channel still picks a DFS or blacklisted channel | Both keys only arrive for a radio whose channel is `auto`, and the blacklist half only then. `uci show wireless | grep -E "acs_exclude_dfs|chanlist"` shows what landed: the 5 GHz radio should carry `acs_exclude_dfs` matching Settings → Radios, and a radio on Auto in a site with a channel blacklist should carry a `chanlist` plus `openuf_chanlist=1`. Missing entirely: the controller is not sending them — `tools/heartbeat-probe.lua` must show `wifi_caps2` with bit `0x10` set (`0x2070` with roam reports on), and new wifi-device options need a **Force Provision**. Present in UCI but ACS ignores them: `grep -E "acs_exclude_dfs|chanlist" /var/run/hostapd-phy*.conf` — options reach hostapd only on a WiFi reload. `logread | grep -E "channel blacklist|auto-channel unrestricted"` names the three cases where openUF deliberately writes nothing (§ Auto-channel limits) |
+| An Enhanced Open WLAN is missing from the AP, or a transition one is plain open | The radio does not claim `radio_caps2` bit `0x8`. Check `hostapd -vowe; echo $?` (must print 0; `wpad-basic-*` or `-mini` builds may lack OWE) and that `/usr/share/ucode/wifi/hostapd.uc` exists and mentions `owe_transition` (OpenWrt 25.12). Force Provision after fixing it |
+| A WLAN with Private Pre-Shared Keys is missing, or a key does not work | Missing: openUF does not claim `wifi_caps` bit `0x100000` (the controller logs "PPSK is not supported … will be skipped"). `grep -c vlanid= /usr/share/ucode/wifi/ap.uc` and `grep -c "from wpa_psk_file" /usr/sbin/hostapd` must both be non-zero. A VLAN key does not work: `uci show wireless \| grep psk` should list it, `cat /var/run/hostapd-<ifname>.psk` should have its `vlanid=` line, and `logread \| grep "from wpa_psk_file"` shows the VLAN hostapd assigned. openUF logs a key it left out because the VLAN had no network |
+| A power-saving client (phone, IoT) drains its battery faster after adoption, or a 2.4 GHz scan shows the AP without a country | The controller's own defaults: **U-APSD** and **802.11d** are off in a new UniFi WLAN (wlanconf `uapsd_enabled`, `country_beacon`), and openUF applies them (`uapsd '0'` on the section, `country_ie '0'` on the 2.4 GHz radio). Turn them on in the WLAN's settings. 802.11d stays on on 5/6 GHz regardless, while 802.11h is on |
+| A WPA-Enterprise WLAN is missing | `logread -e openuf` / `/var/log/openuf.log` says why: "no usable RADIUS server on the wire" means the WLAN has no RADIUS profile in the controller, or every server in it lacks an IP or secret (the controller drops those). A RADIUS MAC authentication format other than the default skips the WLAN too |
+| The UniFi app asks for a username/password on an AP's detail page and calls it standalone | `discovery_replies` is on: the app found the AP through its discovery reply, which lacks the console and device IDs a real adopted AP sends. `uci set openuf.main.discovery_replies=0 && uci commit openuf && /etc/init.d/openuf restart` |
+| A RADIUS CoA/Disconnect gets no answer | `netstat -lnu \| grep 3799` must show the dispatcher (it needs `/etc/openuf/das.json`, written when the controller's RADIUS profile has CoA and accounting on). The request must come from one of the WLAN's accounting servers. `grep radius_das /var/run/hostapd-*.conf` shows the WLAN's listener; its secret is the first accounting server's |
+| WPA-Enterprise clients are rejected | Check `/var/run/hostapd-<phy>.conf` for `auth_server_addr`/`auth_server_shared_secret`, and that the RADIUS server lists this AP's address as a client. A server left out for a different port or secret is logged ("RADIUS authentication server <k> left out"). With dynamic VLAN required, a VLAN this AP carries no other way is refused: give some WLAN or port that VLAN, or set the RADIUS profile's VLAN mode to optional |
 | Band Steering has no effect | `usteer` not installed or not running — `/etc/init.d/usteer status` |
-| Airtime Fairness switch does nothing | `ls /sys/kernel/debug/ieee80211/phy*/airtime_flags` must list a file per radio. Without it openUF does not claim `wifi_caps` bit `0x20` and the controller sends no `atf.*` at all (debugfs not mounted, or a kernel without `CONFIG_MAC80211_DEBUGFS`). `cat` it after a push: two flag names for on, none for off. A driver that does not schedule through mac80211 TXQs ignores the flags |
-| No "Possible interference" warning, ever | Only ath9k radios report the counters it needs. `cat /sys/kernel/debug/ieee80211/phy*/ath9k/interrupt` shows `GTT` (tx timeouts) and `CST` (carrier-sense timeouts); the controller warns when either rises faster than 10 per second, at most every 5 minutes per radio. A healthy radio stays far below that. ath10k and mt76 keep no such counters, so their radios never warn. Debugfs must be mounted, as it is on OpenWrt by default |
+| Roaming Assistant never moves a weak client | Expected when no other AP hears it clearly better. Check `ubus call usteer get_client_info '{"address":"<mac>"}'`: another AP (`<ip>#hostapd.*`) on the same SSID and band needs a signal at or above the threshold and at least `roam_assist_diff_db` stronger. No remote entries at all means the usteer instances are not peering — both APs need usteer running on the same L2 network. `logread \| grep roamassist` shows every action. No `openuf_roam_assist` in `uci show wireless` at all means the controller never sent the setting |
 | Log says `device Band Steering mode "equal" is not supported` | The AP's own Band Steering is set to Balance. usteer can only balance by rejecting associations, so openUF does not map it. Use Prefer 5G or the per-WLAN toggle |
-| Clients are steered 2.4 → 5 GHz with Band Steering off | `ubus call usteer get_config` must show `band_steering_interval: 0`. Any other value means usteer's default applies, and it steers. openUF writes the 0 on the next WiFi config push. Force Provision if it is missing |
-| Roaming Assistant never moves a weak client | Expected when no other AP hears it clearly better. Check `ubus call usteer get_client_info '{"address":"<mac>"}'`: another AP (`<ip>#hostapd.*`) on the same SSID and band needs a signal at or above the threshold and at least `roam_assist_diff_db` stronger. No remote entries at all means the usteer instances are not peering — both APs need usteer running on the same L2 network. `logread \| grep roamassist` shows every action |
-| A WiFi Blackout Schedule has no effect: the SSID stays up in its window | `uci show wireless \| grep openuf_schedule` must list the WLAN's on-times; if it doesn't, the push has not arrived. `ls /var/run/openuf.clock-ok`: without it the clock is not trusted yet and nothing is taken down (the controller's time and the AP's must agree within 60 s; check `date` and NTP). `logread \| grep wlansched` names every BSS taken down or brought back |
-| A WLAN stays off the air after its blackout ended | `iw dev <bss> info` must show the SSID and a channel. If it shows neither, the beacon did not restart: `hostapd_cli -i <bss> raw STOP_AP; hostapd_cli -i <bss> update_beacon` does it by hand (openUF retries on every heartbeat). `hostapd_cli` comes from `hostapd-utils` |
-| hostapd logs "Failed to set beacon parameters" every few seconds | Expected while a WLAN is in its blackout window and usteer runs: usteer refreshes every BSS's neighbor list, and hostapd tries to rebuild the beacon of the BSS that is down. It stops when the window ends |
+| Clients are steered 2.4 → 5 GHz with Band Steering off | Check the AP's own Band Steering setting too: Prefer 5G turns it on whatever the WLANs say. usteer also runs for Roaming Assistant; with all three off openUF stops it, so something else started it. `ubus call usteer get_config` must show `band_steering_interval: 0`: any other value means usteer's default applies, and it steers. openUF writes the 0 on the next WiFi config push. Force Provision if it is missing |
+| A WLAN Schedule has no effect, or switches at the wrong hour | `uci show wireless \| grep openuf_sched` shows the schedule the section carries and whether the schedule has it off. `date` must show the site's local time: the schedule follows the device clock and its timezone (`system_timezone`, NTP). A WLAN the controller disabled is never brought up by its schedule. `logread -e "WLAN schedule"` lists each switch |
+| A client's Virtual Network Override has no effect | `cat /etc/openuf/macvlan-<section>-*.list` should list the client with its VLAN, and `grep accept_mac_file /var/run/hostapd-<phy>.conf` should name it. openUF logs an entry it left out: an open or OWE WLAN, RADIUS MAC authentication, a MAC filter that refuses the client, or a VLAN with no network on this AP. The site feature itself appears only when the gateway supports it and every AP and switch with clients claims `fw_caps` `0x80000000` |
+| SNMP does not answer | `apk info -e snmpd-ssl`; `logread -e snmp`. `cat /var/run/snmpd.conf` should hold the controller's community (`com2sec`) and, for v3, a `createUser` line; v3 needs `snmpd-ssl` (the nossl build has no privacy, and openUF does not configure the user there) |
+| A Hotspot 2.0 WLAN is missing | `hostapd -vhs20; echo $?` must print 0 (a full `wpad-*` build); otherwise openUF does not claim `fw_caps` `0x800000` and the controller drops the WLAN. An OSEN WLAN is skipped (logged) |
+| Airtime Fairness switch does nothing | `ls /sys/kernel/debug/ieee80211/*/airtime_flags` must list a file per radio. Without it openUF does not claim `wifi_caps` bit `0x20` and the controller sends no `atf.*` at all (debugfs not mounted, or a kernel without `CONFIG_MAC80211_DEBUGFS`). `cat` it after a push: two flag names for on, none for off. A driver that does not schedule through mac80211 TXQs ignores the flags |
+| Load Average or Memory Usage looks off | Load Average is `cat /proc/loadavg` as is. Memory Usage is `(MemTotal − MemAvailable) / MemTotal` from `/proc/meminfo`; `sys_stats`' `mem_used` (bytes) is `MemTotal − MemFree`, as on a UniFi AP, so page cache counts as used there |
+| A client shows poor WiFi Experience | The score is the UniFi firmware's formula: the lowest of three terms, all read from `iw dev <ifname> station dump`. The client's `satisfaction_reason` names the term that set it (1 signal, 2 phy rate, 16 retries). **Signal**: `signal avg` minus the radio's noise (`iw dev <ifname> survey dump`, the `[in use]` entry, taken as at least −96 dBm). Under 15 dB scores below 90, and under 7 dB below 50. **PHY rate**: the mean of `tx bitrate` and `rx bitrate`, in steps: ≤ 54 Mbit/s 80, ≤ 100 Mbit/s 85, ≤ 200 Mbit/s 90, ≤ 400 Mbit/s 95. A single-stream 2.4 GHz client therefore tops out at 85. `rx bitrate` is the last frame's rate, so a mostly idle client reads lower. **Retries**: Δ`tx retries` per Δ`tx packets` over the last full minute. Up to 25 % costs nothing and 100 % scores 0. Each frame dropped in that minute (Δ`tx failed`) then costs a point. On mt76, `tx failed` also counts the retries, so the drops are Δ(`tx failed` − `tx retries`). A new client has no full minute yet, so this term reads 100 for its first minute |
+| A radio's Ch. Util reads 0 % | Usually true: it is the busy share of the operating channel since the previous inform (~10 s), rounded to whole percent like UniFi firmware, so a quiet 5 GHz cell at 0.4 % shows 0. Check with two `iw dev <ifname> survey dump` readings 10 s apart (`[in use]` entry: Δ`channel busy time` / Δ`channel active time`). An openUF without upstream facf986 sent the average since the radio came up, which hid every spike |
+| Air Stats on an mt76 AP show billions of tx packets, or retries/drops near 50 % | A station's `tx retries`/`tx failed` read 4294967295 once (mt76 in OpenWrt 25.12 subtracts 1 from 0), and the controller added 2^32 to its cumulative per-band totals. openUF now reads such a value as 0, and counts mt76's drops as `tx failed` − `tx retries`. The totals already stored stay until the AP is forgotten and re-adopted |
+| A client's "TX Retries" reads 0.0 % | The controller computes it itself from the change in the client's `tx_retries` and `wifi_tx_attempts` (= `tx packets` in `iw dev <ifname> station dump`) between two informs. It stays 0.0 % while the client sends nothing or the driver counts no retries. An openUF without upstream 70c6498 did not send `tx_retries` per client, so every client read 0.0 % |
+| A wired client behind the AP shows terabytes of usage in its 24 h / hourly / daily history, while its live totals look right | A controller collision, not an openUF counter. The controller writes a wired host that an AP reports in `port_table[].mac_table` into the per-client history with no byte counters. A UniFi gateway writes the same client with its own lifetime counter, so the controller adds that whole counter again on every AP inform. The history is wrong, the live totals and the port attribution are right. Expected: a real U6-IW goes through the same code. The only openUF-side fix would be to stop reporting wired hosts, so it is left as is (PROTOCOL-VALIDATION "A wired client's usage history grows") |
+| Clients on the same radio can't reach each other (a Cast/Google Home stereo pair or speaker group falls apart, AirPlay or printers vanish) while other clients are fine | The WLAN has Proxy ARP or Multicast Enhancement on, so OpenWrt forces `ap_isolate=1`, and the radio's bridge port lost its hairpin flag in a reconfigure (§ Hairpin). `cat /sys/class/net/<ifname>/brport/hairpin_mode` must be `1` on every BSS whose `/var/run/hostapd-<phy>.conf` block has `ap_isolate=1`. openUF restores it within a minute and logs `re-asserted hairpin_mode`. On an older openUF, run `echo 1 >` on that file and on `proxyarp_wifi` |
+| A weak client cannot connect, or keeps getting disconnected | Check the radio's Minimum RSSI (Devices → AP → Radios). With it on, hostapd refuses association below the threshold + 3 dB (`grep rssi_ /var/run/hostapd-phy*.conf` shows the live value), and a client whose signal (`iw dev <ifname> station dump`) stays below the threshold for 30 s is deauthenticated. Lower the threshold, or move the client closer |
+| Cross-AP roams always fall back to a full handshake, and the target logs `l2_packet_send - send: No such device or address` | hostapd's 802.11r key-exchange socket is bound to a bridge that no longer exists. `/proc/net/packet`: the `88b7` row's `Iface` must be the bridge's current ifindex, not `-1`. openUF notices within two minutes (`logread \| grep rrbguard`) and restarts wpad when no client is connected or between 04:00 and 05:00, at most every 6 h. By hand: `/etc/init.d/wpad restart; sleep 6; wifi up` (`wifi up` alone does not restart hostapd) |
+| Clients on one radio get disconnected when many are connected | Max Clients is on for the radio: `uci get wireless.<radio>.loadbalance_maxsta` shows the cap. Above it, the clients with the longest `inactive time` (`iw dev <ifname> station dump`) are deauthenticated every heartbeat. Raise the cap or turn it off |
 | A WiFi Speed Limit has no effect | `uci show wireless \| grep ratelimit` must show the WLAN's kbps; if not, the push has not arrived. `tc class show dev <bss>` must list a class `1:1` at the WLAN's rate and one class per connected client; `tc filter show dev <bss>` shows each client's MAC (as `match` keys at -16/-12). `logread \| grep "Speed Limit"` names any command `tc` rejected; it is retried after 5 minutes |
 | Upload is capped but traffic is dropped rather than queued | `kmod-ifb` is missing (`logread \| grep kmod-ifb`): upload falls back to `police`. `apk add kmod-ifb`, then `/etc/init.d/openuf restart` |
 | A client's own speed limit does not apply | The controller sends it only when the client (re)connects or its profile changes. `grep sta_rates /etc/openuf/state.json` shows what arrived. Reconnecting the client makes the controller send it again |
-| Load Average or Memory Usage looks off | Load Average is `cat /proc/loadavg` as is. Memory Usage is `(MemTotal − MemFree) / MemTotal` from `/proc/meminfo`, so page cache counts as used, as on a UniFi AP. Neither shows on a device panel until the first inform after an upgrade |
-| A command or config change takes a whole heartbeat to reach the AP | This is the STUN wake-up (README). `grep stun_url /etc/openuf/state.json` must show the controller's `stun://…:3478/`. After an upgrade it appears only with the next config push, so Force Provision once. `netstat -uanp \| grep lua` must list a UDP socket owned by the inform process, and the controller's device record must carry the same port as `connect_request_port`. The AP must be able to reach the controller on UDP 3478 and receive the reply. A log line `inform: stun: …` names a resolve or send failure. STUN stops after 3 unanswered informs and resumes when the controller answers |
-| A client's Power Save always reads off | openUF reports power save only on a radio where mac80211 tracks it: `cat /sys/kernel/debug/ieee80211/phy*/hwflags`. A radio listing `AP_LINK_PS` (ath10k, mt76) leaves it to the driver, which does not report it, so the controller reads off. Elsewhere `cat /sys/kernel/debug/ieee80211/<phy>/netdev:<bss>/stations/<mac>/flags` shows `PS_STA` while the client dozes. The controller's Fast Roaming (802.11r) flag per client comes from `hostapd_cli -i <bss> sta <mac>`: `AKMSuiteSelector` 00-0f-ac-3, -4, -9, -13, -19 or -25. openUF asks once per association, not every heartbeat: again when the client reconnects or moves to another SSID on the AP |
 | A client you unblocked still cannot connect, or a blocked one still can | A block lives in two places: `nft list set bridge openuf blocked_macs` and hostapd's deny list on each SSID, `hostapd_cli -i <bss> deny_acl SHOW` (the BSS names are in `ls /var/run/hostapd/`). openUF re-checks hostapd's list on every heartbeat while anything is blocked and removes its own entries on unblock, but leaves MACs that the SSID's MAC filter (deny mode) lists. A client the SSID's MAC filter allows (allow mode) can still connect while blocked; nft then drops all its traffic |
-| Clients on one radio get disconnected when many are connected | Load balance is on for the radio: `uci get wireless.<radio>.loadbalance_maxsta` shows the cap. Above it, the clients with the longest `inactive time` (`iw dev <ifname> station dump`) are deauthenticated every heartbeat. Raise the cap or turn it off on the device (`loadbalance_enabled: false`) |
-| A weak client cannot connect, or keeps getting disconnected | Check the radio's Minimum RSSI (Devices → AP → Radios). With it on, hostapd refuses association below the threshold + 3 dB (`grep rssi_ /var/run/hostapd-phy*.conf` shows the live value), and a client whose `signal avg` (`iw dev <ifname> station dump`) stays below the threshold for 30 s is deauthenticated. Lower the threshold, or move the client closer |
-| A client shows poor WiFi Experience | The score is the UniFi firmware's formula: the lowest of three terms, all read from `iw dev <ifname> station dump`. The client's `satisfaction_reason` names the term that set it (1 signal, 2 phy rate, 16 retries). **Signal**: `signal avg` minus the radio's noise (`iw dev <ifname> survey dump`, the `[in use]` entry, taken as at least −96 dBm). Under 15 dB scores below 90, and under 7 dB below 50. **PHY rate**: the mean of `tx bitrate` and `rx bitrate`, in steps: ≤ 54 Mbit/s 80, ≤ 100 Mbit/s 85, ≤ 200 Mbit/s 90, ≤ 400 Mbit/s 95. A single-stream 2.4 GHz client therefore tops out at 85. `rx bitrate` is the last frame's rate, so a mostly idle client reads lower. **Retries**: Δ`tx retries` per Δ`tx packets` over the last full minute. Up to 25 % costs nothing and 100 % scores 0. Each frame dropped in that minute (Δ`tx failed`) then costs a point. On mt76, `tx failed` also counts the retries, so the drops are Δ(`tx failed` − `tx retries`). A new client has no full minute yet, so this term reads 100 for its first minute |
-| A client's "TX Retries" reads 0.0 % | The controller computes it itself from the change in the client's `tx_retries` and `wifi_tx_attempts` (= `tx packets` in `iw dev <ifname> station dump`) between two informs. It stays 0.0 % while the client sends nothing or the driver counts no retries. openUF before 2026-10-13 did not send `tx_retries` per client, so every client read 0.0 % |
-| Air Stats on an mt76 AP show billions of tx packets, or retries/drops near 50 % | A station's `tx retries`/`tx failed` read 4294967295 once (mt76 in OpenWrt 25.12 subtracts 1 from 0), and the controller added 2^32 to its cumulative per-band totals. openUF now reads such a value as 0. The totals already stored stay until the AP is forgotten and re-adopted |
-| Clients on the same radio can't reach each other (a Cast/Google Home stereo pair or speaker group falls apart, AirPlay or printers vanish) while other clients are fine | The WLAN has Proxy ARP or Multicast Enhancement on, so OpenWrt forces `ap_isolate=1`, and the radio's bridge port lost its hairpin flag in a reconfigure (§ Hairpin). `cat /sys/class/net/<ifname>/brport/hairpin_mode` must be `1` on every BSS whose `/var/run/hostapd-phy*.conf` block has `ap_isolate=1`. openUF restores it within a minute and logs `re-asserted hairpin_mode`. On an older openUF, run `echo 1 >` on that file and on `proxyarp_wifi` |
 | Idle clients score low on WiFi Experience, and every client receives the same ~16 KB/s even when nothing is using it | usteerd's broadcast sync, copied to each client by Multicast Enhancement (§ usteer's AP-to-AP sync). Compare a client's `tx bytes` in `iw dev <ifname> station dump` over 30 s across clients. `nft list table bridge openuf_usteer` must show three drop rules while usteerd runs. On an older openUF, the traffic reaches every client |
-| A wired client behind the AP shows terabytes of usage in its 24 h / hourly / daily history, while its live totals look right | A controller collision, not an openUF counter. The controller writes a wired host that an AP reports in `port_table[].mac_table` into the per-client history with no byte counters. A UniFi gateway writes the same client with its own lifetime counter, so the controller adds that whole counter again on every AP inform. The history is wrong, the live totals and the port attribution are right. Expected: a real U6-IW goes through the same code. The only openUF-side fix would be to stop reporting wired hosts, so it is left as is (PROTOCOL-VALIDATION "A wired client's usage history grows") |
-| `logread` is mostly `BEACON-RESP-RX` hex lines | hostapd logging each 802.11k beacon report openUF asked a client for. Raise `rrm_request_interval` (3600 s by default; older `conf.lua` files set 600), or set `rrm_enrichment = false` |
-| A 5 GHz radio left its DFS channel and the controller logged nothing | The radar event comes off hostapd's control socket, so it needs a monitor attached: `pgrep -f '[h]ostapd_cli .*-a /tmp/openuf-bresp.sh'` must list one per BSS, and `hostapd-utils` must be installed. `grep DFS- /tmp/openuf-rrm.jsonl` right after a hostapd start on a DFS channel should show the CAC pair; if that is empty the monitors are not running. openUF logs `inform: DFS radar detected on channel …` for every event it reports |
-| A radio's Ch. Util reads 0 % | Usually true: it is the busy share of the operating channel since the previous inform (~10 s), rounded to whole percent like UniFi firmware, so a quiet 5 GHz cell at 0.4 % shows 0. Check with two `iw dev <ifname> survey dump` readings 10 s apart (`[in use]` entry: Δ`channel busy time` / Δ`channel active time`). Before 2026-10-13 openUF sent the average since the radio came up, which hid every spike |
-| Locate/LED does nothing | `dev.conf.led` is `nil` in your modelmap — set it to a path from `ls /sys/class/leds` |
+| No "Possible interference" events ever appear for an openUF AP | Only ath9k radios report the counters it needs. `cat /sys/kernel/debug/ieee80211/phy*/ath9k/interrupt` shows `GTT` (tx timeouts) and `CST` (carrier-sense timeouts); the controller warns when either rises faster than 10 per second, at most every 5 minutes per radio. A healthy radio stays far below that. ath10k and mt76 keep no such counters, so their radios never warn. Debugfs must be mounted, as it is on OpenWrt by default. Channel utilization and "Avg. Interference" (from `iw dev <ifname> survey dump`) are reported as usual |
+| Locate does nothing | The board registered no usable status LED — set `uci set openuf.board.led=<name>` to a name from `ls /sys/class/leds` (§ 3) |
+| LEDs stay dark with the LED setting on | `ls /var/run/openuf-leds.json`: present means openUF still holds them (a Locate running, or the setting still off as far as openUF knows — `grep led_enabled /etc/openuf/state.json`). Absent means they are in OpenWrt's own state: check the LED's section in `/etc/config/system` and `cat /sys/class/leds/<led>/trigger` |
 | JSON decode error in controller logs | AES key mismatch — try `syswrapper.sh reset-inform` |
 | `inform: parse error: ... inflate: truncated stream` | A compressed controller response arrived incomplete. One heartbeat is lost and the next retries, so an occasional line is harmless; a steady stream of them points at the link to the controller (an MTU or proxy problem), not at the device |
 | Adopted device goes Offline and the log fills with `HTTP 400` | The identity MAC changed underneath the adoption — usually `dev.conf.net.lan_cpueth` now naming a different interface. openUF says so once per streak, naming the MAC it informs as. Forget the device in the controller and re-adopt, or point `lan_cpueth` back at the interface it was adopted under |
-| Device adopts, reports ports and statistics, but no pushed WLAN is ever created | `libuci-lua` missing — every radio and WLAN read fails silently and `radio_table` goes out empty, so the controller has no radio to push onto. openUF says so at startup; `apk add libuci-lua` (or `opkg install`) and restart |
+| Device adopts, reports ports and statistics, but no pushed WLAN is ever created | `libuci-lua` missing — every radio and WLAN read fails silently and `radio_table` goes out empty, so the controller has no radio to push onto. openUF says so at startup; `apk add libuci-lua` and restart |
 | SSID not appearing after adoption | Check `uci show wireless`, check `loglevel` in `/var/log/openuf.log` |
 | `lldp_table` empty | `lldpd` not running — run `/etc/init.d/lldpd start` |
+| A wireless client shows no IP, hostname or IPv6 address | The AP knows a client's addresses only from its own caches: `cat /proc/net/arp` for the IPv4 address, `ip -6 neigh show` for the IPv6 ones (global and ULA only, link-local left out), and `/tmp/dhcp.leases` for the hostname, which exists only when this device runs the DHCP server. A bridged AP that never exchanges packets with the client has no entry, and its `sta_table` entry leaves the field out. With a UniFi OS gateway (UDM, UCG) connected in the site, the gateway sets the client's IP and its hostname wins over the AP's. Busybox `ip` lists the neighbour cache, so no extra package is needed |
 | Wired clients reach LAN peers but not the gateway or internet, while WiFi clients on the same AP are fine (DSA boards) | The VLAN-SSID bridge shares the physical uplink with `br-lan`, so the switch's single hardware FDB learns the router's MAC against the tagged port. openUF sets `learning '0'` on that port to prevent it — check `bridge fdb show` for the router's MAC carrying `offload` on `<uplink>.<vid>` instead of the bare uplink, and confirm `network.openuf_brport<vid>` exists |
 | Bootstrap account (`ubnt`) doesn't lock after adoption, or doesn't re-enable after a factory reset | `inform.lua` must be running for this — it's what detects the state change and runs `passwd -l`/`-u` (see § SSH prerequisite). Check `/var/log/openuf.log`. |
 
@@ -1990,7 +2168,7 @@ adopted AP alongside `openuf`.
 
 ```sh
 ssh root@<ap> 'cat > /tmp/heartbeat-probe.lua' < tools/heartbeat-probe.lua
-ssh root@<ap> 'cd /opt/openuf && lua /tmp/heartbeat-probe.lua'
+ssh root@<ap> 'cd /usr/share/openuf && lua /tmp/heartbeat-probe.lua'
 ```
 
 Read the **steady** figure, not the cold one: the first payload of a process

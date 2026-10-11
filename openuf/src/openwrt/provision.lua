@@ -1,0 +1,1277 @@
+--[[
+	provision.lua -- the controller's answers, carried out on the device:
+	setparam config pushes (network, WiFi, per-port VLANs, system settings,
+	L2 hardening, rate limits) and the commands (locate, kick, block,
+	upgrade, set-inform, ...). Returns whether the caller should inform again
+	at once.
+
+	handle(ctx, ...) takes inform.lua's module table as ctx: the platform
+	modules it works through, which tests replace, and inform.lua's own
+	helpers (the dropped-key report, cfgversion settlement, ...).
+]]--
+
+local cjson      = require("cjson")
+local wire       = require("unifi.wire")
+local recognized = require("unifi.recognized")
+local mesh       = require("unifi.mesh")
+local is_mac, is_hex32 = wire.is_mac, wire.is_hex32
+
+local M = {}
+
+-- One blocking off-channel sweep on an AP netdev: `iw dev <if> scan
+-- ap-force`. On both our boards (OpenWrt 25.12, mac80211 6.18 backports:
+-- ath9k/ath10k on the Archer C5, mt76 on the AX3000T) a plain `scan` sweeps
+-- exactly the same channels as `ap-force` -- compared on the live APs,
+-- 2026-09-25. `ap-force` (NL80211_SCAN_FLAG_AP) is kept as a free guard for
+-- a driver/kernel that does refuse a scan on a beaconing AP. What matters
+-- more is the exit status: _popen drops stderr, so a refused scan used to be
+-- indistinguishable from a successful one. The scan output itself is
+-- discarded (the caller reads the kernel's `survey dump`). `freqs` (MHz)
+-- limits the sweep to those channels -- one chunk of a sweep job (below);
+-- without it, the whole band. Returns true when the sweep ran; logs and
+-- returns false when iw refused.
+-- duration: TU per channel; quiet leaves the refusal to the caller. iw
+-- reads its keywords in any order (a non-number ends the freq list).
+local function force_scan(ufuci, ifname, who, freqs, duration, quiet)
+	local extra = ""
+	if type(freqs) == "table" then
+		local list = {}
+		for _, f in ipairs(freqs) do
+			local n = tonumber(f)
+			if n then list[#list + 1] = tostring(math.floor(n)) end
+		end
+		if #list > 0 then extra = " freq " .. table.concat(list, " ") end
+	end
+	if duration then extra = extra .. " duration " .. math.floor(duration) end
+	local out = ufuci._popen("iw dev " .. ifname
+		.. " scan ap-force" .. extra .. " >/dev/null 2>&1 && echo scan-ok") or ""
+	if out:find("scan-ok", 1, true) then return true end
+	if not quiet then
+		io.stderr:write("inform: " .. who .. ": iw refused to scan " .. ifname .. "\n")
+	end
+	return false
+end
+
+-- Airtime Scan (spectrum-scan) dwell: each channel of a chunk is its own scan
+-- of SPECTRUM_DWELL_TU (1 TU = 1.024 ms), with SPECTRUM_HOME_S back on the
+-- operating channel before the next. A default sweep listens 46-146 ms per
+-- channel, too short for a steady utilization figure, and one sweep never
+-- returns home between channels (13 channels = 13 dwells end to end).
+-- ath9k, ath10k and mt76 all honour `duration` (213-259 ms of survey active
+-- time for 200 TU); a 2.4 GHz client pinged through a real Scan Now saw
+-- 210-330 ms round trips and stayed associated (upstream a684980, measured
+-- 2026-10-10). `passive` with `duration` is refused by iw, so none is sent.
+M.SPECTRUM_DWELL_TU = 200
+M.SPECTRUM_HOME_S   = 0.3
+
+-- Whether the AP's own Band Steering setting (unifi/wlan.lua's
+-- parse_bandsteering) turns usteer's band steering on. It adds to the
+-- per-WLAN toggle and never switches it off: "disabled" also means "advanced
+-- features off" or "nothing paired". Prefer 5G is what usteer does. Balance
+-- ("equal") has no usteer equivalent: usteer balances client counts only by
+-- rejecting association requests (assoc_steering), which would also move
+-- clients between APs, and probe_steering is compiled in but not
+-- configurable. It is reported once, not faked.
+M._warned_bandsteering_mode = false
+
+-- Lock to Access Point: keep the push's lock2ap MACs (the clients locked to
+-- some other AP, denied here by the MAC filter) in st.lock2ap, for the sibling
+-- exchange to announce. Every VAP carries the same set, but a WLAN with its
+-- own allow filter carries none, so it is the union. nil when there are none.
+-- Returns true when st.lock2ap changed.
+---@param st table
+---@param vap_table VapIntent[]
+---@return boolean
+function M.record_lock2ap(st, vap_table)
+	local set, list = {}, {}
+	for _, vap in ipairs(vap_table or {}) do
+		for _, mac in ipairs(vap.mac_filter_lock2ap or {}) do
+			if not set[mac] then set[mac] = true; list[#list + 1] = mac end
+		end
+	end
+	table.sort(list)
+	local new = #list > 0 and list or nil
+	local old = type(st.lock2ap) == "table" and st.lock2ap or {}
+	if #old == #list then
+		local same = true
+		for i = 1, #list do if old[i] ~= list[i] then same = false end end
+		if same then return false end
+	end
+	st.lock2ap = new
+	return true
+end
+---@param bs BandSteeringIntent?
+---@return boolean
+function M.device_band_steering(bs)
+	if not (bs and bs.enabled) then return false end
+	if bs.mode == "prefer_5g" then return true end
+	if not M._warned_bandsteering_mode then
+		M._warned_bandsteering_mode = true
+		io.stderr:write(("inform: device Band Steering mode %q is not supported, "
+			.. "only prefer_5g; per-WLAN Band Steering still applies\n"):format(tostring(bs.mode)))
+	end
+	return false
+end
+
+-- The controller's `scan-band` (com.ubnt.service.system.l.RxFvcetMTlkSFFxK's
+-- value: BAND_NG 0, BAND_NA 1, BAND_6E 2) as the radio_table band it names.
+M.QUICKSCAN_BANDS = {[0] = "ng", [1] = "na", [2] = "6e"}
+
+-- Spectrum sweeps run as JOBS, one chunk of channels at a time, so the radio
+-- keeps serving its clients in between. (Ported from the yesrab fork,
+-- e7ffb87.) On an AP-only radio mac80211's software scan never returns to
+-- the operating channel until the sweep is over: the whole 5 GHz band in one
+-- `iw scan` was ~2.7 s without a beacon on the fork's mt7986, and every
+-- client there gave the AP up and roamed ("Quick Scan kicks everyone off").
+-- Radio AI's prescan and the nightly 03:00 sweep ask every eligible AP at
+-- once, band by band, so there is nowhere to roam to either. Four channels
+-- are at most ~0.45 s off-channel (four ~110 ms passive dwells), under what
+-- clients forgive; a chunk runs at most every SWEEP_CHUNK_GAP seconds.
+--
+-- ctx._scan_jobs, oldest first, one per radio:
+--   {radio, ifname, who, freqs = {{freq, channel, passive}, ...} or nil,
+--    next = index into freqs, rows = {}, by_freq = {}, pre_noise = {}}
+-- freqs is the radio's usable channel list (sysinfo.phy_frequencies); where
+-- it cannot be read the job is one whole-band chunk, the old behaviour.
+M.SWEEP_CHUNK_CHANNELS = 4
+M.SWEEP_CHUNK_GAP      = 5
+
+-- The radio_table band a frequency (MHz) falls in, to keep a multi-band
+-- phy's list to the band of the radio being swept.
+local function freq_band(f)
+	if f < 3000 then return "ng" end
+	if f <= 5925 then return "na" end
+	return "6e"
+end
+
+-- The band a `scan`/`scan_band` command names: scan_band's `band`; scan's
+-- radio_name, else the band of its first freq; nil (every radio) otherwise.
+---@param ctx table
+---@param resp table
+---@return string?
+function M.scan_cmd_band(ctx, resp)
+	if resp.cmd == "scan_band" then
+		return type(resp.band) == "string" and resp.band or nil
+	end
+	local rn, ufuci = resp.radio_name, ctx._ucihelper
+	if type(rn) == "string" and rn ~= "" and ufuci and ufuci.get_radio_table then
+		local ok, radios = pcall(ufuci.get_radio_table)
+		for _, r in ipairs(ok and type(radios) == "table" and radios or {}) do
+			if r.name == rn then return r.radio end
+		end
+	end
+	local f = tonumber(tostring(resp.freq or ""):match("%d+"))
+	return f and freq_band(f) or nil
+end
+
+-- Queues a sweep: `spectrum-scan` from the command handler, `quick-scan` from
+-- inform.lua's loop once the controller has seen `quickscan_scanning`. `band`
+-- ("ng"/"na"/"6e") limits it to that band's radios; nil queues every radio.
+-- `who` names the command in the log and in the job. A radio already being
+-- swept for the same `who` keeps its job and its progress; a different
+-- `who` replaces the job where it stands. Returns how many radios are queued.
+---@param ctx table
+---@param who string
+---@param band string?
+---@return integer
+function M.spectrum_sweep(ctx, who, band)
+	local ufuci = ctx._ucihelper
+	if not (ufuci and ufuci.get_radio_table and ufuci.get_ifname_for_radio) then return 0 end
+	local ok_r, radios = pcall(ufuci.get_radio_table)
+	if not ok_r or type(radios) ~= "table" then return 0 end
+	ctx._scan_jobs = ctx._scan_jobs or {}
+	local queued = 0
+	for _, radio in ipairs(radios) do
+		local ok_if, ifname = pcall(ufuci.get_ifname_for_radio, radio.name)
+		if ok_if and ifname and (not band or radio.radio == band) then
+			local slot = nil
+			for i, job in ipairs(ctx._scan_jobs) do
+				if job.radio.name == radio.name then slot = i; break end
+			end
+			if not (slot and ctx._scan_jobs[slot].who == who) then
+				local freqs = nil
+				local pf = ctx._sysinfo and ctx._sysinfo.phy_frequencies
+				local ok_f, list = false, nil
+				if pf then ok_f, list = pcall(pf, ifname) end
+				if ok_f and type(list) == "table" then
+					freqs = {}
+					for _, f in ipairs(list) do
+						local mhz = tonumber(f.freq)
+						if mhz and (not radio.radio or freq_band(mhz) == radio.radio) then
+							freqs[#freqs + 1] = f
+						end
+					end
+					if #freqs == 0 then freqs = nil end
+				end
+				local job = {radio = radio, ifname = ifname, who = who, freqs = freqs,
+					next = 1, rows = {}, by_freq = {}, pre_noise = {}}
+				if slot then ctx._scan_jobs[slot] = job
+				else ctx._scan_jobs[#ctx._scan_jobs + 1] = job end
+			end
+			queued = queued + 1
+		end
+	end
+	return queued
+end
+
+-- True while a sweep for `who` ("quick-scan", "spectrum-scan") is queued.
+---@param ctx table
+---@param who string
+---@return boolean
+function M.sweep_active(ctx, who)
+	for _, job in ipairs(ctx._scan_jobs or {}) do
+		if job.who == who then return true end
+	end
+	return false
+end
+
+-- One chunk of the oldest job, when SWEEP_CHUNK_GAP has passed since the
+-- last: its next SWEEP_CHUNK_CHANNELS channels (or the whole band), then the
+-- survey counters merged into the radio's spectrum_table so far. The job is
+-- dropped after its last chunk. Returns true when a chunk ran.
+--
+-- Field names (spectrum_table/spectrum_table_time/spectrum_scan_timestamp/
+-- channel/center_freq/width/utilization/interference) are confirmed against
+-- the controller's own bytecode (PROTOCOL-VALIDATION.md's radio_table_stats
+-- reference). A row is one 20 MHz survey reading; report.lua lists it once
+-- per width (unifi/payload.lua spectrum_table). `interference` is the
+-- noise-floor dBm, as on real UAPs.
+---@param ctx table
+---@param now integer
+---@return boolean
+function M.sweep_tick(ctx, now)
+	local job = ctx._scan_jobs and ctx._scan_jobs[1]
+	if not job then return false end
+	if now < (ctx._scan_next_chunk or 0) then return false end
+	local ufuci = ctx._ucihelper
+	if not (ufuci and ufuci._popen) then
+		table.remove(ctx._scan_jobs, 1)
+		return false
+	end
+	ctx._scan_next_chunk = now + M.SWEEP_CHUNK_GAP
+
+	local chunk, passive = nil, 0
+	if job.freqs then
+		chunk = {}
+		local last = math.min(job.next + M.SWEEP_CHUNK_CHANNELS - 1, #job.freqs)
+		for i = job.next, last do
+			chunk[#chunk + 1] = job.freqs[i].freq
+			if job.freqs[i].passive then passive = passive + 1 end
+		end
+		job.next = last + 1
+	end
+	local done = not job.freqs or job.next > #job.freqs
+
+	-- Survey counters are cumulative and exist independently of the sweep,
+	-- so sample them BEFORE it as well: immediately after a scan the radio
+	-- has just come back from off-channel and the OPERATING channel's noise
+	-- reads as 0 -- confirmed on real hardware, where the same channel
+	-- reports 0 right after the sweep and -106 dBm moments later. 0 dBm is
+	-- not a plausible noise floor, and this value is reported to the
+	-- controller as `interference`.
+	local ok_pre, pre_stats = pcall(ctx._sysinfo.radio_stats, job.ifname)
+	if ok_pre and type(pre_stats) == "table" then
+		for _, s in ipairs(pre_stats) do
+			if s.freq and s.noise and s.noise ~= 0 then job.pre_noise[s.freq] = s.noise end
+		end
+	end
+	-- A refused sweep still leaves the operating channel's survey, so the
+	-- table is built either way; force_scan has logged the refusal.
+	if job.who == "spectrum-scan" and chunk then
+		local scanned = 0
+		for i, f in ipairs(chunk) do
+			if force_scan(ufuci, job.ifname, job.who, {f}, M.SPECTRUM_DWELL_TU, true) then
+				scanned = scanned + 1
+			end
+			if i < #chunk and ctx._pause then ctx._pause(M.SPECTRUM_HOME_S) end
+		end
+		if scanned == 0 and #chunk > 0 then
+			io.stderr:write("inform: spectrum-scan: iw refused to scan " .. job.ifname .. "\n")
+		end
+	else
+		force_scan(ufuci, job.ifname, job.who, chunk)
+	end
+	io.stderr:write(string.format("inform: %s: swept %s on %s (%d channel(s) left)\n",
+		tostring(job.who),
+		chunk and (#chunk .. " channel(s), " .. passive .. " passive") or "the whole band",
+		tostring(job.ifname), job.freqs and (#job.freqs - job.next + 1) or 0))
+
+	local ok_rs, stats = pcall(ctx._sysinfo.radio_stats, job.ifname)
+	if ok_rs and type(stats) == "table" then
+		local in_chunk = {}
+		for _, f in ipairs(chunk or {}) do in_chunk[f] = true end
+		for _, s in ipairs(stats) do
+			-- Merged by frequency: this chunk's channels and the operating
+			-- one take the fresh reading; an earlier chunk's channel keeps
+			-- the reading its own chunk took (a driver may age it out of
+			-- the survey, or report it again unchanged).
+			local row = job.by_freq[s.freq]
+			if s.freq and (not chunk or in_chunk[s.freq] or s.in_use or not row) then
+				local total = s.channel_time or 0
+				local busy  = s.channel_time_busy or 0
+				local fresh = {
+					channel     = ctx._sysinfo.channel_from_freq(s.freq),
+					center_freq = s.freq,
+					utilization = total > 0 and math.floor(busy * 100 / total) or 0,
+					-- Post-sweep 0 falls back to the pre-sweep reading.
+					interference = (s.noise ~= 0 and s.noise) or job.pre_noise[s.freq] or 0,
+				}
+				if row then
+					for k, v in pairs(fresh) do row[k] = v end
+				else
+					job.by_freq[s.freq] = fresh
+					job.rows[#job.rows + 1] = fresh
+				end
+			end
+		end
+		ctx._spectrum_cache[job.radio.name] = {
+			table          = job.rows,
+			table_time     = now,
+			scan_timestamp = now,
+		}
+	end
+	if done then table.remove(ctx._scan_jobs, 1) end
+	return true
+end
+
+-- Disconnect a guest whose authorization ended, as UniFi firmware does
+-- (syswrapper.sh unauthorize-guest: drop the MAC, then kick_sta on every
+-- user and guest VAP; firmware-confirmed upstream for 3.9.27 to 4.0.15).
+-- Associated and unauthorized, the guest's OS never re-runs its
+-- captive-portal check, so it sits behind the portal with no page to log in
+-- on. On reconnecting it reports authorized false, which the controller
+-- leaves alone.
+--
+-- The firmware reports `authorized` from the very list it just changed, so
+-- one unauthorize-guest is all it ever gets. openUF reports it only on the
+-- WLANs st.guest_wlans names, and true elsewhere; if that ever disagreed
+-- with the controller, unauthorize-guest would come on every inform. One
+-- kick per MAC per GUEST_KICK_HOLD seconds keeps that from becoming a
+-- deauth storm.
+M.GUEST_KICK_HOLD = 60
+M._guest_kicked = {}
+function M.guest_kick(ctx, mac)
+	mac = type(mac) == "string" and mac:lower():match("^%s*(%S+)%s*$")
+	local ufuci = ctx._ucihelper
+	if not (is_mac(mac) and ufuci and ufuci.disconnect_station) then return false end
+	local now = ctx._time()
+	for m, t in pairs(M._guest_kicked) do
+		if now - t >= M.GUEST_KICK_HOLD or now < t then M._guest_kicked[m] = nil end
+	end
+	if M._guest_kicked[mac] then return false end
+	M._guest_kicked[mac] = now
+	pcall(ufuci.disconnect_station, mac)
+	return true
+end
+
+function M.handle(ctx, json_str, st, cfg)
+	-- Tracks the config rather than latching on: a caller that stops passing
+	-- debug_dump_file stops getting dropped-key reports too.
+	ctx._debug_dropped_keys = not not (cfg and cfg.config and cfg.config.debug_dump_file)
+
+	-- Untagged: the line shape every documented grep recipe expects.
+	ctx._debug_append(cfg, nil, json_str)
+
+	local ok, resp = pcall(cjson.decode, json_str)
+	if not ok or type(resp) ~= "table" then
+		return false
+	end
+
+	local _type = resp._type
+	if not recognized.KNOWN_TYPES[_type] then
+		ctx._ledger("response", tostring(_type), resp)
+	end
+	ctx._note_unknown_fields(resp)
+
+	if _type == "noop" then
+		-- The controller's next-inform interval for this device and its "come
+		-- back now" flag. Clamped (wire.interval): a forged or garbled value
+		-- must neither park the daemon nor make it hammer the controller. A
+		-- noop without one goes back to the device's own cadence.
+		ctx._next_interval = wire.interval(resp.interval)
+		if resp.immediate == true then ctx._immediate = true end
+		return false
+	end
+
+	if _type == "setparam" then
+		-- mgmt_cfg is a newline-delimited key=value string (real controller format,
+		-- confirmed by amd989/unifi-gateway _parse_mgmt_cfg).
+		local mgmt_raw = resp.mgmt_cfg
+		local newly_adopted = false
+		-- What this push is judged on (ctx._settle_cfgversion): the version we
+		-- reported before it, and whether every apply step ran clean.
+		local cfg_before = st.cfgversion
+		-- The version this push carries; st.cfgversion takes it only once the
+		-- push has applied (ctx._settle_cfgversion), so an error half-way --
+		-- with st saved by some step in between -- never reports it.
+		local pushed_cfgversion = nil
+		local apply_ok = true
+		if type(mgmt_raw) == "string" then
+			for line in (mgmt_raw .. "\n"):gmatch("([^\n]*)\n") do
+				local k, v = line:match("^([^=]+)=(.*)$")
+				if k and v then
+					if k == "inform_url" then
+						-- NOT "mgmt_url" -- confirmed live against a real controller
+						-- (2026-07-14) that mgmt_url is the web UI deep link
+						-- (https://host:8443/manage/site/default), a completely
+						-- different endpoint from the actual inform target.
+						-- Aliasing the two here previously made the device
+						-- overwrite its own working inform_url with the UI link on
+						-- the very next routine setparam cycle after adoption,
+						-- breaking the inform loop for good (http-only builds have
+						-- no luasec, so switching to that https URL is fatal).
+						if v ~= "" then st.inform_url = v end
+					elseif k == "stun_url" then
+						-- The controller's STUN service, where the device keeps the
+						-- binding the controller wakes it through (stun.lua).
+						if v ~= "" then st.stun_url = v end
+					elseif k == "use_aes_gcm" then
+						st.use_gcm = (v == "true")
+					elseif k == "selfrun_guest_mode" then
+						-- What guests get while the controller is gone
+						-- (inform._guest_selfrun). The controller sends "pass"
+						-- or "off"; like the firmware, only "off" is off.
+						st.guest_selfrun = (v == "off") and "off" or "pass"
+					elseif k == "cfgversion" then
+						if v ~= "" then pushed_cfgversion = v end
+					elseif k == "led_enabled" then
+						-- The device's LED setting resolved against the site's
+						-- (decompiled 10.6: on for On, or Default with the site
+						-- switch on; off for Off, or a disabled AP). A switch
+						-- over all of the board's LEDs; led.lua.
+						local enabled = (v == "true")
+						st.led_enabled = enabled
+						ctx._led.set_enabled(enabled, st.locating and cfg and cfg.led or nil)
+					elseif k == "authkey" then
+						-- Only trusted pre-adoption. Real L3 adoption has no SSH
+						-- step at all (controller logs "skip SSH adoption" for
+						-- L3-discovered devices) and delivers the new key this
+						-- way instead -- confirmed against amd989/unifi-gateway's
+						-- _parse_mgmt_cfg (which does exactly this, no SSH
+						-- anywhere in that codebase) and live testing against a
+						-- real controller. See PROTOCOL-VALIDATION.md. Restricted
+						-- to the unadopted case: while unadopted the device is
+						-- still using the well-known DEFAULT_KEY, so this
+						-- exchange carries no less confidentiality than the rest
+						-- of L3 provisioning already assumes. Once adopted, only
+						-- SSH set-adopt may rotate the key (matches real L2
+						-- hardware behavior).
+						if not st.adopted and is_hex32(v) then
+							st.authkey = v
+							st.adopted = true
+							newly_adopted = true
+						elseif st.adopted and is_hex32(v) and v ~= st.authkey
+							and st.authkey ~= ctx._state.DEFAULT_KEY then
+							-- A rotation. This setparam decrypted under the
+							-- current, secret key, so it is authenticated in a
+							-- way the default-key adoption exchange is not; the
+							-- controller pushes a new key whenever the one an
+							-- inform arrived under differs from its x_authkey,
+							-- and refusing it leaves the device on a key the
+							-- controller may stop trying.
+							st.authkey = v
+							newly_adopted = true   -- re-inform now, under the new key
+						end
+					end
+				end
+			end
+		end
+
+		-- IP Settings (DHCP vs Static, in the real controller UI) arrive via
+		-- system_cfg, not mgmt_cfg -- a separate flat OpenWrt-UCI-style
+		-- key=value blob, confirmed live against a real controller (see
+		-- PROTOCOL-VALIDATION.md). Only present when the controller is
+		-- actually pushing a network-config change, not on every inform.
+		ctx._report_dropped_keys("mgmt_cfg", mgmt_raw, recognized.RECOGNIZED_MGMT_CFG)
+
+		-- blocked_sta: the site's COMPLETE blocked-client list, newline-joined,
+		-- carried by the provisioning push on every (re)connect and by every
+		-- full config. It is authoritative -- block-sta/unblock-sta are only
+		-- the live deltas -- so a block or unblock issued while this AP was
+		-- offline, or lost with state.json, converges here. Absent means
+		-- "not part of this push", never "unblock everyone".
+		if type(resp.blocked_sta) == "string" then
+			local list, seen = {}, {}
+			for mac in resp.blocked_sta:gmatch("[^%s,]+") do
+				mac = mac:lower()
+				if is_mac(mac) and not seen[mac] then
+					seen[mac] = true
+					list[#list + 1] = mac
+				end
+			end
+			table.sort(list)
+			local before = {}
+			for _, m in ipairs(st.blocked_stas or {}) do before[tostring(m):lower()] = true end
+			local same = true
+			for _, m in ipairs(list) do if not before[m] then same = false end end
+			local n_before = 0
+			for _ in pairs(before) do n_before = n_before + 1 end
+			if n_before ~= #list then same = false end
+			if not same then
+				st.blocked_stas = list
+				ctx._state.save(st)
+				ctx._firewall.reconcile(list)
+				ctx._deny_pending = true
+				pcall(ctx._block_resync, st)
+				local ufuci = ctx._ucihelper
+				for _, m in ipairs(list) do
+					if not before[m] and ufuci and ufuci.disconnect_station then
+						pcall(ufuci.disconnect_station, m)
+					end
+				end
+			end
+		end
+
+		local sys_raw = resp.system_cfg
+		if type(sys_raw) == "string" then
+			ctx._report_dropped_keys("system_cfg", sys_raw, recognized.RECOGNIZED_SYSTEM_CFG)
+
+			-- Once per push, shared by netmodel, the WiFi pass and the switch
+			-- pass: the parsed switch.* block (pure), and the socket the uplink
+			-- cable is in (a bridge fdb dump), keyed by bridge because netmodel
+			-- may have renamed it between the first lookup and the later ones.
+			local sw_block, uplink_by_br = nil, {}
+			local function switch_block()
+				if sw_block == nil then sw_block = ctx._parse_switch_system_cfg(sys_raw) end
+				return sw_block
+			end
+			local function uplink_of(br)
+				if not br then return nil end
+				if uplink_by_br[br] == nil then
+					local ok_u, u = pcall(ctx._sysinfo.uplink_bridge_port, br)
+					uplink_by_br[br] = (ok_u and u) or false
+				end
+				return uplink_by_br[br] or nil
+			end
+
+			local ip, netmask, gateway
+			local dhcp = false
+			local device_name
+			-- DNS servers, keyed by their wire index so the controller's
+			-- ordering (primary/secondary) survives -- resolv.conf's order is
+			-- the resolver's preference order, so it is load-bearing. Same
+			-- index-keyed-then-sorted treatment as macacl's acl.<k> list.
+			local dns_by_idx = {}
+			local site_key, full_push = nil, false
+			for line in (sys_raw .. "\n"):gmatch("([^\n]*)\n") do
+				local k, v = line:match("^([^=]+)=(.*)$")
+				if k and v then
+					local dns_idx = k:match("^resolv%.nameserver%.(%d+)%.ip$")
+					if dns_idx then
+						if v ~= "" then dns_by_idx[tonumber(dns_idx)] = v end
+					elseif k == "unifi.key" then site_key = v
+					elseif k == "ebtables.status" then full_push = true
+					elseif k == "netconf.1.ip" then ip = v
+					elseif k == "netconf.1.netmask" then netmask = v
+					elseif k == "route.1.gateway" then gateway = v
+					elseif k == "dhcpc.1.status" then
+						-- Only an enabled-ish value means DHCP. The key's
+						-- presence alone used to set dhcp=true, so a
+						-- hypothetical dhcpc.1.status=disabled alongside a
+						-- netconf.1.ip would have misread a static push as
+						-- DHCP and flushed the working static address. Every
+						-- capture so far carries =enabled; this is defensive
+						-- for the static-mode shape that hasn't been
+						-- captured yet.
+						dhcp = wire.bool(v) == true
+					elseif k == "resolv.host.1.name" then
+						-- The controller's own idea of this device's name
+						-- (its local network hostname) -- already present
+						-- in every capture (e.g. "U6IW" when never
+						-- renamed). Reused as the WPS Device Name value
+						-- when advertise_ap_name is on, since it's the
+						-- only controller-assigned "AP name" string
+						-- available on this wire protocol.
+						if v ~= "" then device_name = v end
+					end
+				end
+			end
+			-- Flatten the index-keyed DNS table into controller order.
+			local dns = {}
+			do
+				local idxs = {}
+				for i in pairs(dns_by_idx) do idxs[#idxs + 1] = i end
+				table.sort(idxs)
+				for _, i in ipairs(idxs) do dns[#dns + 1] = dns_by_idx[i] end
+			end
+
+			-- The site's key (unifi.key, sent while UniFi IDP is on) keys the
+			-- sibling exchange's authenticated packets (siblings.lua). Only
+			-- the key derived from it is kept, in a 0600 file. A full push
+			-- without it (IDP turned off) removes it; a partial push leaves
+			-- it alone.
+			if site_key or full_push then
+				local sib = ctx._siblings or require("openwrt.siblings")
+				local ok_k, done, err_k = pcall(sib.store_key,
+					site_key and sib.derive_key(site_key) and site_key or nil, ctx._sibling_key_file)
+				if not ok_k or err_k then
+					io.stderr:write("inform: sibling exchange key: " .. tostring(ok_k and err_k or done) .. "\n")
+				elseif done then
+					io.stderr:write("inform: sibling exchange key " .. done .. "\n")
+				end
+			end
+
+			-- Shape check BEFORE anything is recorded or run. These three
+			-- values are interpolated into `ip addr` / `ip route` command
+			-- lines by netconfig.lua (which refuses them again itself), and
+			-- this is what keeps a malformed push out of state.json as well:
+			-- with the record written first, a refused apply would still leave
+			-- ip_mode=static and a bogus static_ip behind for the DHCP-revert
+			-- logic to act on. Feature-detected, so a test double standing in
+			-- for netconfig need not carry the validator.
+			local ipv4 = ctx._netconfig.is_ipv4
+			if ip and ipv4 and not (ipv4(ip)
+					and (netmask == nil or netmask == "" or ipv4(netmask))
+					and (gateway == nil or gateway == "" or ipv4(gateway))) then
+				io.stderr:write(("inform: ignoring IP Settings push with a malformed "
+					.. "address (ip=%q netmask=%q gateway=%q)\n"):format(
+					tostring(ip), tostring(netmask), tostring(gateway)))
+				ip = nil
+			end
+
+			-- Parsed once, out here: the network pass below needs the private
+			-- pre-shared keys' VLANs, the switch pass the VLANs tagged SSIDs sit
+			-- on, and scoping it inside the wifi branch left those consumers
+			-- reading a nil table -- an empty trunk list that fails silently.
+			local radio_table, vap_table, backhaul_entries = ctx._parse_wifi_system_cfg(sys_raw)
+			-- The wireless uplink (unifi/mesh.lua): the sections apply_config
+			-- writes, or nil for a push with no enabled mesh block -- the wired,
+			-- non-meshing case, and every push to a device not claiming the
+			-- mesh bits. The parent the push names is kept for reporting.
+			local mesh_cfg = mesh.parse(sys_raw)
+			local backhaul_plan = nil
+			if mesh_cfg then
+				backhaul_plan = mesh.plan(mesh_cfg, backhaul_entries,
+					st.backhaul_mode == "wireless")
+				st.backhaul_parent = mesh.parent(mesh_cfg)
+			end
+			-- The VLANs private pre-shared keys put clients on. The network push
+			-- has no bridge for a VLAN only a key uses, so netmodel is told.
+			local key_vids = {}
+			for _, vap in ipairs(vap_table or {}) do
+				for _, k in ipairs(vap.ppsk or {}) do
+					if k.vid then key_vids[k.vid] = true end
+				end
+				-- A MAC-based VLAN's network needs the same: an interface on
+				-- the filtering bridge for its wifi-vlan to join. VLAN 1 is
+				-- the untagged network, which the plan has anyway.
+				for _, e in ipairs(vap.mac_vlans or {}) do
+					if e.vid and e.vid > 1 then key_vids[e.vid] = true end
+				end
+			end
+
+			-- The vlan_filtering backend (netmodel.lua): the controller's whole L2
+			-- model -- bridges, VLANs, Management VLAN, port matrix, management
+			-- addressing -- rendered as UCI on one filtering bridge, taking over
+			-- whatever bridge held the sockets before. When it produces a plan
+			-- the legacy IP-settings, per-VLAN-bridge and switchvlan passes below
+			-- stand aside: they describe a different layout of the same ports.
+			local netplan = nil
+			-- Set when the controller's network could not be applied: every
+			-- pass below that assumes a layout (addressing, the WiFi pass that
+			-- attaches VAPs, per-port VLANs) stays out of it, and the push is
+			-- not reported as applied.
+			local net_blocked = false
+			local nm = ctx._netmodel
+			if nm and nm.backend(cfg) == "vlan_filtering" then
+				local model = nm.parse(sys_raw)
+				if model then
+					local s = model.static
+					if s and ipv4 and not (ipv4(s.ip or "")
+							and (s.netmask == nil or s.netmask == "" or ipv4(s.netmask))
+							and (s.gateway == nil or s.gateway == "" or ipv4(s.gateway))) then
+						io.stderr:write("inform: netmodel: ignoring a malformed static address\n")
+						model.static = nil
+					end
+					local lan = cfg and cfg.net and cfg.net.lan_cpueth
+					local ok_br, br = pcall(ctx._sysinfo.bridge_of, lan)
+					local up = ok_br and uplink_of(br) or nil
+					local ok_nm, changed, plan, outcome = pcall(nm.converge, model,
+						switch_block(), cfg, st,
+						{uplink_ifname = up, identity_mac = st.mac, current_ip = st.ip,
+						 key_vids = key_vids})
+					if not ok_nm then
+						io.stderr:write("inform: netmodel: " .. tostring(changed) .. "\n")
+						apply_ok, net_blocked = false, true
+					elseif outcome == "rejected" or outcome == "failed" then
+						apply_ok, net_blocked = false, true
+					elseif plan then
+						netplan = plan
+						-- The per-VLAN-bridge ledgers describe a layout that no
+						-- longer exists; their restore paths must never run on it.
+						st.dsa_brlan_ports = nil
+						st.ip_mode, st.static_ip, st.static_netmask = nil, nil, nil
+						st.static_gateway, st.static_dns = nil, nil
+						ip = nil   -- addressing is part of the plan, as UCI
+						if changed then
+							ctx._sysinfo.forget_uplink_cache()
+							if ctx._follow_bridge_leds then ctx._follow_bridge_leds() end
+							-- A new plan is only proven once its rollback window
+							-- closes (ctx._netmodel_check).
+							if type(st.netmodel_pending) == "table" then
+								st.netmodel_pending.effective_before = st.cfgversion_effective
+							end
+							ctx._state.save(st)
+						end
+					end
+				end
+			end
+
+			if net_blocked then
+				io.stderr:write("inform: the controller's network was not applied; its"
+					.. " addressing, WiFi and port settings wait for the next push\n")
+				ip = nil
+			end
+
+			if ip then
+				-- The management interface as UCI (netmodel.apply_addressing):
+				-- the L3 device netifd owns, not lan_cpueth (a bridge port on
+				-- most boards), with the plan's rollback window.
+				-- No board config (cfg.net), no interface touched: recorded only.
+				local lan_if = cfg and cfg.net and (cfg.net.lan_name or "lan") or nil
+				if dhcp then
+					-- Only genuinely ACT when reverting our own prior static
+					-- config -- a fresh device's first-ever system_cfg (and
+					-- every steady-state reaffirmation) also carries
+					-- dhcpc.1.status=enabled, but real hardware already runs
+					-- its own DHCP client continuously; flushing+re-leasing
+					-- on every "still DHCP" push is needless and, worse,
+					-- destructive wherever no DHCP server actually exists to
+					-- grant a new lease (confirmed live: this validation
+					-- container's Docker bridge has none -- udhcpc timed out
+					-- and left the interface with no address at all).
+					if st.ip_mode == "static" and ctx._netmodel and lan_if then
+						local ok_a, changed = pcall(ctx._netmodel.apply_addressing, st, cfg, lan_if,
+							{dhcp = true}, st.ip)
+						if not ok_a then
+							io.stderr:write("inform: IP Settings: " .. tostring(changed) .. "\n")
+							apply_ok = false
+						end
+						ctx._populate_net_info(st, cfg)  -- re-read the freshly-leased address
+					end
+					st.ip_mode = "dhcp"
+					st.static_ip, st.static_netmask, st.static_gateway = nil, nil, nil
+					-- DNS is deliberately NOT touched here: the lease supplies
+					-- it, and rewriting resolv.conf on every steady-state "still
+					-- DHCP" push would fight the DHCP client for ownership --
+					-- the same hazard as the flush+re-lease guarded above.
+					st.static_dns = nil
+				else
+					st.ip_mode = "static"
+					st.static_ip, st.static_netmask, st.static_gateway = ip, netmask, gateway
+					st.static_dns = (#dns > 0) and dns or nil
+					local ok_a, changed, outcome = false, nil, nil
+					if ctx._netmodel and lan_if then
+						ok_a, changed, outcome = pcall(ctx._netmodel.apply_addressing, st, cfg, lan_if,
+							{static = {ip = ip, netmask = netmask, gateway = gateway, dns = dns}}, st.ip)
+					end
+					if not lan_if then
+						-- recorded only
+					elseif not ok_a then
+						io.stderr:write("inform: IP Settings: " .. tostring(changed) .. "\n")
+						apply_ok = false
+					elseif outcome == "failed" or outcome == "rejected" then
+						apply_ok = false
+					elseif changed then
+						st.ip = ip  -- known directly, no need to re-read the interface
+						ctx._sysinfo.forget_uplink_cache()
+					end
+				end
+				-- Persisted HERE, not at the end of handle_response.
+				--
+				-- The interface has already been reconfigured by this point,
+				-- and state.json is the only record that it was: ctx.run's
+				-- startup reapply is what puts a static address back after a
+				-- reboot, and it reads exactly these fields. Everything
+				-- between here and the save at the end of this function --
+				-- the WiFi pass, switchvlan, usteer, bcfilter, shaper -- shells
+				-- out or reaches into UCI and can raise, and _tick pcalls this
+				-- whole function by design, so an error there costs one log
+				-- line and nothing else. Leaving the write until the end meant
+				-- any such error left the kernel reconfigured and the record
+				-- lost, which is precisely the state the reapply cannot
+				-- recover from.
+				--
+				-- Observed exactly that in the validation lab on 2026-09-10:
+				-- usteer raised midway, the AP moved to its pushed static
+				-- address, and state.json never learned about it.
+				ctx._state.save(st)
+			end
+
+
+			-- VLANs that a WIRED port is assigned to. Computed before the
+			-- WiFi pass because their L2 is the same bridge a tagged SSID
+			-- uses, and apply_config prunes any bridge no WLAN wants --
+			-- which would delete the one a per-port assignment is about to
+			-- need, on every push, then have switchvlan rebuild it. Safe
+			-- when nothing is pushed (an empty set).
+			local port_vlans = {}
+			if not netplan and not net_blocked and ctx._switchvlan and ctx._switchvlan.dsa_members then
+				local br = ctx._sysinfo.bridge_of(cfg and cfg.net and cfg.net.lan_cpueth)
+				local up = uplink_of(br)
+				local ok_pv, m = pcall(ctx._switchvlan.dsa_members, switch_block(), cfg, up)
+				if ok_pv then
+					for vid in pairs(m or {}) do port_vlans[vid] = true end
+				end
+			end
+
+			local ufuci = ctx._ucihelper
+			if ufuci and ufuci.apply_config and not net_blocked then
+				if #radio_table > 0 or #vap_table > 0 then
+					-- Band Steering (wireless.<n>.no2ghz_oui) is confirmed
+					-- live to be a per-WLAN wire field, not a per-device
+					-- one -- but usteer (the daemon that actually
+					-- implements steering on OpenWrt) is a single
+					-- device-wide config, so band steering is treated as
+					-- active for the whole device whenever ANY WLAN has it
+					-- enabled.
+					--
+					-- Roaming Assistant (wireless.<n>.btm_disassoc) is
+					-- decided per WLAN by openwrt/roamassist.lua, but it reads
+					-- usteer's cross-AP view and sends 802.11v requests, so
+					-- it needs the daemon and 802.11k/v the same way.
+					local steering_active, roam_assist_active = false, false
+					for _, vap in ipairs(vap_table) do
+						if vap.no2ghz_oui then steering_active = true end
+						if vap.roam_assist_enabled then roam_assist_active = true end
+					end
+					-- The AP's own Band Steering setting adds to the per-WLAN one.
+					if M.device_band_steering(ctx._parse_bandsteering_system_cfg(sys_raw)) then
+						steering_active = true
+					end
+					ctx._usteer.set_enabled(steering_active, cfg, roam_assist_active)
+					ctx._usteer_filter_next = 0   -- re-check the sync filter next tick
+					local ok_ac, err_ac = pcall(ufuci.apply_config,
+						{radio_table = radio_table, vap_table = vap_table, network_table = {}},
+						cfg, {band_steering_active = steering_active,
+							roam_assist_active = roam_assist_active,
+							device_name = device_name, keep_vlans = port_vlans,
+							netmodel = netplan,
+							peer_ie = ctx._sysinfo.peer_ie_hex(st and st.mac),
+							backhaul = backhaul_plan})
+					if ctx._deny_reloaded then ctx._deny_reloaded() end  -- apply_config ran `wifi reload`
+					if not ok_ac then
+						io.stderr:write("inform: WiFi config failed: " .. tostring(err_ac) .. "\n")
+						apply_ok = false
+					elseif st and M.record_lock2ap(st, vap_table) then
+						-- Only what hostapd now enforces is announced to the
+						-- siblings as denied here.
+						ctx._state.save(st)
+						ctx._lockap.request()   -- re-check the exemptions next tick
+					end
+				end
+			end
+			-- A full push with no WLAN at all denies nobody here any more.
+			if full_push and #vap_table == 0 and st and st.lock2ap ~= nil then
+				st.lock2ap = nil
+				ctx._state.save(st)
+				ctx._lockap.request()
+			end
+
+			-- Per-port VLAN, after the WiFi pass so that any VLAN interface
+			-- ensure_vlan_network() creates for a tagged SSID already exists
+			-- before a switch port is put on the same VLAN.
+			if ctx._switchvlan and not netplan and not net_blocked then
+				local ok_sv, err_sv = pcall(function()
+					-- Which socket the uplink cable is in (the bridge FDB), so a
+					-- pushed port VLAN can never be applied to it.
+					local uplink_ifname
+					local br = ctx._sysinfo.bridge_of(cfg and cfg.net and cfg.net.lan_cpueth)
+					uplink_ifname = uplink_of(br)
+					local sw = switch_block()
+					-- Turning Port VLAN off does not always announce itself.
+					-- Unticking the device-level box keeps the switch.* block on
+					-- the wire at =disabled, but a device that has HAD the
+					-- feature on and then has it unticked gets a full system_cfg
+					-- with no switch.* keys at all -- confirmed live on the
+					-- AX3000T, where the teardown therefore never ran and br-lan
+					-- kept openUF's port list forever.
+					--
+					-- So absence counts as off too, but only when openUF holds a
+					-- reversibility ledger: that is proof it applied something,
+					-- which in turn is proof the controller was sending switch.*
+					-- until now. Safe on a partial push -- the worst case is a
+					-- restore that the next full push re-applies -- and it cannot
+					-- flap, since restore() spends the ledger. Reachable only
+					-- inside `type(sys_raw) == "string"`, never on a noop.
+					if (sw and not sw.enabled) or (sw == nil and st.dsa_brlan_ports ~= nil) then
+						ctx._switchvlan.restore(st, cfg)
+					else
+						ctx._switchvlan.apply(sw, cfg, st, uplink_ifname)
+					end
+					-- Either branch may have moved a socket into or out of a
+					-- VLAN bridge, which is the one thing bridge_of's 300 s TTL
+					-- cannot notice on its own.
+					ctx._sysinfo.forget_uplink_cache()
+				end)
+				if not ok_sv then
+					io.stderr:write("inform: per-port VLAN failed: " .. tostring(err_sv) .. "\n")
+					apply_ok = false
+				end
+			end
+
+			-- Controller-managed system settings: timezone, NTP servers and
+			-- the nightly `syswrapper.sh 11k-scan` cron job (sysconf.lua),
+			-- gated by the system_timezone / system_ntp / system_cron options.
+			local gate = cfg and cfg.config and cfg.config.controller_system
+			if ctx._sysconf and gate ~= false then
+				local ok_sc, err_sc = pcall(function()
+					local sc = ctx._sysconf.parse(sys_raw)
+					if sc then ctx._sysconf.apply(sc, gate) end
+				end)
+				if not ok_sc then
+					io.stderr:write("inform: system settings failed: " .. tostring(err_sc) .. "\n")
+					apply_ok = false
+				end
+			end
+
+			-- SNMP Monitoring (unifi/snmp.lua -> openwrt/snmp.lua). The block
+			-- is absent while SNMP is off, so every FULL system_cfg decides
+			-- (full_push: it carries ebtables.status, as guest.lua relies on):
+			-- a device openUF configured (st.snmp_owned) gets its own snmpd
+			-- config back. Nothing happens without snmpd installed.
+			if ctx._snmp and ctx._snmp_parse then
+				local ok_sn, err_sn = pcall(function()
+					local intent = ctx._snmp_parse(sys_raw)
+					if ctx._snmp.apply(intent, st, full_push) then ctx._state.save(st) end
+				end)
+				if not ok_sn then
+					io.stderr:write("inform: SNMP failed: " .. tostring(err_sn) .. "\n")
+					apply_ok = false
+				end
+			end
+
+			-- Airtime Fairness (atf.mode, airtime.lua), pushed only to a device
+			-- claiming wifi_caps 0x20. Kept in state.json because the debugfs
+			-- switch resets on reboot and the controller does not push again;
+			-- ctx._reapply_airtime puts it back at startup. No block, no change.
+			if ctx._airtime then
+				local ok_atf, err_atf = pcall(function()
+					local atf = ctx._airtime.parse(sys_raw)
+					if atf == nil then return end
+					st.atf_enabled = atf
+					ctx._airtime.set_enabled(atf)
+				end)
+				if not ok_atf then
+					io.stderr:write("inform: airtime fairness failed: " .. tostring(err_atf) .. "\n")
+					apply_ok = false
+				end
+			end
+
+			-- The ebtables.* hardening block (l2guard.lua): BPDU and VLAN-tag
+			-- drop on every AP VAP. Kernel state, so the intent and the VAP
+			-- names go to state.json for the startup rebuild. After the WiFi
+			-- pass on purpose, so a VAP this push added has its netdev by now
+			-- if netifd was quick; ctx._l2guard_resync picks it up if not.
+			-- A push without the block (a partial one) leaves it all alone.
+			if ctx._l2guard and not (cfg and cfg.config and cfg.config.l2guard == false) then
+				local ok_l2, err_l2 = pcall(function()
+					local eb = ctx._l2guard.parse(sys_raw)
+					if not eb then return end
+					for _, u in ipairs(eb.unknown or {}) do
+						io.stderr:write("l2guard: unrecognised ebtables rule shape, not applied: "
+							.. ("%q"):format(u) .. "\n")
+					end
+					local spec = ctx._l2guard.spec_from(eb)
+					local names = ctx._l2guard_live_ifnames()
+					if #names == 0 and st.l2guard and type(st.l2guard.ifnames) == "table" then
+						names = st.l2guard.ifnames   -- wireless not answering yet: last known
+					end
+					spec.ifnames = names
+					st.l2guard = spec
+					ctx._l2guard.reconcile(spec, names)
+				end)
+				if not ok_l2 then
+					io.stderr:write("inform: L2 hardening failed: " .. tostring(err_l2) .. "\n")
+					apply_ok = false
+				end
+			end
+
+			-- Which WLANs a station must pass the guest portal on (the
+			-- `authorized` report.lua sends). Bookkeeping, so not behind
+			-- guest_isolation; every full push carries redirector.status, so
+			-- it replaces the record outright.
+			if ctx._guest then
+				local pw = ctx._guest.portal_wlans(sys_raw)
+				if pw then st.guest_wlans = pw end
+			end
+
+			-- Guest WLANs (guest.lua -> guestguard.lua): the GUESTIN/GUESTOUT
+			-- part of the same ebtables block, on the VAPs of the WLANs with
+			-- wireless.<n>.is_guest=true. A full push always carries
+			-- ebtables.status; with it and no guest WLAN, the table goes. A
+			-- push without the block (a partial one) leaves it all alone.
+			if ctx._guestguard and ctx._guest
+					and not (cfg and cfg.config and cfg.config.guest_isolation == false) then
+				local ok_g, err_g = pcall(function()
+					local gr = ctx._guest.parse(sys_raw)
+					if not gr then return end
+					for _, u in ipairs(gr.unknown) do
+						io.stderr:write("guest: unrecognised guest rule, not applied: " .. ("%q"):format(u) .. "\n")
+					end
+					for _, u in ipairs(gr.unenforced) do
+						io.stderr:write("guest: wired guest network not enforced: " .. ("%q"):format(u) .. "\n")
+					end
+					for _, s in ipairs(gr.conflicts) do
+						io.stderr:write("guest: SSID " .. ("%q"):format(s) .. " is both a guest and a "
+							.. "non-guest WLAN; its VAPs cannot be told apart, so it is NOT restricted\n")
+					end
+					local spec = ctx._guest.spec_from(gr)
+					if not spec.enabled then
+						st.guest = nil
+						ctx._guestguard.reconcile(nil)
+						return
+					end
+					if spec.portal_url then
+						io.stderr:write("guest: captive portal on for " .. table.concat(spec.ssids, ", ")
+							.. " (lab-validated only, unconfirmed on hardware): unauthorized guests "
+							.. "are blocked and sent to " .. spec.portal_url .. "\n")
+					elseif spec.portal then
+						io.stderr:write("guest: the controller has a captive portal on for "
+							.. table.concat(spec.ssids, ", ") .. " but no usable redirector.url -- "
+							.. "guests are restricted but not redirected, and need no authorisation\n")
+					end
+					spec.dropped = nil
+					local names = ctx._guest_live_ifnames(spec.ssids)
+					if #names == 0 and type(st.guest) == "table" and type(st.guest.ifnames) == "table"
+							and table.concat(st.guest.ssids or {}, "\n") == table.concat(spec.ssids, "\n") then
+						names = st.guest.ifnames   -- wireless not answering yet: last known
+					end
+					spec.ifnames = names
+					st.guest = spec
+					ctx._guestguard.reconcile(spec, names, ctx._guest_live(st))
+				end)
+				if not ok_g then
+					io.stderr:write("inform: guest network restrictions failed: " .. tostring(err_g) .. "\n")
+					apply_ok = false
+				end
+			end
+		end
+
+		if type(sys_raw) == "string" then
+			ctx._settle_cfgversion(st, cfg, cfg_before, apply_ok, pushed_cfgversion)
+		elseif pushed_cfgversion then
+			st.cfgversion = pushed_cfgversion   -- nothing to apply
+		end
+		ctx._state.save(st)
+		-- Re-inform at once after adopting (new key) and after applying a
+		-- config push: the controller holds the device in PROVISIONING until it
+		-- sees its cfgversion echoed, and real firmware reports straight back.
+		return newly_adopted or type(sys_raw) == "string"
+	end
+
+	if _type == "setdefault" then
+		-- Controller requested factory reset.  Reset state on disk and in-memory.
+		io.stderr:write("inform: controller requested factory reset\n")
+		-- mac/ip/hostname are populated once at ctx.run() startup by
+		-- _populate_net_info and never persisted to state.json -- preserve them
+		-- across the reset rather than losing the device's identity mid-run.
+		local mac, ip, hostname = st.mac, st.ip, st.hostname
+		local prev = {}
+		for k, v in pairs(st) do prev[k] = v end
+		local fresh = ctx._state.reset()
+		for k in pairs(st) do st[k] = nil end
+		for k, v in pairs(fresh) do st[k] = v end
+		st.mac, st.ip, st.hostname = mac, ip, hostname
+		ctx._sync_bootstrap_account(false, cfg and cfg.config and cfg.config.bootstrap_adopt_user)
+		ctx._firewall.reconcile(st.blocked_stas)
+		ctx._deny_pending = true
+		-- The URL that just reached this controller stays, so the device shows
+		-- up there as pending and can be adopted again. The default names the
+		-- controller by host name, and an L3 adoption over it fails with HTTP
+		-- 400 ("invalid inform_ip"; upstream, a UCG Ultra and the lab,
+		-- 2026-10-11). A reset-inform still starts over from the default.
+		if type(prev.inform_url) == "string" and prev.inform_url ~= "" then
+			st.inform_url = prev.inform_url
+			ctx._state.save(st)
+		end
+		-- The controller's config goes too, as UniFi firmware's factory reset.
+		ctx._forget_controller(nil, prev, cfg)
+		return false
+	end
+
+	if _type == "reboot" then
+		io.stderr:write("inform: controller requested reboot\n")
+		os.execute("reboot")
+		os.exit(0)
+	end
+
+	if _type == "upgrade" then
+		-- Store only -- never download/verify/flash/reboot. A real controller's
+		-- upgrade URL targets genuine Ubiquiti firmware; applying it to this
+		-- (non-Ubiquiti) hardware would brick it. See amd989/unifi-gateway,
+		-- which handles this identically (log + store, no real upgrade path).
+		st.upgrade_requested_version = tostring(resp.version or "")
+		st.upgrade_requested_url     = tostring(resp.url or "")
+		-- The catalogue version the controller wants this model on, reported
+		-- from now on: the controller calls a device upgradable whenever its
+		-- version differs from the catalogue's by so much as a character, so a
+		-- stale built-in version meant a permanent Upgrade badge (upgrade.lua).
+		local wanted = type(resp.version) == "string" and resp.version:match("^%d+%.%d+%.%d+%.%d+$")
+		if wanted then st.fw_version = wanted end
+		-- config.upgrade_mode = "owut": the controller's upgrade becomes an
+		-- attended sysupgrade of THIS board's OpenWrt (upgrade.lua). The UniFi
+		-- URL itself is never fetched.
+		local conf = cfg and cfg.config
+		if conf and conf.upgrade_mode == "owut" then
+			local ok_u, started, why = pcall(ctx._upgrade.start, conf)
+			io.stderr:write("inform: upgrade requested -- "
+				.. ((ok_u and started) and ("owut upgrade started, log in " .. ctx._upgrade.LOG_FILE)
+					or ("not upgrading: " .. tostring(ok_u and why or started))) .. "\n")
+		else
+			io.stderr:write("inform: upgrade requested (version=" .. st.upgrade_requested_version
+				.. ") -- stored only, not applying\n")
+		end
+		ctx._state.save(st)
+		return false
+	end
+
+	if _type == "cmd" then
+		local cmd = resp.cmd or ""
+		io.stderr:write("inform: cmd: " .. ctx._log_token(cmd) .. "\n")
+		if not recognized.KNOWN_CMDS[cmd] then ctx._ledger("cmd", tostring(cmd), resp) end
+
+		if cmd == "set-locate" or cmd == "unset-locate" then
+			-- The blink is on the status LED; what it goes back to (its own
+			-- state, or dark while the LED switch is off) comes from led.lua's
+			-- tmpfs snapshot, which a restart between the two commands keeps
+			-- and a reboot clears together with the blink itself.
+			local led_name = cfg and cfg.led
+			if cmd == "set-locate" then
+				ctx._led.locate_start(led_name)
+			else
+				ctx._led.locate_stop(led_name, st.led_enabled)
+			end
+			st.locating = (cmd == "set-locate")
+			ctx._state.save(st)
+		elseif cmd == "block-sta" or cmd == "unblock-sta" then
+			-- One-shot command, confirmed live: block/unblock never appears
+			-- as a persistent field on any inform response (a candidate
+			-- top-level `include_blocks` list stays empty even while a
+			-- client is genuinely blocked) -- the device itself is expected
+			-- to remember the block, the same way real hardware would.
+			-- Persisted in state.blocked_stas and re-applied at ctx.run()
+			-- startup (ctx._firewall.reconcile), so it survives a restart.
+			local mac = resp.mac
+			if type(mac) == "string" then
+				st.blocked_stas = st.blocked_stas or {}
+				if cmd == "block-sta" then
+					local already = false
+					for _, m in ipairs(st.blocked_stas) do
+						if m == mac then already = true break end
+					end
+					if not already then
+						st.blocked_stas[#st.blocked_stas + 1] = mac
+					end
+				else
+					local kept = {}
+					for _, m in ipairs(st.blocked_stas) do
+						if m ~= mac then kept[#kept + 1] = m end
+					end
+					st.blocked_stas = kept
+				end
+				ctx._state.save(st)
+				ctx._firewall.reconcile(st.blocked_stas)
+				ctx._deny_pending = true
+				pcall(ctx._block_resync, st)
+				if cmd == "block-sta" and is_mac(mac:lower()) then
+					-- Kick it immediately if it's currently associated --
+					-- the nft drop rule alone stops future traffic, but
+					-- doesn't tear down an existing association. Every VAP:
+					-- a radio carries several WLANs, and the client may be
+					-- on any of them.
+					local ufuci = ctx._ucihelper
+					if ufuci and ufuci.disconnect_station then
+						pcall(ufuci.disconnect_station, mac:lower())
+					end
+				end
+			end
+		elseif cmd == "authorize-guest" or cmd == "unauthorize-guest" then
+			-- Guest portal: {"cmd":"(un)authorize-guest","mac":...}
+			-- (PROTOCOL-VALIDATION.md, "Guest portal (Hotspot)"): the ledger
+			-- each station's `authorized` is reported from, and the set that
+			-- lets the guest past the portal.
+			if ctx._guest.authorize(st, resp.mac, cmd == "authorize-guest", ctx._time()) then
+				ctx._state.save(st)
+				pcall(ctx._guest_rebuild, st, cfg)
+				if cmd == "unauthorize-guest" then M.guest_kick(ctx, resp.mac) end
+			end
+		elseif cmd == "rate-update" then
+			-- {"cmd":"rate-update","mac":...,"ul_max":kbps,"dl_max":kbps,
+			-- ...}: one client's WiFi Speed Limit, its own profile or a
+			-- guest's portal limit, sent each time it connects, roams or
+			-- reconnects and whenever the profile changes
+			-- (PROTOCOL-VALIDATION.md, "qos.* -- WiFi Speed Limit").
+			if ctx._sta_rate(st, resp) then
+				ctx._state.save(st)
+				pcall(ctx._shaper_resync, st)
+			end
+		elseif cmd == "kick-sta" then
+			-- "Reconnect Client": drop the association, allow it straight back.
+			local mac = type(resp.mac) == "string" and resp.mac:lower() or nil
+			local ufuci = ctx._ucihelper
+			if is_mac(mac) and ufuci and ufuci.disconnect_station then
+				pcall(ufuci.disconnect_station, mac)
+			end
+		elseif cmd == "quick-scan" then
+			-- The RF Environment view's "Scan", the nightly scheduled scan and
+			-- Radio AI's prescan. The controller marks the device scanning when
+			-- it queues this and takes the flag from every inform after:
+			-- `quickscan_scanning` absent reads as done (devmgr.kDxteQiUX), and
+			-- only the inform that turns it from true to false stores the
+			-- spectrum tables it carries. So the sweep is not run here: the
+			-- next inform says true, and inform.lua queues the sweep once that
+			-- one has gone out; the informs stay true while its chunks run,
+			-- and the one after the last chunk carries false and the results.
+			ctx._quickscan_pending = {
+				band = M.QUICKSCAN_BANDS[tonumber(resp["scan-band"]) or -1],
+			}
+		elseif cmd == "spectrum-scan" then
+			-- Airtime Scan ("Scan Now"), sent only to a device claiming
+			-- wifi_caps 0x10. Queued; inform.lua's loop runs it chunk by
+			-- chunk, and `spectrum_scanning` is true until its last chunk.
+			-- The inform that brought this cmd already reset the
+			-- controller's flag, so the follow-up inform (after the first
+			-- chunk) is what shows the scan running.
+			--
+			-- The payload's "spectrum-cfg" is ignored on purpose: it is a
+			-- whole replacement system_cfg (every WLAN replaced by one
+			-- hidden "vport-<serial>" SSID, every radio rfscan=enabled) that
+			-- UniFi firmware restarts onto for the scan, taking clients off
+			-- the AP (firmware-confirmed for 3.9.27 to 4.0.15,
+			-- platdep_funcs.sh spectrum_scan; upstream a684980). It carries
+			-- no scan parameter. openUF sweeps off-channel and keeps the
+			-- WLANs up.
+			M.spectrum_sweep(ctx, cmd)
+		elseif cmd == "scan" or cmd == "scan_band" then
+			-- The device's Scan button ({type, mode, freq?, radio_name?}) and
+			-- Radio AI's full-scan pass ({band}, once per band, sent only to an
+			-- AP that does not claim wifi_caps2 0x200). Both just set the
+			-- controller's `scanning` flag, and it reads the neighbours from
+			-- scan_radio_table, which every chunk of the sweep refreshes.
+			M.spectrum_sweep(ctx, cmd, M.scan_cmd_band(ctx, resp))
+		end
+		-- other cmd values (e.g. mfi-output, restart): no-op
+		--
+		-- Per fxkr/unifi-protocol-reverse-engineering's documented inform
+		-- semantics: "Upon receiving a command message, an AP will execute a
+		-- command and then send another inform immediately" -- regardless of
+		-- which cmd it was, including ones we treat as a no-op. Matches the
+		-- cfgversion branch below, which already does this correctly.
+		return true
+	end
+
+	-- Config update: check cfgversion. WiFi config itself is applied from
+	-- system_cfg above, not here -- a real controller never sends the
+	-- resp.vap_table/radio_table/network_table JSON this branch used to gate
+	-- on, so all that is left to do is record the version we have caught up to.
+	if type(resp.cfgversion) == "string" and resp.cfgversion ~= st.cfgversion then
+		st.cfgversion = resp.cfgversion
+		ctx._state.save(st)
+		return true  -- signal: send follow-up inform immediately
+	end
+
+	return false
+end
+
+return M

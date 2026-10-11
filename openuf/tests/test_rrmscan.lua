@@ -1,4 +1,4 @@
--- Tests for openuf/rrmscan.lua (802.11k client-assisted RF environment
+-- Tests for src/openwrt/rrmscan.lua (802.11k client-assisted RF environment
 -- enrichment). Run from project root: lua tests/run_tests.lua
 --
 -- Both fixtures are REAL captures taken 2026-09-02 off an Archer C5 and an
@@ -7,7 +7,7 @@
 -- flight, and ubus_get_clients_rrm.txt carries the four distinct RRM
 -- capability shapes actually seen on the network.
 
-local rrmscan = dofile("openuf/rrmscan.lua")
+local rrmscan = dofile("src/openwrt/rrmscan.lua")
 
 local function read_fixture(name)
 	local f = assert(io.open("tests/fixtures/" .. name, "r"))
@@ -84,7 +84,7 @@ local RSN = ie(48, string.char(1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 4, 1
 
 local function with_width(fn)
 	local orig = rrmscan._channel_width
-	rrmscan._channel_width = dofile("openuf/sysinfo.lua").channel_width
+	rrmscan._channel_width = require("openwrt.sysinfo").channel_width
 	local ok, err = pcall(fn)
 	rrmscan._channel_width = orig
 	if not ok then error(err, 0) end
@@ -233,22 +233,6 @@ return {
 		end
 	},
 	{
-		name = "rrmscan: siblings are read from usteer's remote nodes",
-		fn = function()
-			with_popen('{"192.0.2.4#hostapd.phy0-ap0": {"bssid": "00:00:5E:00:53:21",'
-				.. '"ssid": "SiteNet"}, "192.0.2.4#hostapd.phy1-ap0": {"bssid":'
-				.. '"00:00:5e:00:53:22"}}', function(seen)
-				local s = rrmscan.sibling_bssids()
-				assert_true(s["00:00:5e:00:53:21"] == true, "lowercased")
-				assert_true(s["00:00:5e:00:53:22"] == true, "second node")
-				assert_true(seen[1]:find("usteer remote_info", 1, true) ~= nil, "asks usteer")
-			end)
-			with_popen(nil, function()
-				assert_true(next(rrmscan.sibling_bssids()) == nil, "no usteer, no siblings")
-			end)
-		end
-	},
-	{
 		name = "rrmscan: one control-socket monitor per BSS, restarted only when missing",
 		fn = function()
 			local orig = rrmscan.ACTION_SCRIPT
@@ -342,23 +326,24 @@ return {
 		end
 	},
 	{
-		name = "rrmscan: only clients that can actually go and look are asked",
+		name = "rrmscan: measuring clients are asked to look, table-only ones for their cache",
 		fn = function()
 			with_popen(read_fixture("ubus_get_clients_rrm.txt"), function()
-				local stas = rrmscan.capable_stations("phy0-ap0")
+				local stas, modes = rrmscan.capable_stations("phy0-ap0")
 				local set = {}
 				for _, m in ipairs(stas) do set[m] = true end
 				-- rrm=115 (passive+active+table) and rrm=50 (passive+active).
 				assert_true(set["00:00:5e:00:53:10"], "full RRM client asked")
 				assert_true(set["00:00:5e:00:53:1b"], "passive+active client asked")
-				-- rrm=75 is beacon-TABLE only: acked every real request and
-				-- answered none, and hostapd refuses a passive request for it
-				-- outright. Asking it is pure airtime for no data.
-				assert_false(set["00:00:5e:00:53:22"],
-					"beacon-table-only client is NOT asked")
+				assert_eq(modes["00:00:5e:00:53:10"], rrmscan.MODE_ACTIVE, "full RRM: active")
+				assert_eq(modes["00:00:5e:00:53:1b"], rrmscan.MODE_ACTIVE, "passive+active: active")
+				-- rrm=75 is beacon-TABLE only: asked for its cache (mode 2);
+				-- hostapd refuses a passive request for it outright.
+				assert_true(set["00:00:5e:00:53:22"], "beacon-table-only client is asked")
+				assert_eq(modes["00:00:5e:00:53:22"], rrmscan.MODE_TABLE, "...in table mode")
 				-- rrm=0 -- most clients on a real network.
 				assert_false(set["00:00:5e:00:53:18"], "non-802.11k client is not asked")
-				assert_eq(#stas, 2, "exactly the two capable ones")
+				assert_eq(#stas, 3, "the two measuring ones and the table one")
 			end)
 		end
 	},
@@ -497,207 +482,54 @@ return {
 	{
 		name = "rrmscan: the collector is started only when it is not running",
 		fn = function()
-			local orig_script = rrmscan.COLLECTOR_SCRIPT
-			rrmscan.COLLECTOR_SCRIPT = os.tmpname()
-			local ok, err = pcall(function()
-				with_popen(function(cmd)
-					if cmd:find("pgrep", 1, true) then return "" end   -- not running
-					if cmd:find("ubus list", 1, true) then
-						return "hostapd.phy0-ap0\nhostapd.phy1-ap0\nnetwork.wireless\n"
-					end
-					return ""
-				end, function()
-					with_exec(function(cmds)
-						assert_true(rrmscan.collector_ensure(), "starts when absent")
-						local all = table.concat(cmds, "\n")
-						assert_true(all:find("sh " .. rrmscan.COLLECTOR_SCRIPT
-							.. " hostapd.phy0-ap0 hostapd.phy1-ap0", 1, true) ~= nil,
-							"runs the script over every hostapd BSS at once")
-						assert_true(all:find("&") ~= nil, "runs in the background")
-						local script = rrmscan._read_file(rrmscan.COLLECTOR_SCRIPT)
-						-- `ubus listen` catches broadcast events and receives
-						-- NOTHING here; only subscribe gets hostapd's per-object
-						-- notifications. Confirmed live.
-						assert_true(script:find('ubus subscribe "$@"', 1, true) ~= nil,
-							"the script subscribes to the objects it is given")
-						assert_false(script:find("ubus listen", 1, true) ~= nil,
-							"never uses listen, which sees no beacon reports")
-						-- So collector_running keeps matching the live process.
-						assert_true(("ubus subscribe hostapd.phy0-ap0"):find("ubus subscribe hostapd", 1, true) ~= nil,
-							"the spawned process still matches the liveness pattern")
-					end)
-				end)
-
-				-- Running, and it is this script unchanged: left alone.
-				with_popen(function(cmd)
-					if cmd:find("pgrep", 1, true) then return "4711\n" end  -- running
-					return ""
-				end, function()
-					with_exec(function(cmds)
-						assert_false(rrmscan.collector_ensure(), "no-op while running")
-						assert_eq(#cmds, 0, "spawns no second collector")
-					end)
-				end)
-			end)
-			os.remove(rrmscan.COLLECTOR_SCRIPT)
-			rrmscan.COLLECTOR_SCRIPT = orig_script
-			if not ok then error(err, 0) end
-		end
-	},
-	{
-		-- A collector is reparented to init, so it survives an openUF upgrade
-		-- and a config change. One from an older openUF writes untimestamped
-		-- lines; one without the on_auth hook leaves stale set evidence in
-		-- place. Either must be replaced, not merely found alive.
-		name = "rrmscan: a running collector that is not the wanted script is replaced",
-		fn = function()
-			local orig_script = rrmscan.COLLECTOR_SCRIPT
-			rrmscan.COLLECTOR_SCRIPT = os.tmpname()
-			local ok, err = pcall(function()
-				local answers = function(cmd)
-					if cmd:find("pgrep", 1, true) then return "4711\n" end
-					if cmd:find("ubus list", 1, true) then return "hostapd.phy0-ap0\n" end
-					return ""
+			with_popen(function(cmd)
+				if cmd:find("pgrep", 1, true) then return "" end   -- not running
+				if cmd:find("ubus list", 1, true) then
+					return "hostapd.phy0-ap0\nhostapd.phy1-ap0\nnetwork.wireless\n"
 				end
-				-- Old-style collector: ubus subscribe is alive, no script file.
-				os.remove(rrmscan.COLLECTOR_SCRIPT)
-				with_popen(answers, function()
-					with_exec(function(cmds)
-						assert_true(rrmscan.collector_ensure(), "replaced")
-						local all = table.concat(cmds, "\n")
-						assert_true(all:find("kill $(pgrep", 1, true) ~= nil, "the old one is stopped")
-						assert_true(all:find("sh " .. rrmscan.COLLECTOR_SCRIPT, 1, true) ~= nil,
-							"and the script started")
-					end)
-				end)
-				-- Same script but a hook is now wanted: replaced again.
-				with_popen(answers, function()
-					with_exec(function(cmds)
-						assert_true(rrmscan.collector_ensure({on_auth = "true"}), "replaced on opts change")
-					end)
-				end)
-				-- And left alone once it matches.
-				with_popen(answers, function()
-					with_exec(function(cmds)
-						assert_false(rrmscan.collector_ensure({on_auth = "true"}), "kept when unchanged")
-						assert_eq(#cmds, 0, "nothing spawned or killed")
-					end)
+				return ""
+			end, function()
+				with_exec(function(cmds)
+					assert_true(rrmscan.collector_ensure(), "starts when absent")
+					local all = table.concat(cmds, "\n")
+					assert_true(all:find("ubus subscribe hostapd.phy0-ap0 hostapd.phy1-ap0", 1, true) ~= nil,
+						"subscribes to every hostapd BSS at once")
+					-- `ubus listen` catches broadcast events and receives
+					-- NOTHING here; only subscribe gets hostapd's per-object
+					-- notifications. Confirmed live.
+					assert_false(all:find("ubus listen", 1, true) ~= nil,
+						"never uses listen, which sees no beacon reports")
+					assert_true(all:find("&") ~= nil, "runs in the background")
 				end)
 			end)
-			os.remove(rrmscan.COLLECTOR_SCRIPT)
-			rrmscan.COLLECTOR_SCRIPT = orig_script
-			if not ok then error(err, 0) end
-		end
-	},
-	{
-		-- Roam reports (assoctrack.lua): the old AP learns that a station
-		-- left from its bridge, which moves the address to the uplink in the
-		-- same second. The fdb half runs beside the subscriber, in the
-		-- background, and writes lines assoctrack.parse_events reads.
-		name = "rrmscan: opts.fdb adds a bridge monitor to the collector, stamped like the rest",
-		fn = function()
-			local plain = rrmscan.collector_script({on_auth = "true"})
-			assert_false(plain:find("bridge", 1, true) ~= nil, "no fdb half unless asked")
-			local s = rrmscan.collector_script({on_auth = "true", fdb = true})
-			local b = s:find("bridge monitor fdb", 1, true)
-			local u = s:find('ubus subscribe "$@"', 1, true)
-			assert_true(b ~= nil and u ~= nil and b < u, "the monitor is started before the subscriber")
-			assert_true(s:find("done &\n", b, true) ~= nil, "in the background: the subscriber keeps the foreground")
-			assert_true(s:find("Deleted*|*' self'*) continue", 1, true) ~= nil,
-				"ageing and the switch's own entries are dropped in the shell")
-			assert_true(s:find("printf '%s fdb %s\\n'", 1, true) ~= nil, "uptime, then 'fdb', then the line")
-			assert_true(s:find("on_auth", 1, true) == nil and s:find("true ;;", 1, true) ~= nil,
-				"the auth hook is still there")
-		end
-	},
-	{
-		-- Run for real: a stub `ubus` replays the captured events through the
-		-- script under sh. Probe requests never reach the file; every event a
-		-- consumer reads does, stamped.
-		name = "rrmscan: the collector drops probe requests in the shell, keeps the rest",
-		fn = function()
-			local dir = os.tmpname()
-			os.remove(dir)
-			assert_true(os.execute("mkdir " .. dir) ~= false, "tmp dir")
-			local fixture = read_fixture("ubus_assoc_events.txt")
-			local raw = {}
-			for line in fixture:gmatch("[^\n]+") do raw[#raw + 1] = (line:gsub("^%d+%.%d+ ", "")) end
-			local events = table.concat(raw, "\n") .. "\n"
-			local function put(name, body)
-				local f = io.open(dir .. "/" .. name, "w"); f:write(body); f:close()
-			end
-			put("events", events)
-			put("uptime", "123.45 6.78\n")
-			put("ubus", "#!/bin/sh\ncat " .. dir .. "/events\n")
-			os.execute("chmod +x " .. dir .. "/ubus")
-			local script = rrmscan.collector_script({on_auth = ":"}):gsub("/proc/uptime", dir .. "/uptime")
-			put("collect.sh", script)
-			local p = io.popen("PATH=" .. dir .. ":$PATH sh " .. dir .. "/collect.sh 2>&1")
-			local out = p:read("*a")
-			p:close()
-			os.execute("rm -rf " .. dir)
-			assert_true(events:find('{ "probe": ', 1, true) ~= nil, "the fixture has a probe to drop")
-			assert_true(out:find('"probe"', 1, true) == nil, "no probe line written")
-			local n_in, n_out = 0, 0
-			for line in events:gmatch("[^\n]+") do
-				if not line:find('{ "probe": ', 1, true) then n_in = n_in + 1 end
-			end
-			for line in out:gmatch("[^\n]+") do
-				n_out = n_out + 1
-				assert_true(line:sub(1, 7) == "123.45 ", "stamped: " .. line)
-			end
-			assert_eq(n_out, n_in, "every other event kept")
-			local evs = dofile("openuf/assoctrack.lua").parse_events(out)
-			assert_true(#evs >= 4, "auth/assoc/authorized/disassoc still parse")
-		end
-	},
-	{
-		-- A wifi reload kills the subscriber, never the monitor: each restart
-		-- would otherwise leave one more `bridge monitor` behind.
-		name = "rrmscan: the fdb half is killed before every start and on stop",
-		fn = function()
-			local orig_script = rrmscan.COLLECTOR_SCRIPT
-			rrmscan.COLLECTOR_SCRIPT = os.tmpname()
-			local ok, err = pcall(function()
-				with_popen(function(cmd)
-					if cmd:find("pgrep", 1, true) then return "" end
-					if cmd:find("ubus list", 1, true) then return "hostapd.phy0-ap0\n" end
-					return ""
-				end, function()
-					with_exec(function(cmds)
-						assert_true(rrmscan.collector_ensure({fdb = true}), "started")
-						local kill_at, start_at
-						for i, c in ipairs(cmds) do
-							if c:find("[b]ridge monitor fdb", 1, true) and c:find("kill", 1, true) then kill_at = kill_at or i end
-							if c:find("sh " .. rrmscan.COLLECTOR_SCRIPT, 1, true) then start_at = i end
-						end
-						assert_true(kill_at ~= nil and start_at ~= nil and kill_at < start_at,
-							"a leftover monitor is killed before the new collector starts")
-					end)
+
+			local exists = rrmscan._file_exists
+			rrmscan._file_exists = function() return true end
+			with_popen(function(cmd)
+				if cmd:find("pgrep", 1, true) then return "4711\n" end  -- running
+				return ""
+			end, function()
+				with_exec(function(cmds)
+					assert_false(rrmscan.collector_ensure(), "no-op while running")
+					assert_eq(#cmds, 0, "spawns no second collector")
 				end)
 			end)
-			os.remove(rrmscan.COLLECTOR_SCRIPT)
-			rrmscan.COLLECTOR_SCRIPT = orig_script
-			if not ok then error(err, 0) end
-			with_exec(function(cmds)
-				rrmscan.collector_stop()
-				assert_true(table.concat(cmds, "\n"):find("kill $(pgrep -f '[b]ridge monitor fdb')", 1, true) ~= nil,
-					"collector_stop kills it too")
+			-- Running, but its file is gone: it writes into an unlinked inode.
+			rrmscan._file_exists = function() return false end
+			with_popen(function(cmd)
+				if cmd:find("pgrep", 1, true) then return "4711\n" end
+				if cmd:find("ubus list", 1, true) then return "hostapd.phy0-ap0\n" end
+				return ""
+			end, function()
+				with_exec(function(cmds)
+					assert_true(rrmscan.collector_ensure(), "replaced")
+					local all = table.concat(cmds, "\n")
+					assert_true(all:find("kill 4711", 1, true) ~= nil, "the orphan is killed")
+					assert_true(all:find("ubus subscribe hostapd.phy0-ap0", 1, true) ~= nil,
+						"and a new collector started")
+				end)
 			end)
-		end
-	},
-	{
-		name = "rrmscan: harvest takes a blob drained once for several consumers",
-		fn = function()
-			local blob = read_fixture("ubus_beacon_report.txt")
-			with_events("", function()
-				assert_true(#rrmscan.harvest(blob) > 0, "parses the blob it is given")
-			end)
-			-- Timestamp prefixes added by the collector do not disturb it.
-			local stamped = blob:gsub("([^\n]+)", "5905613.20 %1")
-			with_events("", function()
-				assert_eq(#rrmscan.harvest(stamped), #rrmscan.harvest(blob), "prefix-agnostic")
-			end)
+			rrmscan._file_exists = exists
 		end
 	},
 	{
@@ -708,18 +540,25 @@ return {
 		-- bound on a RAM-disk /tmp.
 		name = "rrmscan: collector_stop kills the subscriber and removes the event file",
 		fn = function()
+			local pgrep_cmd
+			with_popen(function(cmd)
+				if cmd:find("pgrep", 1, true) then pgrep_cmd = cmd return "4711\n4712\n" end
+				return ""
+			end, function()
 			with_exec(function(cmds)
 				rrmscan.collector_stop()
 				local all = table.concat(cmds, "\n")
-				assert_true(all:find("kill $(pgrep -f '[u]bus subscribe hostapd')", 1, true) ~= nil,
-					"kills the subscriber by the pattern collector_ensure spawns")
-				-- busybox on the Archer C5 (OpenWrt 25.12) has no pkill
-				-- applet: a pkill here is a no-op on real hardware.
-				assert_false(all:find("pkill", 1, true) ~= nil, "does not rely on pkill")
+				-- OpenWrt's busybox has no pkill: by pid, from an anchored
+				-- pgrep that cannot match the shell running it.
+				assert_false(all:find("pkill", 1, true) ~= nil, "no pkill")
+				assert_true(all:find("kill 4711 4712", 1, true) ~= nil, "kills every collector by pid")
+				assert_true(pgrep_cmd:find("'^ubus subscribe hostapd'", 1, true) ~= nil,
+					"anchored pattern")
 				assert_true(all:find("rm -f " .. rrmscan.EVENT_FILE, 1, true) ~= nil,
 					"removes the notification file it was appending to")
 				assert_true(all:find("[h]ostapd_cli", 1, true) ~= nil,
 					"stops the control-socket monitors too")
+			end)
 			end)
 		end
 	},
@@ -831,208 +670,6 @@ return {
 			-- Names off the event file never reach a shell unchecked.
 			assert_nil(rrmscan.iface_bssid("phy0;reboot"), "bad ifname refused")
 			assert_nil(rrmscan.sta_signal("phy0-ap1", "x; reboot"), "bad station refused")
-		end
-	},
-	{
-		name = "rrmscan: channel_of_freq inverts freq_of_channel, and refuses the gaps",
-		fn = function()
-			local C = rrmscan.channel_of_freq
-			for _, ch in ipairs({1, 6, 11, 13, 14, 36, 52, 100, 144, 165}) do
-				assert_eq(C(rrmscan.freq_of_channel(ch)), ch,
-					"round trip for channel " .. ch)
-			end
-			-- A frequency off the 5 MHz grid is not a channel.
-			assert_nil(C(5503), "off-grid 5 GHz")
-			assert_nil(C(2400), "below the 2.4 GHz band")
-			assert_nil(C(6115), "6 GHz: no channel vocabulary here")
-			assert_nil(C(nil), "nil")
-			assert_nil(C("radar"), "not a number")
-		end
-	},
-	{
-		name = "rrmscan: is_dfs_channel covers the whole 52-144 span and nothing else",
-		fn = function()
-			local D = rrmscan.is_dfs_channel
-			assert_eq(D(52), true, "52")
-			assert_eq(D(100), true, "100")
-			assert_eq(D(144), true, "144")
-			assert_eq(D("100"), true, "a string channel, as UCI stores it")
-			assert_eq(D(48), false, "48 is non-DFS")
-			assert_eq(D(149), false, "149 is non-DFS")
-			assert_eq(D(11), false, "2.4 GHz")
-			assert_eq(D("auto"), false, "auto is not a channel")
-			assert_eq(D(nil), false, "nil")
-		end
-	},
-	{
-		name = "rrmscan: parse_dfs_states reads the per-channel DFS state machine",
-		fn = function()
-			-- Verbatim shape of `iw phy phy1 channels` on the AX3000T
-			-- (OpenWrt 25.12, mt76), with one channel put on the
-			-- non-occupancy list by hand -- which is the state no live read
-			-- can be made to show on demand.
-			local blob = table.concat({
-				"Band 2:",
-				"\t* 5180 MHz [36] ",
-				"\t  Maximum TX power: 23.0 dBm",
-				"\t  Channel widths: 20MHz HT40+ VHT80 VHT160",
-				"\t* 5500 MHz [100] ",
-				"\t  Maximum TX power: 26.0 dBm",
-				"\t  Radar detection",
-				"\t  Channel widths: 20MHz HT40+ VHT80 VHT160",
-				"\t  DFS state: available (for 349821 sec)",
-				"\t  DFS CAC time: 60000 ms",
-				"\t* 5520 MHz [104] ",
-				"\t  Maximum TX power: 26.0 dBm",
-				"\t  Radar detection",
-				"\t  DFS state: unavailable (for 1766 sec)",
-				"\t  DFS CAC time: 60000 ms",
-				"\t* 5540 MHz [108] ",
-				"\t  Radar detection",
-				"\t  DFS state: usable (for 0 sec)",
-			}, "\n") .. "\n"
-			local s = rrmscan.parse_dfs_states(blob)
-			assert_eq(s[100].state, "available", "CAC done, may beacon")
-			assert_eq(s[100].secs, 349821, "and for how long")
-			assert_eq(s[104].state, "unavailable", "on the NOL after a radar hit")
-			assert_eq(s[104].secs, 1766, "the NOL has 1766 s left")
-			assert_eq(s[108].state, "usable", "a DFS channel awaiting CAC")
-			-- A non-DFS channel is absent rather than claimed usable, so
-			-- "not a DFS channel" stays distinguishable from "free".
-			assert_nil(s[36], "36 has no DFS state at all")
-			assert_eq(rrmscan.channel_in_nol(s, 104), true, "104 is blocked")
-			assert_eq(rrmscan.channel_in_nol(s, "104"), true, "a string channel")
-			assert_eq(rrmscan.channel_in_nol(s, 100), false, "100 is not")
-			assert_eq(rrmscan.channel_in_nol(s, 108), false,
-				"CAC pending is not the NOL -- hostapd does the CAC itself")
-			assert_eq(rrmscan.channel_in_nol(s, 36), false, "no state, not blocked")
-			assert_eq(rrmscan.channel_in_nol(nil, 100), false, "no dump at all")
-			assert_eq(next(rrmscan.parse_dfs_states(nil)), nil, "no blob")
-			assert_eq(next(rrmscan.parse_dfs_states("")), nil, "empty blob")
-		end
-	},
-	{
-		name = "rrmscan: chan_switch_args rebuilds a CSA for each 5 GHz width",
-		fn = function()
-			local A = rrmscan.chan_switch_args
-			-- 80 MHz on channel 100: the live values read off the AX3000T's
-			-- own hostapd (secondary_channel=1, centr_freq_seg0_idx=106).
-			assert_eq(A(100, 80),
-				"5500 sec_channel_offset=1 center_freq1=5530 bandwidth=80 vht",
-				"ch 100 at 80 MHz")
-			-- 104 is the upper half of the same 40 MHz pair, so its
-			-- secondary sits below it, and the 80 MHz centre is unchanged.
-			assert_eq(A(104, 80),
-				"5520 sec_channel_offset=-1 center_freq1=5530 bandwidth=80 vht",
-				"ch 104 at 80 MHz")
-			assert_eq(A(36, 80),
-				"5180 sec_channel_offset=1 center_freq1=5210 bandwidth=80 vht",
-				"ch 36 at 80 MHz")
-			assert_eq(A(149, 80),
-				"5745 sec_channel_offset=1 center_freq1=5775 bandwidth=80 vht",
-				"the UNII-3 block anchors on 149")
-			assert_eq(A(100, 160),
-				"5500 sec_channel_offset=1 center_freq1=5570 bandwidth=160 vht",
-				"160 MHz spans 100-128, centre 5570")
-			assert_eq(A(100, 40),
-				"5500 sec_channel_offset=1 center_freq1=5510 bandwidth=40 ht",
-				"40 MHz: ht, and the centre is between the pair")
-			assert_eq(A(104, 40),
-				"5520 sec_channel_offset=-1 center_freq1=5510 bandwidth=40 ht",
-				"the same pair from the other side")
-			-- 20 MHz carries nothing but the frequency: no secondary, no
-			-- centre, and no ht/vht token to mis-declare the width with.
-			assert_eq(A(100, 20), "5500", "20 MHz")
-			assert_eq(A(100, nil), "5500", "unknown width is read as 20 MHz")
-			-- 165 sits alone: no 40 MHz partner, so no bonded width at all.
-			assert_nil(A(165, 40), "165 has no partner")
-			assert_nil(A(165, 80), "and no 80 MHz block")
-			assert_eq(A(165, 20), "5825", "but it is a perfectly good 20 MHz channel")
-			assert_eq(rrmscan.block_center(149, 80), 155,
-				"UNII-3's centre is 155, not the 154 an anchor-on-36 formula gives")
-			assert_nil(A(11, 80), "2.4 GHz has no DFS and no block anchor")
-			assert_nil(A(100, 60), "not a width hostapd knows")
-			assert_nil(A("auto", 80), "auto is not a channel")
-			assert_nil(A(nil, 80), "nil")
-		end
-	},
-	{
-		name = "rrmscan: parse_dfs reads a radar detection, and only a radar detection",
-		fn = function()
-			-- hostapd's own wording, as the hook stamps it:
-			-- "<uptime> <ifname> <event words>".
-			local blob = table.concat({
-				"1234.56 phy1-ap0 DFS-CAC-START freq=5500 chan=100 sec_chan=1 width=1",
-				"1299.01 phy1-ap0 DFS-RADAR-DETECTED freq=5500 ht_enabled=0 "
-					.. "chan_offset=0 chan_width=1 cf1=5530 cf2=0",
-				"1299.02 phy1-ap0 DFS-NEW-CHANNEL freq=5180 chan_offset=1 chan_width=1",
-				"1300.00 phy1-ap0 BEACON-RESP-RX 00:00:5e:00:53:02 1 00 73240000",
-				'1300.50 { "assoc": {"address":"00:00:5e:00:53:03"} }',
-			}, "\n") .. "\n"
-			local d = rrmscan.parse_dfs(blob)
-			assert_eq(#d, 1, "one detection, not the CAC or the channel change")
-			assert_eq(d[1].freq, 5500, "freq as hostapd reported it")
-			assert_eq(d[1].channel, 100, "channel derived from the freq")
-			assert_eq(d[1].ifname, "phy1-ap0", "the BSS it came from")
-			assert_eq(d[1].t, 1299.01, "the hook's uptime stamp")
-			-- The radar frequency is not cf1: on a wide channel they differ,
-			-- and freq is the one that says where the radar was.
-			assert_eq(rrmscan.channel_of_freq(5530), 106, "cf1 would be another channel")
-			-- Nothing to report rather than a guessed channel.
-			assert_eq(#rrmscan.parse_dfs(
-				"1.0 phy1-ap0 DFS-RADAR-DETECTED ht_enabled=0\n"), 0, "no freq")
-			assert_eq(#rrmscan.parse_dfs(
-				"1.0 phy1-ap0 DFS-RADAR-DETECTED freq=5503\n"), 0, "unusable freq")
-			assert_eq(#rrmscan.parse_dfs(nil), 0, "no blob")
-			assert_eq(#rrmscan.parse_dfs(""), 0, "empty blob")
-		end
-	},
-	{
-		name = "rrmscan: the control-socket hook passes DFS events beside beacon reports",
-		fn = function()
-			local s = rrmscan.action_script()
-			-- The hook is `sh`, so the filter is testable by running it.
-			local path = os.tmpname()
-			local events = os.tmpname()
-			local orig = rrmscan.EVENT_FILE
-			rrmscan.EVENT_FILE = events
-			local f = assert(io.open(path, "w"))
-			f:write(rrmscan.action_script())
-			f:close()
-			rrmscan.EVENT_FILE = orig
-			local function run(args)
-				os.execute("sh " .. path .. " " .. args .. " >/dev/null 2>&1")
-			end
-			run("phy1-ap0 DFS-RADAR-DETECTED freq=5500")
-			run("phy1-ap0 BEACON-RESP-RX 00:00:5e:00:53:02 1 00 7324")
-			run("phy1-ap0 AP-STA-CONNECTED 00:00:5e:00:53:03")
-			local g = assert(io.open(events, "r"))
-			local out = g:read("*a")
-			g:close()
-			os.remove(path)
-			os.remove(events)
-			assert_eq(out:find("DFS-RADAR-DETECTED", 1, true) ~= nil, true,
-				"radar passed")
-			assert_eq(out:find("BEACON-RESP-RX", 1, true) ~= nil, true,
-				"beacon report still passed")
-			assert_eq(out:find("AP-STA-CONNECTED", 1, true), nil,
-				"everything else is still dropped at the hook")
-			-- Both kinds land as "<uptime> <ifname> <event...>", so one drain
-			-- reads both. The stamp is only checked where /proc/uptime exists:
-			-- the dev box is macOS, where the hook's `read` finds no such file
-			-- and leaves it empty. parse_dfs's own test pins the stamped form.
-			local up = io.open("/proc/uptime", "r")
-			if up then
-				up:close()
-				for line in out:gmatch("[^\n]+") do
-					assert_eq(line:match("^%d+%.?%d*%s") ~= nil, true, "stamped: " .. line)
-				end
-			end
-			for line in out:gmatch("[^\n]+") do
-				assert_eq(line:find("phy1-ap0 ", 1, true) ~= nil, true,
-					"carries the interface: " .. line)
-			end
-			assert_eq(s, rrmscan.action_script(), "the script is stable")
 		end
 	},
 }

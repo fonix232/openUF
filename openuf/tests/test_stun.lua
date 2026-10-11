@@ -1,216 +1,238 @@
--- Tests for openuf/stun.lua: the STUN wake-up client's packets and timing.
+-- Tests for src/unifi/stun.lua (the controller's STUN wake-up channel).
 -- Run from project root: lua tests/run_tests.lua
 
-local stun = dofile("openuf/stun.lua")
+local stun = dofile("src/unifi/stun.lua")
 
-local function hex(s)
-	return (s:gsub(".", function(c) return ("%02x"):format(c:byte()) end))
-end
-local function unhex(h)
-	return (h:gsub("%s", ""):gsub("%x%x", function(b) return string.char(tonumber(b, 16)) end))
-end
+local function u16(n) return string.char(math.floor(n / 256) % 256, n % 256) end
 
--- A Binding Response as the controller's jstun server builds it:
--- MAPPED-ADDRESS, CHANGED-ADDRESS, SOURCE-ADDRESS, each family 1.
-local function response(ip, port, first)
-	local a, b, c, d = ip:match("(%d+)%.(%d+)%.(%d+)%.(%d+)")
-	local mapped = "0001 0008 0001" .. ("%04x"):format(port)
-		.. ("%02x%02x%02x%02x"):format(a, b, c, d)
-	local other = "0005 0008 0001 0d96 c0000201" .. "0004 0008 0001 0d96 c0000201"
-	local attrs = first == "mapped_last" and (other .. mapped) or (mapped .. other)
-	return unhex("0101 0024" .. string.rep("00", 16) .. attrs)
+-- A Binding Success Response carrying `attr` (type, value).
+local function response(txid, atype, value)
+	local attr = u16(atype) .. u16(#value) .. value
+	return u16(0x0101) .. u16(#attr) .. stun.MAGIC .. txid .. attr
 end
 
-local WAKE = unhex("8888 0000" .. string.rep("00", 16))
-
--- LuaSocket double: one UDP socket with a receive queue.
-local function fake_socket(opts)
-	opts = opts or {}
-	local f = {sent = {}, queue = {}, opened = 0, closed = 0}
-	f.dns = {toip = function(host)
-		f.resolved = (f.resolved or 0) + 1
-		if opts.no_dns then return nil, "host not found" end
-		return host == "ctrl.example" and "192.0.2.10" or host
-	end}
-	f.udp = function()
-		f.opened = f.opened + 1
-		local s = {}
-		function s:setsockname(addr, port) f.bound = addr .. ":" .. port; return 1 end
-		function s:settimeout(t) f.timeout = t end
-		function s:sendto(data, ip, port)
-			if opts.send_fails then return nil, "network unreachable" end
-			f.sent[#f.sent + 1] = {data = data, to = ip .. ":" .. port}
-			return #data
-		end
-		function s:receive()
-			local p = table.remove(f.queue, 1)
-			if p == nil then return nil, "timeout" end
-			if type(p) == "table" then return nil, p.err end
-			return p
-		end
-		function s:close() f.closed = f.closed + 1 end
-		return s
+-- A socket module double: one UDP socket fed from a queue.
+local function mock_socket(queue)
+	local sent = {}
+	local udp = {}
+	function udp:settimeout() end
+	function udp:setsockname() return true end
+	function udp:getsockname() return "0.0.0.0", 40001 end
+	function udp:sendto(d, ip, port) sent[#sent + 1] = {d = d, ip = ip, port = port} return #d end
+	function udp:receivefrom()
+		local d = table.remove(queue, 1)
+		if type(d) == "table" then return d[1], d[2], 3478 end
+		if d then return d, "192.0.2.10", 3478 end
+		return nil, "timeout"
 	end
-	return f
+	function udp:close() end
+	local clock = 0
+	local mod = {
+		dns = {toip = function(h) return h == "unifi.example" and "192.0.2.10" or h end},
+		udp = function() return udp end,
+		select = function(r, _, t)
+			clock = clock + (t or 0)
+			if #queue > 0 then return {udp} end
+			return {}
+		end,
+	}
+	return mod, sent, function() return clock end
 end
 
 return {
 	{
-		name = "stun: stun_url names the server, 3478 when it names no port",
+		name = "stun: parse_url takes host and port, defaulting to 3478",
 		fn = function()
-			local h, p = stun.parse_url("stun://192.0.2.4:3478/")
-			assert_eq(h, "192.0.2.4", "host")
+			local h, p = stun.parse_url("stun://192.0.2.10:3478/")
+			assert_eq(h, "192.0.2.10", "host")
 			assert_eq(p, 3478, "port")
-			h, p = stun.parse_url("stun://ctrl.example:3479")
-			assert_eq(h, "ctrl.example", "a name")
-			assert_eq(p, 3479, "its port")
-			h, p = stun.parse_url("stun://192.0.2.4/")
-			assert_eq(p, 3478, "default port")
-			assert_eq(stun.parse_url("http://192.0.2.4:3478/"), nil, "not stun://")
-			assert_eq(stun.parse_url("stun://192.0.2.4:0/"), nil, "port 0")
-			assert_eq(stun.parse_url("stun://192.0.2.4:70000/"), nil, "port out of range")
-			assert_eq(stun.parse_url(""), nil, "empty")
-			assert_eq(stun.parse_url(nil), nil, "absent")
+			local h2, p2 = stun.parse_url("stun://unifi.example/")
+			assert_eq(h2, "unifi.example", "named host")
+			assert_eq(p2, 3478, "default port")
+			assert_nil(stun.parse_url("http://x/"), "not a stun URL")
 		end
 	},
 	{
-		name = "stun: the Binding Request is the firmware's 28 bytes",
+		name = "stun: parse_response decodes XOR-MAPPED-ADDRESS",
 		fn = function()
-			-- mcad stun_send: type 1, length 8, zero transaction id,
-			-- CHANGE-REQUEST (3) length 4 value 0. The controller rejects a
-			-- request without CHANGE-REQUEST.
-			assert_eq(hex(stun.request()),
-				"00010008" .. string.rep("00", 16) .. "0003000400000000", "bytes")
+			local txid = string.rep("\1", 12)
+			-- 203.0.113.5:40001 XOR 0x2112A442
+			local port = 40001
+			local m = {stun.MAGIC:byte(1, 4)}
+			local function x(a, b)
+				local r, pw = 0, 1
+				for _ = 1, 8 do
+					if a % 2 ~= b % 2 then r = r + pw end
+					a, b, pw = math.floor(a / 2), math.floor(b / 2), pw * 2
+				end
+				return r
+			end
+			local xp = string.char(x(math.floor(port / 256), m[1]), x(port % 256, m[2]))
+			local ip = {203, 0, 113, 5}
+			local xa = string.char(x(ip[1], m[1]), x(ip[2], m[2]), x(ip[3], m[3]), x(ip[4], m[4]))
+			local got_ip, got_port = stun.parse_response(response(txid, 0x0020, "\0\1" .. xp .. xa), txid)
+			assert_eq(got_ip, "203.0.113.5", "mapped ip")
+			assert_eq(got_port, 40001, "mapped port")
 		end
 	},
 	{
-		name = "stun: a 0x8888 packet is a connection request",
+		name = "stun: parse_response falls back to MAPPED-ADDRESS and checks the transaction id",
 		fn = function()
-			assert_eq(stun.parse(WAKE), "wake", "the controller's 20 bytes")
-			-- The simulator variant carries a MAC at offset 4; same type.
-			local sim = unhex("8888 0000 00005e005302" .. string.rep("00", 10))
-			assert_eq(stun.parse(sim), "wake", "with a MAC")
-			assert_eq(stun.parse(unhex("8888 0000" .. string.rep("00", 15))), nil, "19 bytes is too short")
+			local txid = string.rep("\2", 12)
+			local v = "\0\1" .. u16(40002) .. string.char(198, 51, 100, 7)
+			local ip, port = stun.parse_response(response(txid, 0x0001, v), txid)
+			assert_eq(ip, "198.51.100.7", "classic mapped ip")
+			assert_eq(port, 40002, "classic mapped port")
+			assert_nil(stun.parse_response(response(txid, 0x0001, v), string.rep("\3", 12)),
+				"a stranger's answer is ignored")
 		end
 	},
 	{
-		name = "stun: a Binding Response yields its MAPPED-ADDRESS",
+		name = "stun: the controller's 0x8888 header is a wake-up",
 		fn = function()
-			local kind, ip, port = stun.parse(response("192.0.2.3", 41234))
-			assert_eq(kind, "mapped", "kind")
-			assert_eq(ip, "192.0.2.3", "ip")
-			assert_eq(port, 41234, "port")
-			kind, ip, port = stun.parse(response("198.51.100.7", 3, "mapped_last"))
-			assert_eq(kind, "mapped", "found after other attributes")
-			assert_eq(ip .. ":" .. port, "198.51.100.7:3", "and read from the right one")
-			-- Truncated: the attribute runs past the datagram.
-			local r = response("192.0.2.3", 41234)
-			assert_eq(stun.parse(r:sub(1, 26)), nil, "truncated attribute")
-			-- IPv6 family on this IPv4 socket.
-			local v6 = unhex("0101 0018" .. string.rep("00", 16) .. "0001 0014 0002 a012"
-				.. string.rep("00", 16))
-			assert_eq(stun.parse(v6), nil, "family 2")
-			-- A Binding Request (or anything else) is not ours to act on.
-			assert_eq(stun.parse(stun.request()), nil, "a request")
-			assert_eq(stun.parse("short"), nil, "under 20 bytes")
-			assert_eq(stun.parse(response("192.0.2.3", 0)), nil, "port 0")
+			assert_true(stun.is_wake(u16(0x8888) .. u16(0) .. string.rep("\0", 16)), "bare header")
+			assert_false(stun.is_wake(u16(0x0101) .. u16(0) .. string.rep("\0", 16)), "a binding answer is not")
+			assert_false(stun.is_wake("short"), "too short")
 		end
 	},
 	{
-		name = "stun: the client binds an ephemeral port and sends every 30 s",
+		name = "stun: wait returns early on a wake and keeps the binding fresh",
 		fn = function()
-			local f = fake_socket()
-			local c = stun.new(f)
-			assert_true(stun.sync(c, "stun://ctrl.example:3478/", true), "opened")
-			assert_eq(f.bound, "*:0", "0.0.0.0, ephemeral port")
-			assert_eq(f.timeout, 0, "non-blocking")
-			assert_true(stun.send_due(c, 100), "first send at once")
-			assert_eq(f.sent[1].to, "192.0.2.10:3478", "to the resolved server")
-			assert_eq(f.sent[1].data, stun.request(), "the request")
-			assert_false(stun.send_due(c, 129), "not before 30 s")
-			assert_true(stun.send_due(c, 130), "at 30 s")
-			assert_eq(#f.sent, 2, "two sent")
-			assert_eq(f.resolved, 1, "resolved once")
-			-- Same URL again: the same socket.
-			stun.sync(c, "stun://ctrl.example:3478/", true)
-			assert_eq(f.opened, 1, "no reopen")
+			local queue = {}
+			local mod, sent, now = mock_socket(queue)
+			stun._socket = mod
+			local c = stun.new("stun://unifi.example:3478/")
+			assert_true(c ~= nil, "client created")
+			assert_false(c:wait(5, now), "nothing arrived: waits the full time")
+			assert_true(#sent >= 1, "a binding request went out")
+			assert_eq(sent[1].ip, "192.0.2.10", "to the resolved controller")
+			queue[1] = u16(0x8888) .. u16(0) .. string.rep("\0", 16)
+			assert_true(c:wait(10, now), "the wake-up cut the wait short")
+			local ip, port = c:address("192.168.1.5")
+			assert_eq(ip, "192.168.1.5", "no answer yet: the device's own address")
+			assert_eq(port, 40001, "and the socket's local port")
+			stun._socket = nil
 		end
 	},
 	{
-		name = "stun: a failed send or resolve retries in 5 s and re-resolves",
+		name = "stun: the binding request carries the CHANGE-REQUEST a 3489 server insists on",
 		fn = function()
-			local f = fake_socket({send_fails = true})
-			local c = stun.new(f)
-			stun.sync(c, "stun://ctrl.example:3478/", true)
-			local ok, err = stun.send_due(c, 100)
-			assert_false(ok, "failed")
-			assert_eq(err, "network unreachable", "says why")
-			assert_false(stun.send_due(c, 104), "waits 5 s")
-			stun.send_due(c, 105)
-			assert_eq(f.resolved, 2, "re-resolved after the failure")
-			f = fake_socket({no_dns = true})
-			c = stun.new(f)
-			stun.sync(c, "stun://ctrl.example:3478/", true)
-			ok, err = stun.send_due(c, 100)
-			assert_false(ok, "no address")
-			assert_true(err:find("ctrl.example", 1, true) ~= nil, "names the host")
-			assert_eq(#f.sent, 0, "nothing sent")
-			assert_eq(c.next_send, 105, "retry in 5 s")
+			local req = stun.binding_request(string.rep("\7", 12))
+			assert_eq(#req, 28, "20-byte header + one 8-byte attribute")
+			assert_eq(req:byte(1) * 256 + req:byte(2), 0x0001, "Binding Request")
+			assert_eq(req:byte(3) * 256 + req:byte(4), 8, "message length")
+			assert_eq(req:byte(21) * 256 + req:byte(22), 0x0003, "CHANGE-REQUEST")
+			assert_eq(req:sub(25, 28), "\0\0\0\0", "no change asked for")
 		end
 	},
 	{
-		name = "stun: a response sets the fields and wakes once per change",
+		name = "stun: a wake from anywhere but the controller is ignored",
 		fn = function()
-			local f = fake_socket()
-			local c = stun.new(f)
-			stun.sync(c, "stun://192.0.2.4:3478/", true)
-			assert_eq(stun.fields(c), nil, "nothing before a response")
-			assert_false(stun.receive(c), "nothing queued")
-			f.queue = {response("192.0.2.3", 41234)}
-			assert_true(stun.receive(c), "a new mapping wakes")
-			local ip, port = stun.fields(c)
-			assert_eq(ip, "192.0.2.3", "connect_request_ip")
-			assert_eq(port, "41234", "connect_request_port, a string as the firmware sends it")
-			f.queue = {response("192.0.2.3", 41234)}
-			assert_false(stun.receive(c), "the same mapping does not")
-			f.queue = {response("192.0.2.3", 41235)}
-			assert_true(stun.receive(c), "a changed port does")
-			f.queue = {WAKE}
-			assert_true(stun.receive(c), "a connection request does")
-			f.queue = {unhex("0111 0000" .. string.rep("00", 16))}
-			assert_false(stun.receive(c), "an error response does not")
-			-- Many at once are drained in one read: one inform, not many.
-			f.queue = {}
-			for i = 1, 10 do f.queue[i] = WAKE end
-			assert_true(stun.receive(c), "a burst")
-			assert_eq(#f.queue, 0, "drained")
+			local queue = {{u16(0x8888) .. u16(0) .. string.rep("\0", 16), "192.0.2.66"}}
+			local mod, _, now = mock_socket(queue)
+			stun._socket = mod
+			local c = stun.new("stun://unifi.example:3478/")
+			local woke = c:wait(5, now)
+			stun._socket = nil
+			assert_false(woke, "a stranger's wake does not start an inform")
 		end
 	},
 	{
-		name = "stun: a socket error, no URL or not managed closes it",
+		name = "stun: wakes start at most one inform per MIN_WAKE_GAP, a held one is not lost",
 		fn = function()
-			local f = fake_socket()
-			local c = stun.new(f)
-			stun.sync(c, "stun://192.0.2.4:3478/", true)
-			f.queue = {response("192.0.2.3", 41234)}
-			stun.receive(c)
-			f.queue = {{err = "connection refused"}}
-			assert_false(stun.receive(c), "no wake")
-			assert_eq(f.closed, 1, "closed")
-			assert_eq(stun.fields(c), nil, "fields gone with it")
-			stun.sync(c, "stun://192.0.2.4:3478/", true)
-			assert_eq(f.opened, 2, "reopened on the next tick")
-			stun.sync(c, "stun://192.0.2.5:3478/", true)
-			assert_eq(f.opened, 3, "a new URL, a new socket")
-			assert_eq(f.closed, 2, "the old one closed")
-			stun.sync(c, "stun://192.0.2.5:3478/", false)
-			assert_eq(f.closed, 3, "not managed: closed")
-			assert_eq(c.sock, nil, "no socket")
-			stun.sync(c, "stun://192.0.2.5:3478/", true)
-			stun.sync(c, nil, true)
-			assert_eq(c.sock, nil, "no URL: closed")
-			assert_false(stun.send_due(c, 1000), "and nothing sent")
-			assert_eq(stun.fields(nil), nil, "no client at all")
+			local wake = u16(0x8888) .. u16(0) .. string.rep("\0", 16)
+			local queue = {wake}
+			local mod, _, now = mock_socket(queue)
+			stun._socket = mod
+			local c = stun.new("stun://unifi.example:3478/")
+			assert_true(c:wait(10, now), "the first wake")
+			local t1 = now()
+			queue[1] = wake
+			assert_true(c:wait(10, now), "the second wake is answered")
+			local gap = now() - t1
+			queue[1] = wake
+			local within = c:wait(0.5, now)
+			stun._socket = nil
+			assert_true(gap >= stun.MIN_WAKE_GAP, "but not before the gap (" .. gap .. " s)")
+			assert_false(within, "a wake inside the gap does not cut a short wait")
+			assert_true(c.pending, "it is held for the next wait")
+		end
+	},
+	{
+		name = "stun: a new or changed mapped address informs at once, an unchanged one does not",
+		fn = function()
+			local orig = stun._random_bytes
+			stun._random_bytes = function(n) return string.rep("\7", n) end
+			local txid = string.rep("\7", 12)
+			local function mapped(port)
+				return response(txid, 0x0001, "\0\1" .. u16(port) .. string.char(198, 51, 100, 7))
+			end
+			local queue = {}
+			local mod, _, now = mock_socket(queue)
+			stun._socket = mod
+			local c = stun.new("stun://unifi.example:3478/")
+			c:bind(0)
+			queue[1] = mapped(40002)
+			assert_true(c:poll(), "the first mapping is news to the controller")
+			queue[1] = mapped(40002)
+			assert_false(c:poll(), "the same mapping again is not")
+			queue[1] = mapped(40003)
+			assert_true(c:poll(), "a changed port is")
+			stun._socket, stun._random_bytes = nil, orig
+			assert_eq(select(2, c:address("192.0.2.100")), 40003, "and is what gets reported")
+		end
+	},
+	{
+		name = "stun: Binding Requests every 30 s, 5 s after one that could not be sent",
+		fn = function()
+			local mod = mock_socket({})
+			stun._socket = mod
+			local c = stun.new("stun://unifi.example:3478/")
+			c:bind(100)
+			assert_eq(c.next_bind, 130, "the firmware's 30 s")
+			c.udp.sendto = function() return nil, "network unreachable" end
+			c:bind(200)
+			stun._socket = nil
+			assert_eq(c.next_bind, 205, "a failed send retries after 5 s")
+		end
+	},
+	{
+		name = "stun: the transaction id comes from the crypto source",
+		fn = function()
+			local orig = stun._random_bytes
+			local asked
+			stun._random_bytes = function(n) asked = n; return string.rep("\9", n) end
+			local mod, sent = mock_socket({})
+			stun._socket = mod
+			local c = stun.new("stun://unifi.example:3478/")
+			c:bind(0)
+			stun._socket, stun._random_bytes = nil, orig
+			assert_eq(asked, 12, "12 bytes asked for")
+			assert_eq(sent[1].d:sub(9, 20), string.rep("\9", 12), "used as the transaction id")
+			assert_eq(#stun._random_bytes(12), 12, "the real source gives 12 bytes")
+		end
+	},
+	{
+		name = "stun: wait serves the extra sockets it is given, dropping one with nothing to take",
+		fn = function()
+			local queue = {}
+			local mod, _, now = mock_socket(queue)
+			local other = {}
+			local served = 0
+			local select = mod.select
+			local rounds = 0
+			mod.select = function(r, w, t)
+				rounds = rounds + 1
+				if #r > 1 and rounds <= 2 then select(r, w, 0.1); return {other} end
+				return select(r, w, t)
+			end
+			stun._socket = mod
+			local c = stun.new("stun://unifi.example:3478/")
+			local also = {{sock = other, fn = function() served = served + 1; return served < 2 end}}
+			assert_false(c:wait(5, now, also), "no wake")
+			stun._socket = nil
+			assert_eq(served, 2, "served while readable")
+			assert_eq(#also, 0, "dropped once it had nothing to take")
 		end
 	},
 }

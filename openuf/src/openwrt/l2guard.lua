@@ -2,8 +2,8 @@
 	The controller's `ebtables.*` hardening rules, re-expressed in nftables.
 
 	Every full system_cfg push carries a block of literal ebtables fragments the
-	stock firmware replays (captured by the yesrab/openUF fork, 2026-09-15).
-	Ten rules, two ideas:
+	stock firmware replays (captured live in the yesrab/openUF fork, where this
+	module comes from). Ten rules, two ideas:
 
 	  -t nat -A PREROUTING  --in-interface  ath<n> -d BGA -j DROP     one per VAP
 	  -t nat -A POSTROUTING --out-interface ath<n> -d BGA -j DROP     one per VAP
@@ -45,73 +45,30 @@
 ]]--
 
 local M = {}
-local util = package.loaded["openuf.util"]
-	or assert(loadfile("util.lua") or loadfile("openuf/util.lua"))()
+local util = require("openwrt.util")
 
-M._exec = os.execute
+M._exec = function(cmd) return os.execute(cmd) end
+
+-- os.execute on the device's Lua 5.1 returns the raw exit status (0 =
+-- success, non-zero = failure, both truthy); newer Lua returns true/nil.
+local exec_ok = require("openwrt.util").exec_ok
+M._exec_ok = exec_ok
 
 M.NFT_TABLE = "bridge openuf_l2guard"
 M.BGA       = "01:80:c2:00:00:00"
 
 -- ─── Parsing ─────────────────────────────────────────────────────────────────
 
--- The ebtables.* block, or nil when the blob carries none. Each recognised
--- shape lands in its list; anything else in `unknown`, verbatim, so a new
--- rule shape is visible rather than silently dropped.
-function M.parse(sys_raw)
-	if type(sys_raw) ~= "string" then return nil end
-	local seen = false
-	local out = {enabled = true, bpdu_in = {}, bpdu_out = {}, tag_in = {}, tag_vids = {}, unknown = {}}
-	for line in (sys_raw .. "\n"):gmatch("([^\n]*)\n") do
-		local k, v = line:match("^([^=]+)=(.*)$")
-		if k == "ebtables.status" then
-			seen = true
-			out.enabled = (v == "enabled")
-		elseif k and k:match("^ebtables%.%d+%.cmd$") then
-			seen = true
-			local dev = v:match("^%-t nat %-A PREROUTING %-%-in%-interface (%S+) %-d BGA %-j DROP$")
-			if dev then
-				out.bpdu_in[#out.bpdu_in + 1] = dev
-			else
-				dev = v:match("^%-t nat %-A POSTROUTING %-%-out%-interface (%S+) %-d BGA %-j DROP$")
-				if dev then
-					out.bpdu_out[#out.bpdu_out + 1] = dev
-				else
-					dev = v:match("^%-t broute %-A BROUTING %-i (%S+) %-p 802_1Q %-j DROP$")
-					if dev then
-						out.tag_in[#out.tag_in + 1] = dev
-					else
-						local vid = v:match("^%-t broute %-A BROUTING %-%-vlan%-id (%d+) %-p 802_1Q %-j DROP$")
-						if vid then
-							out.tag_vids[#out.tag_vids + 1] = tonumber(vid)
-						else
-							out.unknown[#out.unknown + 1] = v
-						end
-					end
-				end
-			end
-		end
-	end
-	if not seen then return nil end
-	return out
-end
+-- The controller's rules (unifi/hardening.lua).
+local hardening = require("unifi.hardening")
+M.parse, M.spec_from = hardening.parse, hardening.spec_from
 
--- What to enforce, boiled down to the two device-wide booleans state.json
--- keeps: the controller emits the BPDU pair for every VAP and the tag drop
--- for the tagged one plus bridge-wide, so per-VAP bookkeeping adds nothing.
-function M.spec_from(parsed)
-	if type(parsed) ~= "table" or not parsed.enabled then
-		return {bpdu = false, tagdrop = false}
-	end
-	return {
-		bpdu    = (#parsed.bpdu_in > 0 or #parsed.bpdu_out > 0),
-		tagdrop = (#parsed.tag_in > 0 or #parsed.tag_vids > 0),
-	}
-end
 
 -- ─── Apply ───────────────────────────────────────────────────────────────────
 
-local valid_ifname = util.valid_ifname
+local function valid_ifname(s)
+	return type(s) == "string" and s:match("^[%w%-%._]+$") ~= nil and #s <= 15
+end
 
 -- Rebuild the table to match spec on exactly these VAP netdevs. Returns the
 -- number of rules installed (0 when there was nothing to enforce or nothing
@@ -182,8 +139,17 @@ end
 -- other, for eleven days, while every other BSS on both APs was fine.
 -- Nothing in OpenWrt re-checks the flags, so this does.
 
-M._list_hostapd_confs = function()
-	local p = io.popen("ls /var/run/hostapd-phy*.conf 2>/dev/null")
+-- hostapd's config is /var/run/hostapd-<phy>.conf, named after the radio's
+-- phy, which is phy0/phy1 only by default: a board whose wifi-device sets
+-- `phy` names (the E8450's wl0/wl1) gets hostapd-wl0.conf. Beside it sit
+-- per-BSS hostapd-<ifname>.psk/.sae/.vlan files and a .conf.prev, which the
+-- pattern leaves out.
+function M.is_hostapd_conf(name)
+	return type(name) == "string" and name:match("^hostapd%-[%w_%-]+%.conf$") ~= nil
+end
+
+M._ls_run = function()
+	local p = io.popen("ls /var/run 2>/dev/null")
 	if not p then return {} end
 	local out = {}
 	for line in p:lines() do out[#out + 1] = line end
@@ -191,7 +157,22 @@ M._list_hostapd_confs = function()
 	return out
 end
 
-M._read = util.read_file
+M._list_hostapd_confs = function()
+	local out = {}
+	for _, name in ipairs(M._ls_run()) do
+		if M.is_hostapd_conf(name) then out[#out + 1] = "/var/run/" .. name end
+	end
+	table.sort(out)
+	return out
+end
+
+M._read = function(path)
+	local f = io.open(path, "r")
+	if not f then return nil end
+	local s = f:read("*a")
+	f:close()
+	return s
+end
 
 M._write = function(path, value)
 	local f = io.open(path, "w")
