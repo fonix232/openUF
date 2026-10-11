@@ -1,0 +1,25 @@
+#!/bin/sh /etc/rc.common
+# Stand-in for usteer's init script: usteerd is not installed, its ubus object
+# comes from /usr/share/rpcd/ucode/usteer.uc. LuCI's usteer page reads this
+# file to learn which options the daemon knows, so they are listed as in the
+# real one (openwrt/usteer: openwrt/usteer/files/etc/init.d/usteer):
+#
+#	syslog ipv6 local_mode load_kick_enabled assoc_steering node_up_script
+#	ssid_list aggressiveness_mac_list event_log_types debug_level
+#	sta_block_timeout local_sta_timeout local_sta_update max_neighbor_reports
+#	max_retry_band seen_policy_timeout aggressiveness measurement_report_timeout
+#	load_balancing_threshold band_steering_threshold remote_update_interval
+#	remote_node_timeout min_connect_snr min_snr min_snr_kick_delay
+#	signal_diff_threshold initial_connect_delay steer_reject_timeout
+#	roam_process_timeout roam_kick_delay roam_scan_tries roam_scan_timeout
+#	roam_scan_snr roam_scan_interval roam_trigger_snr roam_trigger_interval
+#	link_measurement_interval band_steering_interval band_steering_min_snr
+#	band_steering_signal_threshold load_kick_threshold load_kick_delay
+#	load_kick_min_clients load_kick_reason_code
+
+START=50
+USE_PROCD=1
+
+start_service() {
+	:
+}

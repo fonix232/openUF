@@ -1,0 +1,31 @@
+{
+	"admin/system/openuf-theme": {
+		"title": "openUF Theme",
+		"order": 3,
+		"action": {
+			"type": "view",
+			"path": "openuf-theme/settings"
+		},
+		"depends": {
+			"acl": [ "luci-theme-openuf-settings" ]
+		}
+	},
+
+	"admin/network/switch-vlan": {
+		"title": "Switch/VLAN config",
+		"order": 12,
+		"action": {
+			"type": "view",
+			"path": "openuf-theme/switch-vlan"
+		},
+		"depends": {
+			"acl": [ "luci-mod-network-config" ],
+			"uci": [
+				{ "network": { "@device": { "type": "bridge", "name": "switch", "vlan_filtering": "1" } } },
+				{ "network": { "@device": { "type": "bridge", "name": "switch" }, "@bridge-vlan": { "device": "switch" } } },
+				{ "network": { "@device": { "type": "bridge", "vlan_filtering": "1" } } },
+				{ "network": { "@bridge-vlan": true } }
+			]
+		}
+	}
+}

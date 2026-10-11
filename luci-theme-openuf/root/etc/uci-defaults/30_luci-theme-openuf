@@ -1,0 +1,82 @@
+#!/bin/sh
+
+# Register the theme and its two fixed-scheme variants. "openUF" follows the
+# browser's colour scheme and offers a toggle in the top bar; "openUFDark" and
+# "openUFLight" pin one scheme for everybody and hide the toggle.
+changed=0
+registered=0
+moved=0
+
+set_opt() {
+	if ! uci -q get "luci.$1" >/dev/null; then
+		uci set "luci.$1=$2"
+		changed=1
+	fi
+}
+
+add_theme() {
+	if ! uci -q get "luci.themes.$1" >/dev/null; then
+		set_opt "themes.$1" "$2"
+		registered=1
+	fi
+}
+
+# Before its first release the theme was luci-theme-unifi, and install.sh
+# put that on a few devices. Carry its choices over and take away what it
+# left, or LuCI lists both themes and System keeps a second settings page.
+# Files a luci-theme-unifi package owns are left to "apk del".
+if uci -q get luci.themes.UniFi >/dev/null || uci -q get luci.unifi >/dev/null; then
+	for t in UniFi UniFiDark UniFiLight; do
+		uci -q delete "luci.themes.$t"
+	done
+
+	case "$(uci -q get luci.main.mediaurlbase)" in
+		/luci-static/unifi*)
+			uci set "luci.main.mediaurlbase=$(uci get luci.main.mediaurlbase | sed 's#/luci-static/unifi#/luci-static/openuf#')"
+			moved=1 ;;
+	esac
+
+	if uci -q get luci.unifi >/dev/null && ! uci -q get luci.openuf_theme >/dev/null; then
+		uci set luci.openuf_theme=internal
+		for o in interfaces wireless port_manager; do
+			v=$(uci -q get "luci.unifi.$o") && uci set "luci.openuf_theme.$o=$v"
+		done
+	fi
+
+	uci -q delete luci.unifi
+	changed=1
+
+	if ! apk info -e luci-theme-unifi >/dev/null 2>&1; then
+		rm -rf /www/luci-static/unifi /www/luci-static/unifi-dark /www/luci-static/unifi-light \
+			/www/luci-static/resources/menu-unifi.js \
+			/www/luci-static/resources/view/unifi \
+			/usr/share/rpcd/acl.d/luci-theme-unifi.json \
+			/usr/share/luci/menu.d/luci-theme-unifi.json \
+			/usr/share/ucode/luci/template/themes/unifi \
+			/usr/share/ucode/luci/template/themes/unifi-dark \
+			/usr/share/ucode/luci/template/themes/unifi-light
+	fi
+fi
+
+add_theme openUF /luci-static/openuf
+add_theme openUFDark /luci-static/openuf-dark
+add_theme openUFLight /luci-static/openuf-light
+
+# The theme's own settings (System > openUF Theme): the Interfaces and
+# Wireless designs (list, settings or cards) and the Port Manager on
+# Interfaces. Only what is missing is set; a choice already made stays.
+set_opt openuf_theme internal
+set_opt openuf_theme.interfaces list
+set_opt openuf_theme.wireless list
+set_opt openuf_theme.port_manager 1
+
+# Installing a theme is asking to use it, so switch to it on a fresh install,
+# but leave the choice alone on an upgrade, or where the old name's scheme
+# just moved over.
+if [ "$PKG_UPGRADE" != 1 ] && [ $registered = 1 ] && [ $moved = 0 ]; then
+	uci set luci.main.mediaurlbase=/luci-static/openuf
+fi
+
+[ $changed = 1 ] && uci commit luci
+
+exit 0

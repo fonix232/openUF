@@ -1,0 +1,49 @@
+<5>[    0.000000] Linux version 6.12.44 (builder@buildhost) (x86_64-openwrt-linux-musl-gcc (OpenWrt GCC 14.3.0 r33051-f5dae5ece4) 14.3.0, GNU ld (GNU Binutils) 2.44) #0 SMP Sat Sep 20 12:00:00 2026
+<6>[    0.000000] Command line: BOOT_IMAGE=/boot/vmlinuz root=PARTUUID=00000000-02 rootwait console=tty1 console=ttyS0,115200n8 noinitrd
+<6>[    0.000000] BIOS-provided physical RAM map:
+<6>[    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
+<6>[    0.000000] BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff] reserved
+<6>[    0.000000] BIOS-e820: [mem 0x0000000000100000-0x000000001ffdffff] usable
+<6>[    0.000000] NX (Execute Disable) protection: active
+<6>[    0.000000] DMI: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014
+<6>[    0.000000] tsc: Fast TSC calibration using PIT
+<7>[    0.000000] e820: update [mem 0x00000000-0x00000fff] usable ==> reserved
+<4>[    0.012618] ACPI BIOS Warning (bug): Incorrect checksum in table [SSDT] - 0x3F, should be 0x40 (20240827/utcksum-58)
+<6>[    0.021480] Memory: 494560K/523768K available (10240K kernel code, 1263K rwdata, 3016K rodata, 1480K init, 1312K bss, 28952K reserved, 0K cma-reserved)
+<6>[    0.052003] rcu: Hierarchical RCU implementation.
+<6>[    0.118004] Calibrating delay loop (skipped), value calculated using timer frequency.. 5999.99 BogoMIPS (lpj=11999980)
+<6>[    0.231226] smp: Brought up 1 node, 2 CPUs
+<6>[    0.402113] PCI: Using configuration type 1 for base access
+<7>[    0.537710] pci 0000:00:01.3: quirk: [io  0x0600-0x063f] claimed by PIIX4 ACPI
+<6>[    0.681234] clocksource: Switched to clocksource tsc-early
+<6>[    0.902345] NET: Registered PF_INET6 protocol family
+<3>[    1.104211] ata2.00: failed to IDENTIFY (I/O error, err_mask=0x4)
+<6>[    1.230078] e1000e: Intel(R) PRO/1000 Network Driver
+<6>[    1.231456] e1000e 0000:00:03.0 eth0: Intel(R) PRO/1000 Network Connection
+<5>[    1.402937] random: crng init done
+<6>[    1.563210] EXT4-fs (sda2): mounted filesystem 00000000-0000-0000-0000-000000000002 ro with ordered data mode. Quota mode: disabled.
+<6>[    1.563990] VFS: Mounted root (ext4 filesystem) readonly on device 8:2.
+<6>[    1.602181] Freeing unused kernel image (initmem) memory: 1480K
+<4>[    1.621004] Warning: unable to open an initial console.
+<6>[    1.702331] init: Console is alive
+<6>[    1.803004] kmodloader: loading kernel modules from /etc/modules-boot.d/*
+<6>[    2.041977] kmodloader: done loading kernel modules from /etc/modules-boot.d/*
+<14>[    2.214118] init: - preinit -
+<6>[    3.120034] random: jitterentropy: Initialization failed with host not compliant with requirements: 9
+<4>[    3.402381] urandom_read_iter: 2 callbacks suppressed
+<13>[    3.520120] procd: - early -
+<6>[    4.891021] kmodloader: loading kernel modules from /etc/modules.d/*
+<6>[    5.013247] tun: Universal TUN/TAP device driver, 1.6
+<3>[    5.162044] ath10k_pci 0000:00:05.0: failed to fetch board data for bus=pci,vendor=168c,device=003e,subsystem-vendor=0000,subsystem-device=0000 from ath10k/QCA6174/hw3.0/board-2.bin
+<4>[    5.162391] ath10k_pci 0000:00:05.0: Direct firmware load for ath10k/QCA6174/hw3.0/firmware-6.bin failed with error -2
+<2>[    5.411003] Out of memory: Killed process 1234 (collectd) total-vm:81234kB, anon-rss:40120kB, file-rss:0kB, shmem-rss:0kB, UID:0 pgtables:120kB oom_score_adj:0
+<6>[    6.021877] kmodloader: done loading kernel modules from /etc/modules.d/*
+<7>[    6.300415] br-lan: port 1(lan1) entered blocking state
+<6>[    6.300512] br-lan: port 1(lan1) entered disabled state
+<6>[    6.301987] device lan1 entered promiscuous mode
+<6>[    8.410921] br-lan: port 1(lan1) entered forwarding state
+<6>[    8.411005] IPv6: ADDRCONF(NETDEV_CHANGE): br-lan: link becomes ready
+<4>[   12.004532] nf_conntrack: default automatic helper assignment has been turned off for security reasons and CT-based firewall rule not found. Use the iptables CT target to attach helpers instead.
+<6>[   18.620114] usb 1-1: new high-speed USB device number 2 using ehci-pci
+<3>[   19.201340] sd 1:0:0:0: [sdb] tag#0 FAILED Result: hostbyte=DID_OK driverbyte=DRIVER_OK cmd_age=0s
+<2>[   42.108271] EXT4-fs error (device sdb1): ext4_find_entry:1683: inode #2: comm ls: reading directory lblock 0
