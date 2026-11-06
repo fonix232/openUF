@@ -952,7 +952,7 @@ aaa.<n>.wpa.key.1.mgmt=WPA-EAP          # OSEN for Hotspot 2.0 OSEN; wpa.psk is 
 aaa.<n>.auth_cache=enabled|disabled     # wlanconf auth_cache, default true
 aaa.<n>.wpa3.enhanced_192=enabled       # only for WPA3 192-bit
 aaa.<n>.radius.auth.<k>.ip / .port / .secret     # k = 1..4 in profile order; port default 1812
-aaa.<n>.radius.auth.<k>.{ca_cert,client_cert,private_key,private_key_passwd}  # RadSec filenames (no .tls key), fw2_caps 0x80000 only
+aaa.<n>.radius.auth.<k>.tls=enabled + {ca_cert,client_cert,private_key,private_key_passwd}  # RadSec, fw2_caps 0x80000 only
 aaa.<n>.radius.acct.<k>.ip / .port / .secret     # accounting_enabled; port default 1813
 aaa.<n>.interim_update.status=enabled + .interval=<s>   # default 3600
 aaa.<n>.radius.das.status/.port=3800+n/.client/.secret, aaa.radius.dad.*   # DAS, fw_caps 0x100000 only
@@ -1848,7 +1848,7 @@ are the guest WLAN's two VAPs.
 | Key | Off → on | Meaning |
 |---|---|---|
 | `wireless.<n>.is_guest`, `aaa.<n>.is_guest` | `false` → `true` | the VAP is a guest VAP |
-| `wireless.<n>.usage` | `user` → `guest` | same, the field the stats side keys on |
+| `wireless.<n>.usage` | `user` → `guest` | same. The controller's guest counts do not need it back: with `vap_table` usage `user`, 10.6.106 still marks the VAP and its stations as guests through the `wlanconf_id` lookup (Docker lab) |
 | `wireless.<n>.l2_isolation` | `disabled` → `enabled` | forced client isolation (already mapped to `isolate`) |
 | `redirector.status`, `redirector.https.status` | `disabled` → `enabled` | the AP runs the redirect target |
 | `redirector.url`, `redirector.url_https` | (new) `http://<ctl>:8880/guest/s/default/` | where an unauthorized guest is sent |
@@ -4981,11 +4981,20 @@ server support); an OSEN WLAN is skipped (no OpenWrt encryption for it). RadSec:
 `0x80000` is claimed (with `fw_caps` `0x800000`, same `hostapd -vhs20` probe): the REST
 validator (`com/ubnt/service/W/ctfbDsCjrxgkv`, 10.6.106) refuses a Hotspot 2.0 profile on a WLAN
 with `api.err.DevicePasspointNotSupported` without it. What the claim changes on the wire: a
-RADIUS server whose profile has TLS on arrives with `aaa.<n>.radius.{auth,acct}.<k>.{ca_cert,
-client_cert,private_key,private_key_passwd}` filenames (there is no `.tls` key), the only thing
-telling it from a plaintext one. `parse_radius` drops such a server with a log; without the
-claim it would arrive as a bare ip/port/secret and its secret would go out in the clear.
+RADIUS server whose profile has TLS on arrives with `aaa.<n>.radius.{auth,acct}.<k>.tls=enabled`
+and `{ca_cert,client_cert,private_key,private_key_passwd}` filenames, which tell it from a
+plaintext one. `parse_radius` drops such a server with a log; without the claim it would arrive
+as a bare ip/port/secret and its secret would go out in the clear.
 Upstream ce7163f reached the same conclusion; its lab run (10.6.106) accepted both bits.
+
+Lab, 10.6.106 (Docker tier, this fork, with the lab's hostapd stub answering `-vhs20`): without
+the claim a WLAN PUT returned `api.err.DevicePasspointNotSupported`. With `fw2_caps` 524288 and
+fw_caps 0x800000 the controller accepted a nested `hotspot2:{...}` object on a WPA-Enterprise
+wlanconf (`hotspot2conf_enabled`; a `hotspot2conf_id` is silently dropped), pushed
+`aaa.<n>.hs20.*`, and the daemon wrote the `hostapd_bss_options` lines. A TLS RADIUS profile was
+accepted, logged "ignoring RADIUS auth server 1: RadSec (TLS) is not supported", and the WLAN was
+skipped; a grep of the log for the secret and key password found nothing. `eap_method` must match
+`13|21|18|23|50`. Not run with a real hostapd or a client.
 **Tier:** unit; a hostapd config with every generated line (plus the WPA2-EAP/CCMP base)
 parses with 0 errors in 25.12's `wpad-openssl`, including hostapd's own "WPA2-Enterprise/CCMP
 is required for Hotspot 2.0" check, and a deliberately malformed `hs20_wan_metrics` is

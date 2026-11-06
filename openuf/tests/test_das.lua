@@ -112,9 +112,14 @@ return {
 				["radius.auth.1.ip"] = "192.0.2.10", ["radius.auth.1.secret"] = "s",
 				["radius.auth.2.ip"] = "192.0.2.11", ["radius.auth.2.secret"] = "s",
 				["radius.auth.2.ca_cert"] = "ca.pem",
+				["radius.auth.3.ip"] = "192.0.2.12", ["radius.auth.3.secret"] = "s",
+				["radius.auth.3.tls"] = "enabled",
+				["radius.auth.4.ip"] = "192.0.2.13", ["radius.auth.4.secret"] = "s",
+				["radius.auth.4.tls"] = "disabled",
 			}
 			local r = wlan.parse_radius(a)
-			assert_eq(#r.auth, 1, "the plaintext server stays")
+			assert_eq(#r.auth, 2, "the plaintext servers stay, tls=disabled among them")
+			a["radius.auth.4.ip"] = nil
 			assert_eq(r.auth[1].ip, "192.0.2.10", "and it is the plain one")
 			a["radius.auth.1.private_key"] = "k.pem"
 			assert_nil(wlan.parse_radius(a), "every server RadSec: no usable server")
