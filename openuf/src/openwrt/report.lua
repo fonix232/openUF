@@ -95,8 +95,11 @@ local function probe(fn)
 end
 M.probe = probe
 
-function M.fw_caps(ctx, cfg)
+-- hs20: the Hotspot 2.0 probe's answer when the caller has it already
+-- (build asks once for fw_caps 0x800000 and fw2_caps 0x80000).
+function M.fw_caps(ctx, cfg, hs20)
 	local si = ctx._sysinfo or {}
+	if hs20 == nil then hs20 = probe(si.hs20_supported) end
 	local caps = 0x100110
 		-- 0x1000 supportMultiBlockWlanSchedule + 0x400000 supportWlanScheduleInvert:
 		-- every block of a day as schedule_<day>.<i>, and the blackout blocks
@@ -110,7 +113,7 @@ function M.fw_caps(ctx, cfg)
 		+ 0x20000000
 	-- 0x800000 supportHotspot2: without it a Hotspot 2.0 (or OSEN) WLAN is
 	-- dropped from the push. Only where hostapd has CONFIG_HS20.
-	if probe(si.hs20_supported) then caps = caps + 0x800000 end
+	if hs20 then caps = caps + 0x800000 end
 	-- 0x4000 supportsSNMPv3: snmp.user.1.* is sent only with it. Only where
 	-- the ssl build of snmpd is installed (openwrt/snmp.lua); v1/v2c needs no
 	-- bit and is applied wherever snmpd is.
@@ -1448,6 +1451,8 @@ function M.build(ctx, st, cfg, ufhw)
 		if job.who == "spectrum-scan" then spectrum_scanning = true end
 	end
 
+	-- fw_caps 0x800000 and fw2_caps 0x80000 are one capability.
+	local hs20 = probe(ctx._sysinfo.hs20_supported)
 	local payload = {
 		_type            = "state",
 		["default"]      = not st.adopted,
@@ -1544,7 +1549,7 @@ function M.build(ctx, st, cfg, ufhw)
 		-- (aaa.radius.dad.*, aaa.<n>.radius.das.*) only to a device with it
 		-- (10.6.106 VAZShipWTNxlo); openwrt/das.lua is the dispatcher.
 		-- The rest are M.fw_caps' own comments.
-		fw_caps          = M.fw_caps(ctx, cfg),
+		fw_caps          = M.fw_caps(ctx, cfg, hs20),
 		-- fw2_caps, a third firmware mask (getFirmware2Capabilities reads
 		-- "fw2_caps"), sent only for its one needed bit. 0x80000 is
 		-- supportsRadSec(), which openUF does NOT implement. It is claimed
@@ -1556,7 +1561,7 @@ function M.build(ctx, st, cfg, ufhw)
 		-- with TLS arrives with ca_cert/client_cert/private_key filenames, and
 		-- unifi/wlan.lua parse_radius drops it rather than speak plain RADIUS
 		-- to it.
-		fw2_caps         = probe(ctx._sysinfo.hs20_supported) and 0x80000 or 0,
+		fw2_caps         = hs20 and 0x80000 or 0,
 		-- wifi_caps: each bit gates one WiFi feature in the controller's config
 		-- generator (decompiled from 10.6.101, PROTOCOL-VALIDATION.md,
 		-- Capability bitmasks) and is claimed only where this device can

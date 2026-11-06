@@ -2450,6 +2450,21 @@ return {
 		end
 	},
 	{
+		name = "inform json: the Hotspot 2.0 probe is asked once per payload, and both bits still follow it",
+		fn = function()
+			local real, calls = inform._sysinfo.hs20_supported, 0
+			for _, answer in ipairs({false, true}) do
+				calls = 0
+				inform._sysinfo.hs20_supported = function() calls = calls + 1; return answer end
+				local d = build()
+				assert_eq(calls, 1, "one probe call per payload (answer " .. tostring(answer) .. ")")
+				assert_eq(d.fw2_caps, answer and 0x80000 or 0, "fw2_caps follows it")
+				assert_eq(d.fw_caps % 0x1000000 >= 0x800000, answer, "so does fw_caps 0x800000")
+			end
+			inform._sysinfo.hs20_supported = real
+		end
+	},
+	{
 		name = "inform json: fw_caps claims Hotspot 2.0, SNMPv3 and MAC-based VLANs only where the device has them",
 		fn = function()
 			local base = 0x100110 + 0x1000 + 0x400000 + 0x20000000
