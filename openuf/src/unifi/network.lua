@@ -5,6 +5,8 @@
 	(docs/GAP-ANALYSIS-10.6.md section 4). openwrt/netmodel.lua turns it into UCI.
 ]]--
 
+local wire = require("unifi.wire")
+
 local M = {}
 
 local function sorted_keys(t)
@@ -157,6 +159,44 @@ function M.parse(sys_raw)
 		dhcp        = dhcp,
 		static      = static,
 	}
+end
+
+-- The management settings every push carries, whatever the L2 model says: the
+-- IP Settings (static address or DHCP), DNS in the controller's order, the
+-- controller's name for the device, the site key and whether the push is a
+-- full one. Always a table; absent keys are nil, false or an empty list.
+---@param sys_raw string  system_cfg
+---@return MgmtSettings
+function M.parse_settings(sys_raw)
+	local r = {dhcp = false, dns = {}, full_push = false}
+	local dns_by_idx = {}
+	for line in (sys_raw .. "\n"):gmatch("([^\n]*)\n") do
+		local k, v = line:match("^([^=]+)=(.*)$")
+		if k and v then
+			local dns_idx = k:match("^resolv%.nameserver%.(%d+)%.ip$")
+			if dns_idx then
+				if v ~= "" then dns_by_idx[tonumber(dns_idx)] = v end
+			elseif k == "unifi.key" then r.site_key = v
+			elseif k == "ebtables.status" then r.full_push = true
+			elseif k == "netconf.1.ip" then r.ip = v
+			elseif k == "netconf.1.netmask" then r.netmask = v
+			elseif k == "route.1.gateway" then r.gateway = v
+			elseif k == "dhcpc.1.status" then
+				-- Only an enabled-ish value means DHCP: the key's presence alone
+				-- once made a static push with dhcpc.1.status=disabled read as
+				-- DHCP and flushed the working static address.
+				r.dhcp = wire.bool(v) == true
+			elseif k == "resolv.host.1.name" then
+				-- The controller's own name for this device ("U6IW" until it is
+				-- renamed): the only AP-name string on the wire, reused as the
+				-- WPS Device Name when advertise_ap_name is on.
+				if v ~= "" then r.device_name = v end
+			end
+		end
+	end
+	-- Wire index order: resolv.conf's order is the resolver's preference order.
+	for _, i in ipairs(sorted_keys(dns_by_idx)) do r.dns[#r.dns + 1] = dns_by_idx[i] end
+	return r
 end
 
 return M

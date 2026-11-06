@@ -200,6 +200,7 @@ local test_files = {
 	"tests/test_stun.lua",
 	"tests/test_upgrade.lua",
 	"tests/test_unhandled.lua",
+	"tests/test_cfgcoverage.lua",
 	"tests/test_sysconf.lua",
 	"tests/test_l2guard.lua",
 	"tests/test_guest.lua",

@@ -53,6 +53,13 @@ The daemon's source is `openuf/src/`, in two sides with one rule between them
   0 and 1 are truthy, so normalise before branching.
 - Syntax-check on 5.1: `docker cp openuf/src/<m>.lua openuf-validation-ap:/tmp/c.lua &&
   docker exec openuf-validation-ap luac -p /tmp/c.lua`
+- **A test that opens a path outside `openuf/` fails only in the stripped tree.**
+  `sh tools/strip-tree.sh --verify` copies `openuf/` (so `tools/` and `tests/`), the LuCI
+  app and `USAGE.md` into a scratch tree and runs the suite there. A test that reads any
+  other path (the repo's README.md, a sibling directory) passes from the checkout and fails
+  there. The failure looks like one failed test but is a whole test FILE that errored:
+  `grep '^ERROR running'`. Add the path to the copy in `strip-tree.sh` in the same commit.
+  `tests/test_cfgcoverage.lua` `dofile()`s `tools/cfg-coverage.lua` this way.
 - CI failure: `gh run list` + `gh run view <id> --log-failed`. Don't guess.
 - Modules load by name from `openuf/src/` (the tests put it on `package.path`). Set
   `OPENUF_TEST_MODE = true` before loading one; loading `inform.lua` without it starts a

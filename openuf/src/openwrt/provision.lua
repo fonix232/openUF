@@ -14,6 +14,7 @@ local cjson      = require("cjson")
 local wire       = require("unifi.wire")
 local recognized = require("unifi.recognized")
 local mesh       = require("unifi.mesh")
+local network    = require("unifi.network")
 local is_mac, is_hex32 = wire.is_mac, wire.is_hex32
 
 local M = {}
@@ -544,56 +545,11 @@ function M.handle(ctx, json_str, st, cfg)
 				return uplink_by_br[br] or nil
 			end
 
-			local ip, netmask, gateway
-			local dhcp = false
-			local device_name
-			-- DNS servers, keyed by their wire index so the controller's
-			-- ordering (primary/secondary) survives -- resolv.conf's order is
-			-- the resolver's preference order, so it is load-bearing. Same
-			-- index-keyed-then-sorted treatment as macacl's acl.<k> list.
-			local dns_by_idx = {}
-			local site_key, full_push = nil, false
-			for line in (sys_raw .. "\n"):gmatch("([^\n]*)\n") do
-				local k, v = line:match("^([^=]+)=(.*)$")
-				if k and v then
-					local dns_idx = k:match("^resolv%.nameserver%.(%d+)%.ip$")
-					if dns_idx then
-						if v ~= "" then dns_by_idx[tonumber(dns_idx)] = v end
-					elseif k == "unifi.key" then site_key = v
-					elseif k == "ebtables.status" then full_push = true
-					elseif k == "netconf.1.ip" then ip = v
-					elseif k == "netconf.1.netmask" then netmask = v
-					elseif k == "route.1.gateway" then gateway = v
-					elseif k == "dhcpc.1.status" then
-						-- Only an enabled-ish value means DHCP. The key's
-						-- presence alone used to set dhcp=true, so a
-						-- hypothetical dhcpc.1.status=disabled alongside a
-						-- netconf.1.ip would have misread a static push as
-						-- DHCP and flushed the working static address. Every
-						-- capture so far carries =enabled; this is defensive
-						-- for the static-mode shape that hasn't been
-						-- captured yet.
-						dhcp = wire.bool(v) == true
-					elseif k == "resolv.host.1.name" then
-						-- The controller's own idea of this device's name
-						-- (its local network hostname) -- already present
-						-- in every capture (e.g. "U6IW" when never
-						-- renamed). Reused as the WPS Device Name value
-						-- when advertise_ap_name is on, since it's the
-						-- only controller-assigned "AP name" string
-						-- available on this wire protocol.
-						if v ~= "" then device_name = v end
-					end
-				end
-			end
-			-- Flatten the index-keyed DNS table into controller order.
-			local dns = {}
-			do
-				local idxs = {}
-				for i in pairs(dns_by_idx) do idxs[#idxs + 1] = i end
-				table.sort(idxs)
-				for _, i in ipairs(idxs) do dns[#dns + 1] = dns_by_idx[i] end
-			end
+			-- IP Settings, DNS (in the controller's order), the controller's name
+			-- for the device, the site key and whether this is a full push.
+			local ms = network.parse_settings(sys_raw)
+			local ip, netmask, gateway, dhcp = ms.ip, ms.netmask, ms.gateway, ms.dhcp
+			local device_name, dns, site_key, full_push = ms.device_name, ms.dns, ms.site_key, ms.full_push
 
 			-- The site's key (unifi.key, sent while UniFi IDP is on) keys the
 			-- sibling exchange's authenticated packets (siblings.lua). Only

@@ -292,6 +292,16 @@
 ---@field vlan_ifaces table<integer, string>
 ---@field net_for_bridge table<string, string> controller bridge -> UCI interface
 
+---@class MgmtSettings      unifi/network.lua's parse_settings(): the management keys of any push
+---@field ip string?
+---@field netmask string?
+---@field gateway string?
+---@field dhcp boolean       dhcpc.1.status says DHCP
+---@field dns string[]       in the controller's order
+---@field device_name string?
+---@field site_key string?   unifi.key
+---@field full_push boolean  the push carries ebtables.status
+
 ---@alias ConvergeOutcome "applied"|"unchanged"|"declined"|"rejected"|"failed"
 
 -- ─── System settings and hardening ───────────────────────────────────────────
