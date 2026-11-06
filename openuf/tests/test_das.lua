@@ -102,6 +102,28 @@ return {
 		end
 	},
 	{
+		name = "wlan: a RADIUS server that arrives with certificate filenames (RadSec) is dropped",
+		fn = function()
+			local wlan = require("unifi.wlan")
+			local real = io.stderr
+			local log = {}
+			io.stderr = {write = function(_, m) log[#log + 1] = m end}
+			local a = {
+				["radius.auth.1.ip"] = "192.0.2.10", ["radius.auth.1.secret"] = "s",
+				["radius.auth.2.ip"] = "192.0.2.11", ["radius.auth.2.secret"] = "s",
+				["radius.auth.2.ca_cert"] = "ca.pem",
+			}
+			local r = wlan.parse_radius(a)
+			assert_eq(#r.auth, 1, "the plaintext server stays")
+			assert_eq(r.auth[1].ip, "192.0.2.10", "and it is the plain one")
+			a["radius.auth.1.private_key"] = "k.pem"
+			assert_nil(wlan.parse_radius(a), "every server RadSec: no usable server")
+			io.stderr = real
+			assert_true(table.concat(log):find("RadSec", 1, true) ~= nil, "logged")
+			assert_true(table.concat(log):find("secret", 1, true) == nil, "never the secret")
+		end
+	},
+	{
 		name = "das: wlan.parse_radius takes DAS only when radius.das.status is enabled",
 		fn = function()
 			local wlan = require("unifi.wlan")

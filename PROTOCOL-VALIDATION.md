@@ -952,7 +952,7 @@ aaa.<n>.wpa.key.1.mgmt=WPA-EAP          # OSEN for Hotspot 2.0 OSEN; wpa.psk is 
 aaa.<n>.auth_cache=enabled|disabled     # wlanconf auth_cache, default true
 aaa.<n>.wpa3.enhanced_192=enabled       # only for WPA3 192-bit
 aaa.<n>.radius.auth.<k>.ip / .port / .secret     # k = 1..4 in profile order; port default 1812
-aaa.<n>.radius.auth.<k>.tls=enabled + certs      # RadSec, fw2_caps 0x80000 only
+aaa.<n>.radius.auth.<k>.{ca_cert,client_cert,private_key,private_key_passwd}  # RadSec filenames (no .tls key), fw2_caps 0x80000 only
 aaa.<n>.radius.acct.<k>.ip / .port / .secret     # accounting_enabled; port default 1813
 aaa.<n>.interim_update.status=enabled + .interval=<s>   # default 3600
 aaa.<n>.radius.das.status/.port=3800+n/.client/.secret, aaa.radius.dad.*   # DAS, fw_caps 0x100000 only
@@ -3054,7 +3054,7 @@ Gated, and not to be claimed:
   - `wifi_caps` `0x4000`/`0x8000`: multi-vport and Element. (`0x1`/`0x800`, vwire and meshv3, are claimed with `wireless_uplink`; `0x80` does nothing — see the table above.)
   - `wifi_caps` `0x2000` "open hostapd", `0x40` `bga_filter`, `0x4000000` low-performance mode.
   - `wifi_caps2` `0x4` Green AP, `0x20000` (an AP-group check, purpose unclear).
-  - `fw2_caps` `0x80000` RadSec (no RadSec client on OpenWrt 25.12, see [Hotspot 2.0](#hotspot-20--passpoint-aaanhs20)), `0x20` `port_table.mac_table_ipv6`, `0x80` device command retry.
+  - `fw2_caps` `0x80000` RadSec (claimed with the Hotspot 2.0 bit although OpenWrt 25.12 has no RadSec client, see [Hotspot 2.0](#hotspot-20--passpoint-aaanhs20)), `0x20` `port_table.mac_table_ipv6`, `0x80` device command retry.
 - **No callers in the controller**, so a bit does nothing: `supportMinRateCtrl` (`wifi_caps`
   `0x200`), `supportMultiAclList` (`0x400`), `supportHideChWidth` (`0x10000`),
   `supportZeroHandoff` (`0x2`). `supportRadiusMacAuth` (`0x1000`) has no caller either and
@@ -4880,8 +4880,15 @@ the block as raw lines (`openwrt/hotspot2.lua`), because 25.12's `ap.uc`
 `iface_interworking()` overwrites `domain_name` with the 3GPP list and joins array options
 onto one line. Online sign-up (OSU providers, icons) is not carried (hostapd dropped its OSU
 server support); an OSEN WLAN is skipped (no OpenWrt encryption for it). RadSec: no
-`radsecproxy` in the 25.12 feed and hostapd speaks RADIUS over UDP only, so `fw2_caps`
-`0x80000` is not claimed and the site's Passpoint feature stays off.
+`radsecproxy` in the 25.12 feed and hostapd speaks RADIUS over UDP only, yet `fw2_caps`
+`0x80000` is claimed (with `fw_caps` `0x800000`, same `hostapd -vhs20` probe): the REST
+validator (`com/ubnt/service/W/ctfbDsCjrxgkv`, 10.6.106) refuses a Hotspot 2.0 profile on a WLAN
+with `api.err.DevicePasspointNotSupported` without it. What the claim changes on the wire: a
+RADIUS server whose profile has TLS on arrives with `aaa.<n>.radius.{auth,acct}.<k>.{ca_cert,
+client_cert,private_key,private_key_passwd}` filenames (there is no `.tls` key), the only thing
+telling it from a plaintext one. `parse_radius` drops such a server with a log; without the
+claim it would arrive as a bare ip/port/secret and its secret would go out in the clear.
+Upstream ce7163f reached the same conclusion; its lab run (10.6.106) accepted both bits.
 **Tier:** unit; a hostapd config with every generated line (plus the WPA2-EAP/CCMP base)
 parses with 0 errors in 25.12's `wpad-openssl`, including hostapd's own "WPA2-Enterprise/CCMP
 is required for Hotspot 2.0" check, and a deliberately malformed `hs20_wan_metrics` is
@@ -5196,7 +5203,7 @@ through the real UI with the resulting wire payload captured or the effect verif
 | 43 | MAC-based VLANs (Virtual Network Override) | `fw_caps` bit 31 (sent signed) → `aaa.<n>.accept_mac.*` → `accept_mac_file` + `wifi-vlan` | ⚠️ Decompiled 10.6.106; unit + hostapd config parse (rootfs). See [MAC-based VLANs](#mac-based-vlans-aaanaccept_mac) |
 | 44 | Multicast Suppressor | `wifi_caps2` `0x400000` → `wireless.<n>.multicast.suppressor` (+ Aggressive `bcfilt.bypass_types`) | ⚠️ Decompiled; unit + real nft and bridged traffic in a container. Conservative's threshold is openUF's own |
 | 45 | WLAN Schedule | `fw_caps` `0x1000` + `0x400000` → `wireless.<n>.schedule_<day>.<i>`, `schedule_invert` | ⚠️ Decompiled; unit only |
-| 46 | Hotspot 2.0 / Passpoint | `fw_caps` `0x800000` → `aaa.<n>.hs20.*` → raw hostapd lines | ⚠️ Decompiled; unit + hostapd config parse. RadSec (`fw2_caps` `0x80000`) not claimed |
+| 46 | Hotspot 2.0 / Passpoint | `fw_caps` `0x800000` → `aaa.<n>.hs20.*` → raw hostapd lines | ⚠️ Decompiled; unit + hostapd config parse. RadSec (`fw2_caps` `0x80000`) claimed with it, no RadSec client; TLS servers dropped |
 | 47 | RADIUS Filter-Id | `fw_caps` `0x20000000` → `aaa.<n>.filter_id` → `radius_auth_req_attr 11:s:` | ⚠️ Decompiled; unit + hostapd parse |
 | 48 | SNMP Monitoring | `snmp.*` (v3 behind `fw_caps` `0x4000`) → `/etc/config/snmpd` | ⚠️ Decompiled; unit + real `snmpd-ssl` in the 25.12 rootfs |
 | 49 | Radio AI neighbour isolation | `wifi_caps2` `0x200` (no keys; the regular `scan_radio_table`) | ⚠️ Decompiled only |

@@ -1545,6 +1545,18 @@ function M.build(ctx, st, cfg, ufhw)
 		-- (10.6.106 VAZShipWTNxlo); openwrt/das.lua is the dispatcher.
 		-- The rest are M.fw_caps' own comments.
 		fw_caps          = M.fw_caps(ctx, cfg),
+		-- fw2_caps, a third firmware mask (getFirmware2Capabilities reads
+		-- "fw2_caps"), sent only for its one needed bit. 0x80000 is
+		-- supportsRadSec(), which openUF does NOT implement. It is claimed
+		-- because the REST validator that admits a Hotspot 2.0 profile onto a
+		-- WLAN tests supportsHotspot2Passpoint() = supportHotspot2() AND
+		-- supportsRadSec() and otherwise refuses with
+		-- api.err.DevicePasspointNotSupported (10.6.106), bit 0x800000 or not.
+		-- Claimed only with that bit (same probe). Side effect: a RADIUS server
+		-- with TLS arrives with ca_cert/client_cert/private_key filenames, and
+		-- unifi/wlan.lua parse_radius drops it rather than speak plain RADIUS
+		-- to it.
+		fw2_caps         = probe(ctx._sysinfo.hs20_supported) and 0x80000 or 0,
 		-- wifi_caps: each bit gates one WiFi feature in the controller's config
 		-- generator (decompiled from 10.6.101, PROTOCOL-VALIDATION.md,
 		-- Capability bitmasks) and is claimed only where this device can

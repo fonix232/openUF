@@ -1473,10 +1473,15 @@ A Hotspot 2.0 WLAN is an Enterprise WLAN with `aaa.<n>.hs20.*` on top; the contr
 drops it from the push unless the device claims `fw_caps` `0x800000`, which openUF claims
 where hostapd is built with Hotspot 2.0 (`hostapd -vhs20`). openUF writes the whole block
 as raw hostapd lines (table above); hostapd itself refuses Hotspot 2.0 on anything but
-WPA2-Enterprise with CCMP/GCMP. The site's "Passpoint" feature additionally needs RadSec
-(`fw2_caps` `0x80000`), which openUF does not claim: OpenWrt 25.12 has no RadSec client
-(no `radsecproxy` package, and hostapd speaks RADIUS over UDP only), so Passpoint setups
-that need RADIUS over TLS stay unavailable even though the WLANs are no longer dropped.
+WPA2-Enterprise with CCMP/GCMP. The controller admits a
+Passpoint profile onto a WLAN only from a device that claims RadSec (`fw2_caps` `0x80000`,
+`supportsRadSec()`), so openUF claims it together with `0x800000`, from the same
+`hostapd -vhs20` probe, although it implements no RadSec: OpenWrt 25.12 has no RadSec
+client (no `radsecproxy` package, and hostapd speaks RADIUS over UDP only). The claim makes
+the controller send a RADIUS server whose profile has TLS on with its certificate
+filenames; openUF drops that server with a log line rather than send the shared secret
+in the clear. A Passpoint site whose RADIUS profile uses RadSec therefore ends up with a
+WLAN that has no server (an Enterprise WLAN with no usable server is skipped).
 
 **Minimum Data Rate** is set per WLAN in the controller but OpenWrt's rate options
 (`basic_rate`, `supported_rates`, `legacy_rates`, `beacon_rate`) are `wifi-device`
@@ -2125,7 +2130,7 @@ grep -o '"mac":"[^"]*"' /etc/openuf/state.json # openUF's identity
 | A WLAN Schedule has no effect, or switches at the wrong hour | `uci show wireless \| grep openuf_sched` shows the schedule the section carries and whether the schedule has it off. `date` must show the site's local time: the schedule follows the device clock and its timezone (`system_timezone`, NTP). A WLAN the controller disabled is never brought up by its schedule. `logread -e "WLAN schedule"` lists each switch |
 | A client's Virtual Network Override has no effect | `cat /etc/openuf/macvlan-<section>-*.list` should list the client with its VLAN, and `grep accept_mac_file /var/run/hostapd-<phy>.conf` should name it. openUF logs an entry it left out: an open or OWE WLAN, RADIUS MAC authentication, a MAC filter that refuses the client, or a VLAN with no network on this AP. The site feature itself appears only when the gateway supports it and every AP and switch with clients claims `fw_caps` `0x80000000` |
 | SNMP does not answer | `apk info -e snmpd-ssl`; `logread -e snmp`. `cat /var/run/snmpd.conf` should hold the controller's community (`com2sec`) and, for v3, a `createUser` line; v3 needs `snmpd-ssl` (the nossl build has no privacy, and openUF does not configure the user there) |
-| A Hotspot 2.0 WLAN is missing | `hostapd -vhs20; echo $?` must print 0 (a full `wpad-*` build); otherwise openUF does not claim `fw_caps` `0x800000` and the controller drops the WLAN. An OSEN WLAN is skipped (logged) |
+| A Hotspot 2.0 WLAN is missing | `hostapd -vhs20; echo $?` must print 0 (a full `wpad-*` build); otherwise openUF claims neither `fw_caps` `0x800000` nor `fw2_caps` `0x80000` and the controller drops the WLAN. An OSEN WLAN is skipped (logged) |
 | Airtime Fairness switch does nothing | `ls /sys/kernel/debug/ieee80211/*/airtime_flags` must list a file per radio. Without it openUF does not claim `wifi_caps` bit `0x20` and the controller sends no `atf.*` at all (debugfs not mounted, or a kernel without `CONFIG_MAC80211_DEBUGFS`). `cat` it after a push: two flag names for on, none for off. A driver that does not schedule through mac80211 TXQs ignores the flags |
 | Load Average or Memory Usage looks off | Load Average is `cat /proc/loadavg` as is. Memory Usage is `(MemTotal − MemAvailable) / MemTotal` from `/proc/meminfo`; `sys_stats`' `mem_used` (bytes) is `MemTotal − MemFree`, as on a UniFi AP, so page cache counts as used there |
 | A client shows poor WiFi Experience | The score is the UniFi firmware's formula: the lowest of three terms, all read from `iw dev <ifname> station dump`. The client's `satisfaction_reason` names the term that set it (1 signal, 2 phy rate, 16 retries). **Signal**: `signal avg` minus the radio's noise (`iw dev <ifname> survey dump`, the `[in use]` entry, taken as at least −96 dBm). Under 15 dB scores below 90, and under 7 dB below 50. **PHY rate**: the mean of `tx bitrate` and `rx bitrate`, in steps: ≤ 54 Mbit/s 80, ≤ 100 Mbit/s 85, ≤ 200 Mbit/s 90, ≤ 400 Mbit/s 95. A single-stream 2.4 GHz client therefore tops out at 85. `rx bitrate` is the last frame's rate, so a mostly idle client reads lower. **Retries**: Δ`tx retries` per Δ`tx packets` over the last full minute. Up to 25 % costs nothing and 100 % scores 0. Each frame dropped in that minute (Δ`tx failed`) then costs a point. On mt76, `tx failed` also counts the retries, so the drops are Δ(`tx failed` − `tx retries`). A new client has no full minute yet, so this term reads 100 for its first minute |

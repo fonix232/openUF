@@ -2437,6 +2437,19 @@ return {
 		end
 	},
 	{
+		name = "inform json: fw2_caps claims RadSec (0x80000) only where Hotspot 2.0 is claimed",
+		fn = function()
+			local d = build()
+			assert_eq(d.fw2_caps, 0, "no hostapd -vhs20: nothing claimed")
+			local real = inform._sysinfo.hs20_supported
+			inform._sysinfo.hs20_supported = function() return true end
+			local d2 = build()
+			inform._sysinfo.hs20_supported = real
+			assert_eq(d2.fw2_caps, 0x80000, "with hostapd -vhs20: supportsRadSec(), as the Passpoint gate needs")
+			assert_eq(d2.fw_caps - d.fw_caps, 0x800000, "alongside fw_caps 0x800000")
+		end
+	},
+	{
 		name = "inform json: fw_caps claims Hotspot 2.0, SNMPv3 and MAC-based VLANs only where the device has them",
 		fn = function()
 			local base = 0x100110 + 0x1000 + 0x400000 + 0x20000000

@@ -1212,7 +1212,16 @@ function M.parse_radius(a)
 			local p = "radius." .. kind .. "." .. i .. "."
 			local ip, secret = a[p .. "ip"], a[p .. "secret"]
 			local port = tonumber(a[p .. "port"]) or default_port
-			if ip and ip:match("^[%x%.:]+$") and secret and secret:match("^[ -~]+$")
+			-- RadSec. There is no .tls key: the controller writes only the
+			-- certificate FILENAMES (files it transfers by another channel),
+			-- and only to a device claiming fw2_caps 0x80000. Their presence is
+			-- the whole discriminator; the server is dropped, never contacted
+			-- with its secret in the clear.
+			if ip and (a[p .. "ca_cert"] or a[p .. "client_cert"]
+					or a[p .. "private_key"] or a[p .. "private_key_passwd"]) then
+				io.stderr:write(("inform: ignoring RADIUS %s server %d: RadSec (TLS) "
+					.. "is not supported\n"):format(kind, i))
+			elseif ip and ip:match("^[%x%.:]+$") and secret and secret:match("^[ -~]+$")
 					and port == math.floor(port) and port >= 1 and port <= 65535 then
 				out[#out + 1] = {ip = ip, port = port, secret = secret}
 			elseif ip then
