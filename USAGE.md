@@ -1889,6 +1889,11 @@ an unverified success anyway. A wrong passphrase is a `failure` (`auth_failures`
 rejected it before association, `wpa_auth_failures` when the 4-way handshake did), one event
 per client per minute with the count.
 
+Each decided attempt is also logged, once, as `openuf: staevents: <mac> <ifname> vap=<vap> ->
+<verdict> (assoc, authz, dhcp, dns)` with the stage timings in milliseconds from the first
+Authentication frame (`logread | grep staevents`). A verdict ending in `no event` is an
+attempt that sent nothing to the controller, and a `-` is a stage that was not seen.
+
 ### Controller-managed system settings (timezone, NTP, nightly scan)
 
 Every full `system_cfg` push also carries three blocks, which `sysconf.lua` applies, each

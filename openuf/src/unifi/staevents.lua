@@ -109,6 +109,20 @@ M._held     = {}   -- mac -> {ev = success event, at = when it was held}
 M._fail_seq = nil  -- the last failure (the collector's seq) already counted
 M._failing  = {}   -- mac -> aggregated failures not yet sent
 
+M._log = function(line) io.stderr:write(line) end
+
+-- One line per decided connection attempt: the only AP-side record of what
+-- the funnel was fed and why (or why nothing was). Attempts are rare.
+-- d: the stage deltas, cumulative from the first Authentication frame, µs.
+local function log_attempt(mac, ifname, vap, verdict, d)
+	d = d or {}
+	local function ms(us) return us and string.format("%.0fms", us / 1000) or "-" end
+	M._log(string.format(
+		"openuf: staevents: %s %s vap=%s -> %s (assoc %s, authz %s, dhcp %s, dns %s)\n",
+		mac, tostring(ifname or "-"), tostring(vap), verdict,
+		ms(d.assoc_delta), ms(d.wpa_auth_delta), ms(d.ip_delta), ms(d.traffic_delta)))
+end
+
 local function event_id(mac, kind, ts)
 	-- Unique per event, stable for a retry of the same one.
 	local s = tostring(mac) .. kind .. tostring(ts)
@@ -264,7 +278,7 @@ local function failures(list, now)
 			if not agg then
 				-- Failed before associating is the SAE exchange rejecting the
 				-- passphrase; after, it is the 4-way handshake.
-				agg = {at = now, vap = f.vap, signal = f.signal, count = 0,
+				agg = {at = now, vap = f.vap, ifname = f.ifname, signal = f.signal, count = 0,
 					ts = math.floor((f.auth or f.at) / 1000000),
 					counter = f.assoc and "wpa_auth_failures" or "auth_failures",
 					assoc_delta = M.deltas({auth = f.auth, assoc = f.assoc}).assoc_delta}
@@ -285,6 +299,8 @@ local function failures(list, now)
 			e[agg.counter] = agg.count
 			e.assoc_delta = agg.assoc_delta
 			enqueue(e)
+			log_attempt(mac, agg.ifname, agg.vap,
+				"failure " .. agg.counter .. " x" .. agg.count, {assoc_delta = agg.assoc_delta})
 			M._failing[mac] = nil
 		end
 	end
@@ -312,13 +328,18 @@ function M.observe(stas, now, uptime, phases)
 	table.sort(macs)
 	for _, mac in ipairs(macs) do
 		local h = M._held[mac]
+		local c = conns[mac]
+		local ifname = type(c) == "table" and c.ifname or nil
 		if type(stas) ~= "table" or not stas[mac] then
 			M._held[mac] = nil                     -- gone before it was proven
-		elseif complete(h.ev, conns[mac]) then
+			log_attempt(mac, ifname, h.ev.vap, "gone before its first DNS answer, no event", M.deltas(c))
+		elseif complete(h.ev, c) then
 			enqueue(h.ev)
 			M._held[mac] = nil
+			log_attempt(mac, ifname, h.ev.vap, "success", h.ev)
 		elseif now - h.at >= M.SUCCESS_WAIT then
 			M._held[mac] = nil                     -- never verified: not claimed
+			log_attempt(mac, ifname, h.ev.vap, "no DNS answer in time, no event", M.deltas(c))
 		end
 	end
 	if type(phases) == "table" then failures(phases.failures, now) end

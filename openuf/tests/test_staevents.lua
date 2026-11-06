@@ -2,6 +2,7 @@
 -- Run from project root: lua tests/run_tests.lua
 
 local ev = dofile("src/unifi/staevents.lua")
+ev._log = function() end
 
 local A = "aa:bb:cc:00:00:01"
 local B = "aa:bb:cc:00:00:02"
@@ -464,6 +465,50 @@ return {
 			out = roams({hl(520, "disassoc", IF)})
 			assert_eq(#out, 1, "its departure is reported")
 			assert_eq(out[1].avg_rssi, -66, "with the heartbeat's signal")
+			ev._reset()
+		end
+	},
+	{
+		name = "staevents: every decided connection attempt logs one line with its verdict and stage timings",
+		fn = function()
+			local lines = {}
+			ev._log = function(l) lines[#lines + 1] = l end
+			ev._reset()
+			ev.observe({}, 0, 0, {connections = {}})
+			local c = timeline(99)
+			c.ifname = "phy1-ap0"
+			local dns = c.dns
+			c.dns = nil
+			ev.observe({[A] = {vap = "v", signal = -50, uptime = 1}}, 100, 100, {connections = {[A] = c}})
+			assert_eq(#lines, 0, "still waiting for DNS: undecided, nothing logged")
+			c.dns = dns
+			ev.observe({[A] = {vap = "v", uptime = 11}}, 110, 110, {connections = {[A] = c}})
+			assert_eq(#lines, 1, "decided: one line")
+			assert_eq(lines[1], "openuf: staevents: " .. A .. " phy1-ap0 vap=v -> success "
+				.. "(assoc 4ms, authz 30ms, dhcp 250ms, dns 300ms)\n", "who, where, verdict, timings")
+
+			lines = {}
+			ev.pop()
+			ev.observe({}, 190, 190, {connections = {}})
+			ev.pop()
+			local c2 = timeline(299)
+			c2.ifname, c2.dns = "phy1-ap0", nil
+			ev.observe({[A] = {vap = "v", uptime = 1}}, 300, 300, {connections = {[A] = c2}})
+			ev.observe({[A] = {vap = "v", uptime = 81}}, 380, 380, {connections = {[A] = c2}})
+			assert_eq(#lines, 1, "never verified: one line")
+			assert_contains(lines[1], "no DNS answer in time, no event", "says why no event went out")
+			assert_contains(lines[1], "dns -)", "and that DNS never arrived")
+
+			lines = {}
+			ev._reset()
+			ev.observe({}, 0, 0, {failures = {}})
+			local fails = {{seq = 1, mac = B, at = 103e6, auth = 102e6, assoc = 102.004e6,
+				signal = -55, vap = "w", ifname = "phy0-ap0"}}
+			ev.observe({}, 110, 110, {failures = fails})
+			ev.observe({}, 170, 170, {failures = fails})
+			assert_eq(#lines, 1, "a failure window closing: one line")
+			assert_contains(lines[1], B .. " phy0-ap0 vap=w -> failure wpa_auth_failures x1", "the failure")
+			ev._log = function() end
 			ev._reset()
 		end
 	},

@@ -51,8 +51,8 @@ function M.read()
 	return doc
 end
 
--- {connections = {mac -> {auth, assoc, authorized, dhcp, dns, signal, vap}},
---  failures = {{seq, mac, at, auth, assoc, signal, vap}, ...}}
+-- {connections = {mac -> {auth, assoc, authorized, dhcp, dns, signal, vap, ifname}},
+--  failures = {{seq, mac, at, auth, assoc, signal, vap, ifname}, ...}}
 -- firsts: dnswatch.firsts(). vap_by_ifname: hostapd interface -> the
 -- vap_table name the controller knows the SSID by (report.lua).
 function M.collect(doc, firsts, vap_by_ifname)
@@ -68,6 +68,7 @@ function M.collect(doc, firsts, vap_by_ifname)
 				auth = tonumber(c.auth), assoc = tonumber(c.assoc),
 				authorized = tonumber(c.authorized), signal = tonumber(c.signal),
 				dhcp = dhcp[mac], dns = dns[mac], vap = vap_by_ifname[c.ifname],
+				ifname = c.ifname,
 			}
 		end
 	end
@@ -78,6 +79,7 @@ function M.collect(doc, firsts, vap_by_ifname)
 				seq = tonumber(f.seq), mac = mac, at = tonumber(f.at),
 				auth = tonumber(f.auth), assoc = tonumber(f.assoc),
 				signal = tonumber(f.signal), vap = vap_by_ifname[f.ifname],
+				ifname = f.ifname,
 			}
 		end
 	end
