@@ -4935,6 +4935,41 @@ return {
 		end
 	},
 	{
+		name = "inform: with enrichment off and no collector, the pgrep is asked once, not every interval",
+		fn = function()
+			local orig_rrm, orig_time = inform._rrmscan, inform._time
+			local asked, monitors, ensured = 0, 0, 0
+			inform._rrmscan = {
+				collector_running = function() asked = asked + 1; return false end,
+				collector_stop    = function() end,
+				monitors_stop     = function() monitors = monitors + 1 end,
+				collector_ensure  = function() ensured = ensured + 1 end,
+				monitors_ensure   = function() end,
+				harvest           = function() return {}, {} end,
+				hostapd_objects   = function() return {} end,
+			}
+			local clock = 1000
+			inform._time = function() return clock end
+			inform._rrm_collector_next, inform._rrm_collector_reaped = 0, false
+			local off, on = {config = {rrm_enrichment = false}}, {config = {rrm_enrichment = true}}
+			for _ = 1, 5 do
+				inform._rrm_tick(off)
+				clock = clock + inform.RRM_COLLECTOR_CHECK_INTERVAL
+			end
+			assert_eq(asked, 1, "one pgrep in five intervals")
+			assert_eq(monitors, 1, "and one monitor sweep")
+
+			inform._rrm_tick(on)
+			assert_eq(ensured, 1, "turning enrichment on starts a collector")
+			clock = clock + inform.RRM_COLLECTOR_CHECK_INTERVAL
+			inform._rrm_tick(off)
+			assert_eq(asked, 2, "and turning it off asks again, since one may now exist")
+
+			inform._rrmscan, inform._time = orig_rrm, orig_time
+			inform._rrm_collector_next, inform._rrm_collector_reaped = 0, false
+		end
+	},
+	{
 		name = "inform: a 2.4 GHz-only station is asked for its own operating class",
 		fn = function()
 			-- Every station used to be asked for class 115 (5 GHz U-NII-1).

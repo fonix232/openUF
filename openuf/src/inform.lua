@@ -143,6 +143,7 @@ M.RRM_COLLECTOR_CHECK_INTERVAL = 60
 -- something having lit one again (led.lua reassert).
 M.LED_CHECK_INTERVAL = 60
 M._rrm_collector_next = 0
+M._rrm_collector_reaped = false
 
 
 -- In-memory only (not persisted to state.json): per-radio spectrum-scan

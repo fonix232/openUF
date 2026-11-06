@@ -495,6 +495,13 @@ function M.harvest(blob)
 	if blob == nil then
 		local f = io.open(M.EVENT_FILE, "r")
 		if not f then return {}, {} end
+		-- Quiet is the common case: leave an empty file alone rather than
+		-- read it and rewrite it empty on every heartbeat.
+		if (tonumber(f:seek("end")) or 0) == 0 then
+			f:close()
+			return {}, {}
+		end
+		f:seek("set")
 		blob = f:read("*a") or ""
 		f:close()
 		local t = io.open(M.EVENT_FILE, "w")
@@ -692,11 +699,16 @@ function M.tick(ctx, cfg)
 		-- every tick: this is a pgrep, and there is nothing to catch between
 		-- checks once the child is gone.
 		local now = ctx._time()
-		if now >= ctx._rrm_collector_next then
+		if now >= ctx._rrm_collector_next and not ctx._rrm_collector_reaped then
 			ctx._rrm_collector_next = now + ctx.RRM_COLLECTOR_CHECK_INTERVAL
 			local ok_r, running = pcall(rrm.collector_running)
 			if ok_r and running then pcall(rrm.collector_stop) end
 			pcall(rrm.monitors_stop)
+			-- Only collector_ensure starts one, and it clears this: with none
+			-- found there is nothing left to find, and a site that never had
+			-- enrichment on would pgrep every interval for the daemon's life.
+			-- A stop is not latched, since its kill is never read back.
+			if ok_r and not running then ctx._rrm_collector_reaped = true end
 		end
 		return false
 	end
@@ -709,6 +721,7 @@ function M.tick(ctx, cfg)
 	if now >= ctx._rrm_collector_next then
 		ctx._rrm_collector_next = now + ctx.RRM_COLLECTOR_CHECK_INTERVAL
 		pcall(rrm.collector_ensure)
+		ctx._rrm_collector_reaped = false
 		-- The control-socket half: the beacon body reaches only hostapd's
 		-- control socket (BEACON-RESP-RX), not its ubus notification.
 		pcall(rrm.monitors_ensure)

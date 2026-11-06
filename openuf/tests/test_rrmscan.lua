@@ -672,4 +672,37 @@ return {
 			assert_nil(rrmscan.sta_signal("phy0-ap1", "x; reboot"), "bad station refused")
 		end
 	},
+	{
+		name = "rrmscan: harvest leaves an empty event file alone and still drains a full one",
+		fn = function()
+			local real_open, writes, reads = io.open, 0, 0
+			io.open = function(path, mode)
+				if path == rrmscan.EVENT_FILE then
+					if mode == "w" then writes = writes + 1 else reads = reads + 1 end
+				end
+				return real_open(path, mode)
+			end
+			local ok, err = pcall(function()
+				with_events("", function()
+					for _ = 1, 3 do rrmscan.harvest() end
+					assert_eq(writes, 0, "no truncating rewrite of an empty file, in three heartbeats")
+					assert_eq(reads, 3, "one open each")
+				end)
+				writes = 0
+				local ubus = '{ "beacon-report": {"address":"00:00:5e:00:53:11","op-class":81,'
+					.. '"channel":6,"rcpi":120,"bssid":"00:00:5e:00:53:01","rep-mode":0} }\n'
+				with_events(ubus, function()
+					local out = rrmscan.harvest()
+					assert_eq(#out, 1, "a report in the file is read")
+					assert_eq(writes, 1, "and the file emptied")
+					local f = real_open(rrmscan.EVENT_FILE, "r")
+					local left = f:read("*a")
+					f:close()
+					assert_eq(left, "", "nothing left behind")
+				end)
+			end)
+			io.open = real_open
+			if not ok then error(err, 0) end
+		end
+	},
 }
