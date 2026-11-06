@@ -53,6 +53,7 @@ local function usage()
 		"       syswrapper.sh netmodel-retry     (re-apply a rolled-back network plan)\n" ..
 		"       syswrapper.sh netmodel-restore   (put the pre-openUF network and WiFi config back)\n" ..
 		"       syswrapper.sh 11k-scan           (the controller's nightly neighbour scan)\n" ..
+		"       syswrapper.sh dfs-reset          (the controller's nightly return to a pinned DFS channel)\n" ..
 		"       syswrapper.sh upgrade <url>      (hand an upgrade to owut; the URL is not fetched)\n" ..
 		"       syswrapper.sh reprovision        (have the controller re-send its full config)\n" ..
 		"\n" ..
@@ -227,6 +228,27 @@ local function cmd_11k_scan()
 	return true
 end
 
+-- dfs-reset
+-- The controller's other pushed cron job (02:00, see sysconf.lua), scheduled
+-- whenever a 5 GHz radio is pinned to a DFS channel. After a radar hit the
+-- radio leaves that channel and never comes back on its own. Like 11k-scan the
+-- work belongs to the inform daemon (openwrt/dfsreset.lua), so this only leaves
+-- a dated request. No randomisation, unlike a scan: the firmware's dfs_reset
+-- has none, and a channel switch is not an off-channel sweep that neighbouring
+-- APs can spoil for each other.
+local dfs_request_file = "/tmp/openuf-dfs-reset-request"
+local function cmd_dfs_reset()
+	local f = io.open(dfs_request_file, "w")
+	if not f then
+		io.stderr:write("syswrapper: cannot write " .. dfs_request_file .. "\n")
+		return false
+	end
+	f:write(tostring(os.time()), "\n")
+	f:close()
+	io.stdout:write("syswrapper: DFS channel reset requested; the inform daemon checks each 5 GHz radio on its next heartbeat\n")
+	return true
+end
+
 -- upgrade <url> / upgrade2 <url>
 -- The controller's SSH upgrade verb. The URL is UniFi firmware and is never
 -- fetched; the inform daemon hands the request to owut when
@@ -263,6 +285,8 @@ local function main(args)
 		if not cmd_netmodel_restore() then os.exit(1) end
 	elseif cmd == "11k-scan" then
 		if not cmd_11k_scan() then os.exit(1) end
+	elseif cmd == "dfs-reset" then
+		if not cmd_dfs_reset() then os.exit(1) end
 	elseif cmd == "reprovision" then
 		cmd_reprovision()
 	elseif cmd == "upgrade" or cmd == "upgrade2" then
@@ -288,10 +312,12 @@ return {
 	cmd_reset_inform = cmd_reset_inform,
 	cmd_netmodel_retry = cmd_netmodel_retry,
 	cmd_11k_scan = cmd_11k_scan,
+	cmd_dfs_reset = cmd_dfs_reset,
 	cmd_upgrade  = cmd_upgrade,
 	cmd_reprovision = cmd_reprovision,
 	_upgrade_request_file = function(p) upgrade_request_file = p end,
 	_scan_request_file = function(p) scan_request_file = p end,
+	_dfs_request_file = function(p) dfs_request_file = p end,
 	is_hex32 = is_hex32,
 	is_url   = is_url,
 	_set_state = function(s) state = s end,

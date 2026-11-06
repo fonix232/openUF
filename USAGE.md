@@ -1950,8 +1950,9 @@ a steady state cost no flash writes. Malformed values (a timezone with a quote, 
 server name with a space, a schedule that is not five plain fields) are logged and
 refused.
 
-**Cron runs only commands openUF provides.** The one the controller pushes today is
-`syswrapper.sh 11k-scan` at `0 4 * * *`, the nightly neighbour scan. Anything else is
+**Cron runs only commands openUF provides.** The two it installs are
+`syswrapper.sh 11k-scan` at `0 4 * * *`, the nightly neighbour scan, and
+`syswrapper.sh dfs-reset` at `0 2 * * *` (below). Anything else is
 logged as `not a command this build provides` and never written: crond runs it as
 root. The pushed `cron.<n>.user` is ignored, since that account does not exist here.
 
@@ -1969,6 +1970,33 @@ hand:
 syswrapper.sh 11k-scan
 logread | grep 11k-scan   # "11k-scan requested -- asking a client for a beacon report now"
 ```
+
+`syswrapper.sh dfs-reset` is the controller's other nightly job. It pushes it to every AP with
+a 5 GHz radio pinned to a fixed DFS channel: after a radar hit the radio leaves that channel
+and nothing brings it back, so the planned cell stays wrong until a Force Provision. The hook
+leaves a dated request in `/tmp/openuf-dfs-reset-request` (one older than 30 minutes, or
+dated more than a minute ahead, is discarded), and the daemon serves it on its next
+heartbeat, for each enabled 5 GHz radio:
+
+- the radio is on no channel, set to `auto` or `0`, a 2.4 or 6 GHz radio, carries the
+  wireless uplink station (it follows its parent's channel), or is already on the configured
+  channel: nothing, silently;
+- the configured channel is still on the kernel's non-occupancy list (`iw phy phyN channels`,
+  `DFS state: unavailable`): nothing, with `dfs-reset: ... still on the non-occupancy list
+  for another N s -- waiting for the next run`;
+- otherwise a channel switch announcement back to it,
+  `hostapd_cli -i <if> chan_switch 5 <freq> sec_channel_offset= center_freq1= bandwidth=
+  <he|vht|ht|...>`, at the radio's live width and in the BSS's own mode, read from
+  `hostapd_cli status`. UCI is never touched: it already holds the configured channel.
+  A BSS whose mode cannot be read is left alone, because a switch that names no mode would
+  bring the interface back without 802.11n/ac/ax.
+
+The BSS is not torn down, and clients are told where it is going; it still goes quiet for the
+CAC on arrival (a minute, ten on channels 120-128), which is why the controller runs it at
+02:00. hostapd answering `OK` only means it accepted the switch, so the daemon reads the radio
+back on later heartbeats and logs `dfs-reset: <if> is back on channel N`, or, after 15
+minutes, `accepted the switch to channel N but is on channel M`. Needs `hostapd-utils`.
+Run by hand with `syswrapper.sh dfs-reset`, then `logread | grep dfs-reset`.
 
 To take a board back from the controller's timezone, copy `openuf_timezone_orig` back
 to `timezone` (`uci get system.@system[0].openuf_timezone_orig`). For NTP, copy

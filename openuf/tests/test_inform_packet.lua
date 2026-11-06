@@ -3597,6 +3597,39 @@ return {
 		end
 	},
 	{
+		name = "inform: every heartbeat gives the dfs-reset service the clock, the reported radios and the readers",
+		fn = function()
+			local orig = {
+				build_json = inform.build_json, build_packet = inform.build_packet,
+				http_post = inform.http_post, parse_packet = inform.parse_packet,
+				reload = inform._reload_if_changed, rrm = inform._rrm_tick, dfs = inform._dfsreset,
+				time = inform._time,
+			}
+			inform._reload_if_changed = function(_, _, last) return last end
+			inform._rrm_tick = function() return false end
+			inform.build_json = function() return "{}" end
+			inform.build_packet = function() return "pkt" end
+			inform.http_post = function() return "body" end
+			inform.parse_packet = function() return '{"_type":"noop"}' end
+			inform._time = function() return 4242 end
+			local got
+			inform._dfsreset = {tick = function(...) got = {...} return 0 end}
+			local ok, err = pcall(function()
+				inform._tick(sample_state(), {hwassign = {"radio1"}}, nil, {interval = 10, backoff = 10})
+				assert_true(got ~= nil, "the service runs on a heartbeat")
+				assert_eq(got[1], 4242, "with the daemon's clock")
+				assert_eq(got[2][1], "radio1", "and the radios the daemon reports")
+				assert_eq(got[3], inform._ucihelper, "and ucihelper")
+				assert_eq(got[4], inform._sysinfo, "and sysinfo")
+			end)
+			inform.build_json, inform.build_packet, inform.http_post, inform.parse_packet =
+				orig.build_json, orig.build_packet, orig.http_post, orig.parse_packet
+			inform._reload_if_changed, inform._rrm_tick, inform._dfsreset = orig.reload, orig.rrm, orig.dfs
+			inform._time = orig.time
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "inform: a quick-scan sweeps in chunks, scanning until the last one, which carries the results",
 		fn = function()
 			-- A whole band in one `iw scan` silences an AP-only radio for

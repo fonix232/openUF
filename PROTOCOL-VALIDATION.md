@@ -5194,6 +5194,120 @@ captured none either: radar cannot be produced on demand, so the whole device-si
 from a real DFS driver event to the inform is unconfirmed on radios. The lab proves the
 controller's side, the Tier 2 run proves the collector and the ubus shape.
 
+## `dfs-reset`: the controller's nightly cron job
+
+The controller pushes `syswrapper.sh dfs-reset` at `0 2 * * *` to every AP with a 5 GHz radio
+pinned to a fixed DFS channel, in the same `cron.<n>.job.<m>` block as `11k-scan`. Everything
+in this section up to "This fork" is upstream's (2026-10-27), read from 10.6.106 and
+U7LR 6.8.2, and is repeated here as the evidence this port rests on.
+
+**The whole cron surface.** Every `syswrapper.sh` string in `internal-dependencies.jar`
+(extracted in the lab controller container, 21 629 classes, command packages decompiled with
+CFR):
+
+```
+syswrapper.sh 11k-scan                 cron, 0 4 * * *
+syswrapper.sh dfs-reset                cron, 0 2 * * *
+syswrapper.sh refresh-walled-garden 1  cron, */10 * * * *
+syswrapper.sh schedule-action          cron, 1-59/5 * * * *
+/usr/bin/syswrapper.sh %s              over SSH: "set-adopt <url> <key> [mac]"
+/usr/bin/syswrapper.sh unpair          over SSH
+.../syswrapper.sh upgrade %s, upgrade2 over SSH, firmware download
+```
+
+The controller's device-command endpoint is one class per command under
+`com/ubnt/service/devmgr/b/g/` (48 names, the whole `cmd/devmgr` surface), and none of the
+~50 other `syswrapper.sh` verbs is in it or in the strings those handlers put on the wire as
+`{"cmd": ...}`: `mcad` invokes them from its own state machine, its cron, or over SSH. So the
+four cron verbs above are the whole route by which a controller can run a `syswrapper.sh`
+verb on an AP, and `schedule-action` and `refresh-walled-garden` are things openUF already
+does on its own heartbeat.
+
+The four are emitted together by one method (`com/ubnt/service/config/lwueNrOWUBYJX`, called
+from the AP config generator `VAZShipWTNxlo:2426`), each behind its own gate, decompiled:
+
+| Job | Gate as decompiled |
+|---|---|
+| `schedule-action` | any WLAN with `isScheduleEnabled()` |
+| `refresh-walled-garden 1` | the guest-portal condition **and** `!device.supportIPSet()` |
+| `dfs-reset` | the site's country resolves to a regdomain with DFS channels, **and** some radio with `radio == "na"` and `has_fccdfs` (country 840/124) or `has_dfs` (everyone else) has a `channel` that is not `auto` and is in that DFS list |
+| `11k-scan` | any WLAN with `fast_roaming_enabled` |
+
+So `dfs-reset` is pushed to a device only because openUF reports `has_dfs` honestly, off
+`iw phy`: the field added for the Radios tab's capability filters gates this job too.
+Upstream saw it live: an AP with its 5 GHz pinned to channel 100 (country CZ) was pushed the
+job and declined it by name (`sysconf: cron job not installed -- not a command this build
+provides: "syswrapper.sh dfs-reset"`), while an AP on channel 36 was pushed `11k-scan` only.
+On this fork the same decline applied until now, since `CRON_COMMANDS` had one entry.
+
+**What the firmware does.** `bin/syswrapper.sh` `dfs_reset()` (firmware-confirmed for
+U7LR 6.8.2; `dfs_reset_mtk` is the same logic through a different `iwconfig` field):
+
+1. `is_wds`: "Downlink AP doesn't neet to do dfs reset action", return.
+2. For each 5 GHz radio's first VAP (`list_first_vaps_ifs 5`) in `Mode:Master`.
+3. Actual channel from `iwlist <if> frequency | grep Current`; configured channel from
+   `radio.<n>.channel` in `/tmp/running.cfg`, the pushed `system.cfg` itself.
+4. `-z`, `auto` or `0`: skip. Equal: skip.
+5. `radartool -i <radio> chknol <ch>` true: log "dfs <ch> still in nol_channel, wait next
+   time" and skip.
+6. Otherwise `iwconfig <if> channel <ch>`, logging `OK` or `FAIL(<rc>)`.
+
+There is no client check anywhere in it: the firmware moves the radio whether or not clients
+are associated, and so does openUF (the CSA tells them where it is going).
+
+**openUF, verb for verb.** The live channel and width from `iw dev <if> info`, the
+configured channel from `wireless.<radio>.channel`, the NOL from mac80211's own per-channel
+state (`iw phy phyN channels`, `DFS state: unavailable (for N sec)`), and the move as a CSA on
+the BSS control socket (`openwrt/dfsreset.lua`). `is_wds` (a mesh child follows its
+parent's channel) maps to a radio carrying an enabled wireless-uplink station, which is
+skipped: moving its AP would cut the uplink. Two things from upstream's hardware work are worth keeping:
+
+- **The bonded-block centres are not evenly spaced.** UNII-3 starts at 149, which is not
+  `36 + 16k`, so an anchor-on-36 formula gives the 149-161 block a centre of channel 154
+  instead of 155: a `center_freq1` hostapd accepts and then beacons a 5 MHz-shifted
+  operation element with. `BLOCK_CENTERS` is a table of the real centres (40 MHz: 38...159,
+  80 MHz: 42...155, 160 MHz: 50/114/163).
+- **`iw phy ... channels` is the only place the NOL is visible.** Upstream, both boards,
+  2026-10-27: each radio's own 80 MHz block reads `available` (CAC done) and every other DFS
+  channel `usable`, on ath10k and mt76 alike; non-DFS channels have no DFS state line at all,
+  which is why an absent entry is "not blocked". `logread` never shows the NOL, nor does
+  `hostapd_cli status`.
+
+**Where this fork differs from upstream, and why.** Found by reading hostapd 2.11's source
+(`hostapd/ctrl_iface.c`, `src/ap/hostapd.c`, `src/ap/ctrl_iface_ap.c`) against the generated
+command, 2026-11-06. Not run on a radio.
+
+- *The mode token is always sent.* Upstream passed `vht` at 40/80/160 MHz after the width
+  arguments (`ht` at 40) and nothing at 20 MHz, on the belief that the BSS "keeps the HE/EHT
+  operation elements from its own config". `hostapd_ctrl_iface_chan_switch` says otherwise
+  for the case this job exists for: a target on a DFS channel (`hostapd_is_dfs_overlap`)
+  takes `hostapd_switch_channel_fallback`, which sets `ieee80211n/ac/ax/be` on the interface
+  config from the command's own flags and then disables and re-enables the interface. A flag
+  the command did not name comes back off. Upstream's command would therefore have returned
+  an HE radio to the air as VHT (or, at 20 MHz, as legacy) until the next `wifi reload`. This
+  fork reads `ieee80211n/ac/ax/be` from `hostapd_cli -i <if> status` (they are in the
+  status reply, `ctrl_iface_ap.c`) and names the highest, `he` or `eht` included: the daemon
+  accepts `[ht|vht|he|eht]` (its own usage line in the 25.12 binary; `hostapd_cli help` lists
+  only `ht|vht`), `he` implies vht and ht on 5 GHz and `eht` all three
+  (`hostapd_ctrl_check_freq_params`). A BSS whose status cannot be read is not switched.
+- *A switch is read back.* `hostapd_cli chan_switch` prints `OK` when the command parsed and
+  hostapd accepted it; the radio then counts down the announcement, and on a DFS channel
+  runs a CAC (60 s, 600 s on 120-128) before it beacons. The daemon checks the live channel
+  on later heartbeats and logs arrival, or after 15 minutes that it did not arrive.
+- *6 GHz is skipped.* `radio == "na"` is also a 6 GHz radio on this fork, whose channel
+  numbers overlap 5 GHz's; its live frequency gates the job.
+- *No dependence on the radar event.* The job never reads a radar record, in upstream or
+  here: it compares live against configured and reads the NOL. The radar event (above) is
+  reporting only, and the two share nothing but the cause.
+
+**Not claimed.** No live radar hit, so the CSA itself has never run in anger, on upstream's
+hardware or this fork's. What upstream checked on its boards is everything up to it: the state
+read, the generated arguments against what the live hostapd reports for its own channel, and
+the job doing nothing while both radios were where they belong. What this fork added is
+unit-tested only, apart from the hostapd source and binary reads above (Tier 1 and a reading
+of the real binary; the Docker image has no radio, and its hostapd has only the nl80211
+driver, so a CSA cannot be issued against it).
+
 ## UniFi Network 11.x (string-level, not decompiled)
 
 **Source.** `unifi-native` 11.0.81-37038-1 for `uos-deb13-arm64`, fw-update channel `qa`:

@@ -243,6 +243,25 @@ return {
 		end
 	},
 	{
+		name = "sysconf: the nightly dfs-reset job is installed beside the 11k scan",
+		fn = function()
+			-- Both verbs are the hook's, so both get a line, in the pushed order.
+			local _, cmds, files = fresh(system_db("IST-5:30", nil, nil))
+			local cron = sysconf.parse("cron.status=enabled\ncron.1.status=enabled\ncron.1.user=root\n"
+				.. "cron.1.job.1.status=enabled\ncron.1.job.1.schedule=0 2 * * *\n"
+				.. "cron.1.job.1.cmd=syswrapper.sh dfs-reset\n"
+				.. "cron.1.job.2.status=enabled\ncron.1.job.2.schedule=0 4 * * *\n"
+				.. "cron.1.job.2.cmd=syswrapper.sh 11k-scan\n").cron
+			local out = with_stderr(function() assert_true(sysconf.apply_cron(cron), "installed") end)
+			assert_contains(files[sysconf.CRONTAB],
+				"0 2 * * * /usr/bin/syswrapper.sh dfs-reset\n0 4 * * * /usr/bin/syswrapper.sh 11k-scan\n",
+				"both lines")
+			assert_contains(out, "2 controller cron job(s) installed", "both counted")
+			assert_nil(out:find("not a command", 1, true), "nothing declined")
+			assert_true(#cmds > 0, "crond told to reload")
+		end
+	},
+	{
 		name = "sysconf: apply_cron refuses commands this build does not provide and malformed schedules",
 		fn = function()
 			local _, cmds, files = fresh(system_db("IST-5:30", nil, nil))

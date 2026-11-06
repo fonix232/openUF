@@ -10,6 +10,7 @@
 	  cron.status=enabled
 	  cron.1.status=enabled / .user=<the pushed ssh user>
 	  cron.1.job.1.status=enabled / .schedule=0 4 * * * / .cmd=syswrapper.sh 11k-scan
+	  cron.1.job.2.status=enabled / .schedule=0 2 * * * / .cmd=syswrapper.sh dfs-reset
 
 	The cron job is the interesting one: the controller schedules a nightly
 	04:00 (device local time) neighbour scan on every AP through the AP's own
@@ -17,6 +18,8 @@
 	verb is added to syswrapper.sh, which asks the running inform daemon to
 	scan on its next heartbeat (inform.lua's _scan_requested), so the scan
 	code stays in one place and the result rides out on the next inform.
+	The second job, dfs-reset (02:00, on a site with a 5 GHz radio pinned to a
+	DFS channel), is the same hand-off to openwrt/dfsreset.lua.
 
 	Timezone -> UCI system.@system[0].timezone (the wire string IS a POSIX TZ
 	string, which is exactly what that option holds); NTP -> system.ntp.server.
@@ -67,7 +70,8 @@ M.END_MARK   = "# openuf-cron-end"
 
 -- Wire command -> what crond runs. Extend only alongside the verb itself.
 M.CRON_COMMANDS = {
-	["syswrapper.sh 11k-scan"] = "/usr/bin/syswrapper.sh 11k-scan",
+	["syswrapper.sh 11k-scan"]  = "/usr/bin/syswrapper.sh 11k-scan",
+	["syswrapper.sh dfs-reset"] = "/usr/bin/syswrapper.sh dfs-reset",
 }
 
 local function get_uci()

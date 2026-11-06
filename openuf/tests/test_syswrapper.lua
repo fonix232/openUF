@@ -183,6 +183,30 @@ return {
 		end
 	},
 	{
+		name = "syswrapper: dfs-reset leaves a dated request for the daemon",
+		fn = function()
+			local file = "/tmp/openuf_test_dfs_request"
+			sw._dfs_request_file(file)
+			local real = io.stdout
+			io.stdout = {write = function() end}
+			local ok = sw.cmd_dfs_reset()
+			io.stdout = real
+			assert_true(ok, "written")
+			local f = io.open(file, "r"); local raw = f:read("*a"); f:close()
+			os.remove(file)
+			assert_true(math.abs(tonumber(raw:match("^(%d+)\n$")) - os.time()) <= 2, "one timestamp, dated now")
+			sw._dfs_request_file("/nonexistent-dir/x")
+			local err = ""
+			local rs = io.stderr
+			io.stderr = {write = function(_, s) err = err .. s end}
+			local failed = not sw.cmd_dfs_reset()
+			io.stderr = rs
+			sw._dfs_request_file("/tmp/openuf-dfs-reset-request")
+			assert_true(failed, "an unwritable path fails")
+			assert_contains(err, "cannot write", "and says so")
+		end
+	},
+	{
 		name = "syswrapper: reprovision clears cfgversion so the controller re-sends its config",
 		fn = function()
 			reset_state()

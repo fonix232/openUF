@@ -1206,6 +1206,30 @@ function M.radio_caps(ifname)
 	return caps
 end
 
+-- What an interface is operating on right now, from `iw dev <if> info`:
+-- {channel, freq, width} (MHz), or nil when it is not on a channel.
+function M.operating(ifname)
+	if not ifname then return nil end
+	local info = iw_dev_info(ifname)
+	local ch, freq = info:match("channel%s+(%d+)%s+%((%d+) MHz%)")
+	if not ch then return nil end
+	return {channel = tonumber(ch), freq = tonumber(freq), width = tonumber(info:match("width:%s+(%d+)"))}
+end
+
+-- The raw `iw phy phyN channels` dump for ifname's radio: the only place
+-- mac80211 exposes the per-channel DFS state machine, and so the
+-- non-occupancy list a radar hit creates (parsed by dfsreset.parse_states).
+-- Not cached: the one caller is the nightly dfs-reset, and the state it asks
+-- about is exactly what changes with time.
+function M.phy_channels(ifname)
+	if not ifname then return nil end
+	local phy = iw_dev_info(ifname):match("wiphy%s+(%d+)")
+	if not phy then return nil end
+	local text = M._run_cmd("iw phy phy" .. phy .. " channels")
+	if not text or text == "" then return nil end
+	return text
+end
+
 -- A radio's transmit-timeout and carrier-sense-timeout interrupt counts since
 -- the driver loaded: UniFi firmware's athstats ast_txto and ast_cst, which its
 -- athstats tool labels "global txmit timeout interrupts" and "carrier sense

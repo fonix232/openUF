@@ -45,6 +45,7 @@ local payload   = require("unifi.payload")
 local report    = require("openwrt.report")
 local provision = require("openwrt.provision")
 local idlescan  = require("openwrt.idlescan")
+local dfsreset  = require("openwrt.dfsreset")
 local backhaul  = require("openwrt.backhaul")
 local recognized = require("unifi.recognized")
 local wlansched = require("openwrt.wlansched")
@@ -73,6 +74,7 @@ M._rrmscan    = rrmscan
 -- A beacon report's width is decided exactly as the scan cache's is.
 rrmscan._channel_width = sysinfo.channel_width
 M._idlescan   = idlescan
+M._dfsreset   = dfsreset
 M._backhaul   = backhaul
 M._roamassist = roamassist
 M._minrssi    = minrssi
@@ -1209,6 +1211,8 @@ function M._tick(st, cfg, ufhw, ctx)
 		io.stderr:write("inform: 11k-scan requested -- asking a client for a beacon report now\n")
 		M._rrm_next_request = 0
 	end
+	-- The controller's nightly `syswrapper.sh dfs-reset` (openwrt/dfsreset.lua).
+	pcall(M._dfsreset.tick, M._time(), cfg and cfg.hwassign, M._ucihelper, M._sysinfo)
 	-- `syswrapper.sh upgrade <url>` over SSH: the same hand-off as an inform
 	-- `upgrade` (upgrade.lua) -- the URL itself is never fetched.
 	if M._upgrade_requested() then
