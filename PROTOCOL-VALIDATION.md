@@ -2068,6 +2068,102 @@ temporary WPA2 WLAN on ath10k, ath9k, mt76 2.4 GHz and mt76 5 GHz DFS: three mis
 → every BSS DOWN with no SSID; one answer → back up with its SSID and channel. The fork's
 `wlansched.set_bss` is the same sequence, unit-tested only.
 
+#### The walled garden ("Pre-Authorization Access"): two forms, split by what the entry looks like
+
+Everything up to "This fork" is upstream's (e6395d7 and afd7b32, 2026-10-26 and 28), from
+the controller (10.6.106 `internal-dependencies.jar`, CFR: `com/ubnt/service/config/hyFnQ`,
+`ubntconf/YcZSaTCMOYFEMGE`, `ubntconf/jNUeeSBEuWe`) and the AP firmware (U7LR 6.8.2
+`/bin/walled_action.sh`, plaintext), and is the evidence this port rests on.
+
+The site's `allowed_subnet_<n>` / `restricted_subnet_<n>` lists are split per entry by what
+it looks like, not by which list it is in. An IPv4 address or CIDR becomes ebtables rules; a
+name that passes Guava's `InternetDomainName.isValid` becomes a `dnsmasq.walled_garden` key.
+That check rejects an all-digit rightmost label, so the two sets never overlap.
+
+**The IP half** carries no port, unlike the portal's own accepts:
+
+    -t nat -I GUESTIN  -p 0x800 --ip-dst <net> -j ACCEPT
+    -t nat -I GUESTOUT -p 0x800 --ip-src <net> -j ACCEPT
+
+and per restricted address `-t nat -A GUESTIN -p 0x800 --ip-dst <net> -j DROP`. Upstream's
+port-specific parser dropped both lines as unknown shapes. **The fork never had that defect:**
+`unifi/guest.lua` replays every fragment by what it says, so the port-less accepts were
+always replayed at the head of their chain, and the egress twin on `ip saddr`. Today's test
+(`guest: a port-less garden IP accept lands above every drop, both ways, with the portal on`)
+feeds exactly those lines, behind the lab portal capture (`GUESTIN -P DROP`), through the
+parser and `guestguard.script`.
+
+**The domain half** is three empty chains and the jumps into them, plus the names and the
+job that keeps them fresh (the lab's push, addresses mapped to documentation ranges):
+
+    -t nat -N ALLOWED_DOMAIN_IN  -P RETURN   /  -t nat -I GUESTIN  -p 0x800 -j ALLOWED_DOMAIN_IN
+    -t nat -N ALLOWED_DOMAIN_OUT -P RETURN   /  -t nat -I GUESTOUT -p 0x800 -j ALLOWED_DOMAIN_OUT
+    -t nat -N RESTRICTED_DOMAIN_IN -P RETURN /  -t nat -A GUESTIN  -p 0x800 -j RESTRICTED_DOMAIN_IN
+    cron.1.job.1.schedule=*/10 * * * *
+    cron.1.job.1.cmd=syswrapper.sh refresh-walled-garden 1
+    dnsmasq.walled_garden.1.status=enabled
+    dnsmasq.walled_garden.1.site.1.allowed=www.example.net
+    dnsmasq.walled_garden.1.site.2.allowed=example.com
+    dnsmasq.walled_garden.1.site.1.restricted=ads.example.org
+
+- The garden index is always `1`. `allowed` and `restricted` are indexed independently, both
+  from 1, in a Java `Set`'s iteration order, so the index is all there is.
+- The whole block is emitted only when the **allowed** domain set is non-empty, so a garden
+  of restricted domains alone never reaches the device.
+- The cron job and the block exist only when `!device.supportIPSet()`: `fw_caps 0x40000` is
+  unclaimed here on purpose, because with it the controller sends an ipset form instead.
+- Firmware: `walled_action.sh` flushes the three chains, runs `nslookup` over each name
+  twice (round-robin records), dedupes the IPv4 answers and appends `--ip-dst ... -j ACCEPT`
+  / `--ip-src ... -j ACCEPT` / `--ip-dst ... -j DROP`. A failed lookup leaves that site out.
+
+**This fork.** `unifi/guest.lua` reads the names (`wg_allowed`, `wg_restricted`; at most 32
+per list; `is_hostname` as strict as the controller's check). The chains the controller
+declares are replayed like any other, and `guestguard.script` fills them from
+`live.garden`, the addresses `openwrt/walledgarden.lua` resolved. The three differences from
+upstream, each deliberate:
+- **No lookup ever runs in the heartbeat.** Upstream bounded the blocking `nslookup` (5 s
+  budget, a signature guard, a retry window) and still blocked the loop for up to about
+  10 s inside `handle_response`. Here a round is a background shell loop writing a file; the
+  tick starts it and collects the file on a later heartbeat.
+- The bounds are on the loop: 32 names a list, `timeout 5` per lookup where busybox has the
+  applet (25.12's busybox does not, and its `nslookup` gives up after about 5 s itself),
+  20 s per round, 16 addresses per name. A round not back after 40 s is given up on.
+- The refresh follows the controller's cron job as the fork's other verbs do:
+  `syswrapper.sh refresh-walled-garden 1` is installed in the crontab, the hook leaves a
+  dated request, the daemon serves it. A round also starts on a new name list and at boot,
+  and an hour after the last one for a site whose cron job never arrived.
+
+Answers are untrusted input to nft statements. Only a strictly formed unicast IPv4 address is
+kept (no leading zeros, not 0/8, 127/8 or 224/4 and above), and `guestguard.script` checks
+each again, and the copy read back from `state.json`, before it writes a rule.
+
+Verification, 2026-11-06:
+- **Unit (Lua 5.1, mimir):** the port-less lines through the parser, the portal on
+  (`GUESTIN` policy DROP), and the generated nft; the name parse, cap and hostname check;
+  the round's command, its collection, its give-up; the kept answer; the tick (nothing
+  launched while a round runs, one rebuild per change, pruning, boot from state, the cron
+  request, retry). 17 guards mutation-tested red, and the insert-at-head of `-I` for the IP half.
+- **Docker (`openwrt/rootfs:x86-64-25.12.0`, nft 1.1.6, mimir):** the generated script for
+  the lab capture plus the garden applied with `nft -f`, rc 0; applied again, rc 0, and
+  `nft list table bridge openuf_guest` identical (same md5). `guestin` and `guestout` list
+  the port-less accept first, then the jump into the allowed chain, with every drop and the
+  policy `drop` below; `allowed_domain_in`/`_out` and `restricted_domain_in` hold the
+  resolved addresses. The round's shell loop against a blackholed resolver (8 names): the
+  launch returned at once, the loop cut itself at the 20 s budget (21 s measured) after
+  four lookups, `@cut` written. Against a real resolver the 25.12 `nslookup` output (A and
+  AAAA pairs, the resolver's own address first) parsed to the two IPv4 addresses, and an
+  NXDOMAIN name produced none.
+- **Hardware: not done.** A real guest client reaching an allowed site, or being refused a
+  restricted one, through this fork on a real radio is **unconfirmed**. Upstream's own tier
+  3 only confirmed the feature inert on APs that run no portal.
+
+Trades, as upstream stated them and as they stand here: the garden is IPv4 only and
+resolved on the AP, so a name whose answer differs from the client's (a CDN, geo-DNS) can be
+reachable at an address openUF never saw; the firmware has the same limit. With the name
+list unchanged, an address that moved is picked up at the next refresh, not at the next
+push. A name that resolves to a private address opens that address to guests, as it does on
+the firmware. Only the index `1` job is installed.
+
 ### `atf.*` — Airtime Fairness
 
 The AP's own Airtime Fairness switch, sent only to a device claiming `wifi_caps` bit `0x20`:

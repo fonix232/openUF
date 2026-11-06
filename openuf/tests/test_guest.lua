@@ -61,6 +61,27 @@ local function portal_lab()
 	return s
 end
 
+-- The walled garden's IP half as the 10.6.106 lab pushed it (2026-10-26): a
+-- port-less accept in each direction, inserted at the head, next to the three
+-- chain declarations of its domain half. Indexed after the portal fixture's.
+local GARDEN = table.concat({
+	"ebtables.70.cmd=-t nat -I GUESTIN -p 0x800 --ip-dst 198.51.100.7 -j ACCEPT",
+	"ebtables.71.cmd=-t nat -I GUESTOUT -p 0x800 --ip-src 198.51.100.7 -j ACCEPT",
+	"ebtables.72.cmd=-t nat -N ALLOWED_DOMAIN_IN -P RETURN",
+	"ebtables.73.cmd=-t nat -I GUESTIN -p 0x800 -j ALLOWED_DOMAIN_IN",
+	"ebtables.74.cmd=-t nat -N ALLOWED_DOMAIN_OUT -P RETURN",
+	"ebtables.75.cmd=-t nat -I GUESTOUT -p 0x800 -j ALLOWED_DOMAIN_OUT",
+	"ebtables.76.cmd=-t nat -N RESTRICTED_DOMAIN_IN -P RETURN",
+	"ebtables.77.cmd=-t nat -A GUESTIN -p 0x800 -j RESTRICTED_DOMAIN_IN",
+	"cron.status=enabled", "cron.1.status=enabled", "cron.1.user=root",
+	"cron.1.job.1.status=enabled", "cron.1.job.1.schedule=*/10 * * * *",
+	"cron.1.job.1.cmd=syswrapper.sh refresh-walled-garden 1",
+	"dnsmasq.walled_garden.1.status=enabled",
+	"dnsmasq.walled_garden.1.site.1.allowed=www.example.net",
+	"dnsmasq.walled_garden.1.site.2.allowed=example.com",
+	"dnsmasq.walled_garden.1.site.1.restricted=ads.example.org",
+}, "\n") .. "\n"
+
 local function bodies(spec, chain)
 	local out = {}
 	for _, r in ipairs(spec.chains[chain].rules) do out[#out + 1] = gg.rule_text(r) end
@@ -359,6 +380,111 @@ return {
 				.chains.GUESTIN.policy == "accept", "no URL: not enforced, the old open fallback")
 			p = guest.parse(portal_lab():gsub("redirector%.url=[^\n]*", "redirector.url=http://x/\r"))
 			assert_nil(p.portal_url, "a URL with a control character is refused")
+		end
+	},
+	{
+		name = "guest: a port-less garden IP accept lands above every drop, both ways, with the portal on",
+		fn = function()
+			local p = guest.parse(portal_lab() .. GARDEN)
+			assert_eq(#p.unknown, 0, "the garden's shapes are known: " .. table.concat(p.unknown, " | "))
+			local spec = guest.spec_from(p)
+			assert_eq(spec.chains.GUESTIN.policy, "drop", "the portal's default-deny")
+			local function first_drop(b)
+				for i, t in ipairs(b) do if t:match(" drop$") then return i end end
+			end
+			local function index(b, want)
+				for i, t in ipairs(b) do if t == want then return i end end
+			end
+			local g, o = bodies(spec, "GUESTIN"), bodies(spec, "GUESTOUT")
+			local gi = index(g, "ether type ip ip daddr 198.51.100.7 accept")
+			local oi = index(o, "ether type ip ip saddr 198.51.100.7 accept")
+			assert_not_nil(gi, "GUESTIN carries the destination accept")
+			assert_not_nil(oi, "GUESTOUT carries the source accept")
+			assert_true(gi < first_drop(g), "and it is above every drop in GUESTIN")
+			assert_true(oi < (first_drop(o) or math.huge), "and above every drop in GUESTOUT")
+			local nft = gg.script(spec, {"phy0-ap1"}, {})
+			local lines = {}
+			for l in nft:gmatch("[^\n]+") do lines[#lines + 1] = l end
+			local function at(pat)
+				for i, l in ipairs(lines) do if l:find(pat, 1, true) then return i end end
+			end
+			local T = "add rule bridge openuf_guest "
+			assert_true(at(T .. "guestin ether type ip ip daddr 198.51.100.7 accept") < at(T .. "guestin ether type ip6 drop"),
+				"in the generated nft, ahead of the first drop")
+			assert_true(at(T .. "guestin ether type ip ip daddr 198.51.100.7 accept") < at(T .. "guestin drop"),
+				"and the policy drop")
+			assert_true(at(T .. "guestout ether type ip ip saddr 198.51.100.7 accept") < at(T .. "guestout ether type ip6 drop"),
+				"egress too")
+		end
+	},
+	{
+		name = "guest: the garden's domain half is read as names, in push order, capped and checked",
+		fn = function()
+			local p = guest.parse(portal_lab() .. GARDEN)
+			assert_eq(table.concat(p.wg_allowed, ","), "www.example.net,example.com", "allowed sites in push order")
+			assert_eq(table.concat(p.wg_restricted, ","), "ads.example.org", "restricted sites")
+			local spec = guest.spec_from(p)
+			assert_eq(table.concat(spec.wg_allowed, ","), "www.example.net,example.com", "carried to the spec")
+			assert_eq(table.concat(spec.wg_restricted, ","), "ads.example.org", "both lists")
+			for _, c in ipairs({"ALLOWED_DOMAIN_IN", "ALLOWED_DOMAIN_OUT", "RESTRICTED_DOMAIN_IN"}) do
+				assert_eq(spec.chains[c].policy, "return", c .. ": the controller's empty chain is kept")
+			end
+			local off = guest.parse((portal_lab() .. GARDEN):gsub("walled_garden%.1%.status=enabled",
+				"walled_garden.1.status=disabled"))
+			assert_eq(#off.wg_allowed + #off.wg_restricted, 0, "status=disabled: no sites")
+			assert_eq(#guest.parse(portal_lab()).wg_allowed, 0, "no garden keys: none")
+			local bad
+			local err = with_stderr(function()
+				bad = guest.parse(portal_lab() .. "dnsmasq.walled_garden.1.status=enabled\n"
+					.. "dnsmasq.walled_garden.1.site.2.allowed=ok.example\n"
+					.. "dnsmasq.walled_garden.1.site.1.allowed=a b; reboot\n"
+					.. "dnsmasq.walled_garden.1.site.3.allowed=ok.example\n"
+					.. "dnsmasq.walled_garden.1.site.4.allowed=198.51.100.7\n")
+			end)
+			assert_eq(table.concat(bad.wg_allowed, ","), "ok.example", "malformed dropped, repeat taken once")
+			assert_contains(err, "reboot", "the malformed name is reported")
+			assert_contains(err, "198.51.100.7", "an IPv4 literal is not a site name")
+			local lines = {"dnsmasq.walled_garden.1.status=enabled"}
+			for i = 1, guest.WG_MAX_SITES + 3 do
+				lines[#lines + 1] = ("dnsmasq.walled_garden.1.site.%d.allowed=h%d.example"):format(i, i)
+				lines[#lines + 1] = ("dnsmasq.walled_garden.1.site.%d.restricted=r%d.example"):format(i, i)
+			end
+			local capped
+			local err2 = with_stderr(function() capped = guest.parse(portal_lab() .. table.concat(lines, "\n") .. "\n") end)
+			assert_eq(#capped.wg_allowed, guest.WG_MAX_SITES, "the allowed list is capped")
+			assert_eq(#capped.wg_restricted, guest.WG_MAX_SITES, "and the restricted one independently")
+			assert_contains(err2, ("h%d.example"):format(guest.WG_MAX_SITES + 1), "the first name dropped is named")
+			for _, good in ipairs({"example.com", "a.b.c.d.example", "x-1.example.com", "under_score.example", "example.com."}) do
+				assert_true(guest.is_hostname(good), good)
+			end
+			for _, no in ipairs({"198.51.100.7", "198.51.100.7/32", "a b.example", "a;reboot.example", "-lead.example",
+					"trail-.example", "", ".example.com", "a..b.example", "example.1", "$(id).example",
+					string.rep("a", 64) .. ".example"}) do
+				assert_false(guest.is_hostname(no), ("%q"):format(no))
+			end
+		end
+	},
+	{
+		name = "guestguard: resolved garden addresses fill the controller's three domain chains, nothing else",
+		fn = function()
+			local spec = guest.spec_from(guest.parse(portal_lab() .. GARDEN))
+			local live = {garden = {allowed = {"198.51.100.20", "198.51.100.21", "1.2.3.4; flush ruleset", "1.2.3.0/24"},
+				restricted = {"198.51.100.30", "not an address"}}}
+			local nft = gg.script(spec, {"phy0-ap1"}, live)
+			local T = "add rule bridge openuf_guest "
+			assert_contains(nft, T .. "allowed_domain_in ether type ip ip daddr 198.51.100.20 accept\n", "allowed in")
+			assert_contains(nft, T .. "allowed_domain_in ether type ip ip daddr 198.51.100.21 accept\n", "every address")
+			assert_contains(nft, T .. "allowed_domain_out ether type ip ip saddr 198.51.100.20 accept\n", "and its replies out")
+			assert_contains(nft, T .. "restricted_domain_in ether type ip ip daddr 198.51.100.30 drop\n", "restricted")
+			assert_true(not nft:find("flush", 1, true) and not nft:find("1.2.3.", 1, true)
+				and not nft:find("not an address", 1, true), "an answer that is not a plain address is never spliced")
+			local function at(pat) return nft:find(pat, 1, true) end
+			assert_true(at("jump allowed_domain_in") < at("guestin ether type ip6 drop"),
+				"the controller's jump sits above every drop")
+			assert_true(not gg.script(spec, {"phy0-ap1"}, {}):find("198.51.100.20", 1, true), "no garden: no rules")
+			local plain = guest.spec_from(guest.parse(portal_lab()))
+			assert_true(not gg.script(plain, {"phy0-ap1"}, live):find("198.51.100.20", 1, true),
+				"a push without the domain chains has nowhere to put them")
 		end
 	},
 	{

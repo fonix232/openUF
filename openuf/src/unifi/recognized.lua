@@ -81,6 +81,11 @@ M.RECOGNIZED_SYSTEM_CFG = {
 	-- Guest portal on/off (guest.portal_wlans) and where it is (guest.parse).
 	"^redirector%.status$",
 	"^redirector%.url$",
+	-- The walled garden's domain half (guest.parse). dnsmasq.status and
+	-- dnsmasq.<n>.* ask for a local DNS answerer openUF does not run, so they
+	-- stay in the report.
+	"^dnsmasq%.walled_garden%.%d+%.status$",
+	"^dnsmasq%.walled_garden%.%d+%.site%.%d+%.",
 	-- SNMP Monitoring (unifi/snmp.lua -> openwrt/snmp.lua).
 	"^snmp%.status$",
 	"^snmp%.version$",

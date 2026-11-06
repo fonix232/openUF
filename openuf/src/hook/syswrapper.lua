@@ -54,6 +54,7 @@ local function usage()
 		"       syswrapper.sh netmodel-restore   (put the pre-openUF network and WiFi config back)\n" ..
 		"       syswrapper.sh 11k-scan           (the controller's nightly neighbour scan)\n" ..
 		"       syswrapper.sh dfs-reset          (the controller's nightly return to a pinned DFS channel)\n" ..
+		"       syswrapper.sh refresh-walled-garden [<n>]  (the controller's ten-minute guest garden DNS refresh)\n" ..
 		"       syswrapper.sh upgrade <url>      (hand an upgrade to owut; the URL is not fetched)\n" ..
 		"       syswrapper.sh reprovision        (have the controller re-send its full config)\n" ..
 		"\n" ..
@@ -249,6 +250,24 @@ local function cmd_dfs_reset()
 	return true
 end
 
+-- refresh-walled-garden [<n>]
+-- The controller's ten-minute cron job, pushed with the guest walled garden
+-- (n is the garden's index, 1 so far). The names are resolved by the inform
+-- daemon (openwrt/walledgarden.lua), which never waits on DNS, so this only
+-- leaves a dated request.
+local wg_request_file = "/tmp/openuf-wg-request"
+local function cmd_refresh_walled_garden()
+	local f = io.open(wg_request_file, "w")
+	if not f then
+		io.stderr:write("syswrapper: cannot write " .. wg_request_file .. "\n")
+		return false
+	end
+	f:write(tostring(os.time()), "\n")
+	f:close()
+	io.stdout:write("syswrapper: walled garden refresh requested; the inform daemon resolves it on its next heartbeat\n")
+	return true
+end
+
 -- upgrade <url> / upgrade2 <url>
 -- The controller's SSH upgrade verb. The URL is UniFi firmware and is never
 -- fetched; the inform daemon hands the request to owut when
@@ -287,6 +306,8 @@ local function main(args)
 		if not cmd_11k_scan() then os.exit(1) end
 	elseif cmd == "dfs-reset" then
 		if not cmd_dfs_reset() then os.exit(1) end
+	elseif cmd == "refresh-walled-garden" then
+		if not cmd_refresh_walled_garden() then os.exit(1) end
 	elseif cmd == "reprovision" then
 		cmd_reprovision()
 	elseif cmd == "upgrade" or cmd == "upgrade2" then
@@ -313,11 +334,13 @@ return {
 	cmd_netmodel_retry = cmd_netmodel_retry,
 	cmd_11k_scan = cmd_11k_scan,
 	cmd_dfs_reset = cmd_dfs_reset,
+	cmd_refresh_walled_garden = cmd_refresh_walled_garden,
 	cmd_upgrade  = cmd_upgrade,
 	cmd_reprovision = cmd_reprovision,
 	_upgrade_request_file = function(p) upgrade_request_file = p end,
 	_scan_request_file = function(p) scan_request_file = p end,
 	_dfs_request_file = function(p) dfs_request_file = p end,
+	_wg_request_file = function(p) wg_request_file = p end,
 	is_hex32 = is_hex32,
 	is_url   = is_url,
 	_set_state = function(s) state = s end,

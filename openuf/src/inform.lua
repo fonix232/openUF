@@ -34,6 +34,7 @@ local l2guard   = require("openwrt.l2guard")
 local guest     = require("unifi.guest")
 local guestguard = require("openwrt.guestguard")
 local guestportal = require("openwrt.guestportal")
+local walledgarden = require("openwrt.walledgarden")
 local airtime   = require("openwrt.airtime")
 local staevents = require("unifi.staevents")
 local dnswatch  = require("openwrt.dnswatch")
@@ -91,6 +92,7 @@ M._l2guard    = l2guard
 M._guest      = guest
 M._guestguard = guestguard
 M._guestportal = guestportal
+M._walledgarden = walledgarden
 M._airtime    = airtime
 M._staevents  = staevents
 M._dnswatch   = dnswatch
@@ -1188,6 +1190,7 @@ function M._tick(st, cfg, ufhw, ctx)
 	-- come and go.
 	pcall(M._l2guard_resync, st, cfg)
 	pcall(M._guest_resync, st, cfg)
+	pcall(M._guest_wg_tick, st, cfg)
 	pcall(M._hairpin_resync)
 	pcall(M._rrbguard_tick)
 	pcall(M._block_resync, st)
@@ -1619,8 +1622,81 @@ end
 
 -- The portal's runtime state for guestguard.reconcile.
 function M._guest_live(st)
+	local store = type(st) == "table" and type(st.guest_wg_ips) == "table" and st.guest_wg_ips or {}
+	local wg = M._walledgarden
 	return {macs = M._guest.authorized_macs(st),
-		selfrun = M._guest_selfrun_on}
+		selfrun = M._guest_selfrun_on,
+		garden = wg and {allowed = wg.addresses(store.allowed),
+			restricted = wg.addresses(store.restricted)} or nil}
+end
+
+-- The walled garden's domain half (openwrt/walledgarden.lua): names in
+-- st.guest, resolved addresses in st.guest_wg_ips = {allowed = {name = {ip}},
+-- restricted = {...}}, which a restart rebuilds the chains from before any
+-- DNS has answered. Never waits on DNS: a round runs in the background and is
+-- collected on a later heartbeat. A round starts when the name list is new
+-- (a push, a restart), when the controller's cron job leaves a request
+-- (`syswrapper.sh refresh-walled-garden 1`, every ten minutes), and
+-- GUEST_WG_RETRY after one that left a name unanswered. GUEST_WG_FALLBACK is
+-- for a site whose cron job never arrived. Returns true when it rebuilt.
+M.GUEST_WG_FALLBACK = 3600
+M._guest_wg_next = 0
+M._guest_wg_sig = nil
+function M._guest_wg_tick(st, cfg)
+	local wg, g = M._walledgarden, st and st.guest
+	if not (wg and M._guestguard and type(g) == "table" and g.enabled) then return false end
+	if cfg and cfg.config and cfg.config.guest_isolation == false then return false end
+	local now = M._time()
+	local names = {allowed = g.wg_allowed or {}, restricted = g.wg_restricted or {}}
+	local all = {}
+	for _, which in ipairs({"allowed", "restricted"}) do
+		for _, n in ipairs(names[which]) do all[#all + 1] = n end
+	end
+	local rebuild = false
+	-- A name the controller stopped pushing stops being enforced now.
+	local store = type(st.guest_wg_ips) == "table" and st.guest_wg_ips or {}
+	local pruned = {}
+	for _, which in ipairs({"allowed", "restricted"}) do
+		local p, changed = wg.prune(store[which], names[which])
+		pruned[which] = p
+		rebuild = rebuild or changed
+	end
+	if rebuild then
+		st.guest_wg_ips = (#all > 0) and pruned or nil
+	elseif #all == 0 and st.guest_wg_ips ~= nil then
+		st.guest_wg_ips, rebuild = nil, true
+	end
+	local done = wg.poll(now)
+	if done then
+		local out, any_changed, unanswered = {}, false, done.lost or done.cut
+		for _, which in ipairs({"allowed", "restricted"}) do
+			local map, changed, un = wg.merge(names[which], (st.guest_wg_ips or {})[which],
+				done.answered or {})
+			out[which] = map
+			any_changed = any_changed or changed
+			unanswered = unanswered or un
+		end
+		if not done.lost then
+			st.guest_wg_ips = out
+			rebuild = rebuild or any_changed
+		end
+		M._guest_wg_next = now + (unanswered and wg.RETRY or M.GUEST_WG_FALLBACK)
+	end
+	if rebuild then M._state.save(st) end
+	local sig = table.concat(names.allowed, ",") .. " " .. table.concat(names.restricted, ",")
+	if #all == 0 then
+		M._guest_wg_sig = sig
+	else
+		if wg.requested(now) or sig ~= M._guest_wg_sig then M._guest_wg_next = 0 end
+		if now >= M._guest_wg_next and wg.start(all, now) then
+			M._guest_wg_sig = sig
+		end
+	end
+	if rebuild then
+		io.stderr:write("guest: walled-garden addresses changed -- rebuilding\n")
+		M._guestguard.reconcile(g, g.ifnames or {}, M._guest_live(st))
+	end
+	return rebuild
 end
 
 -- selfrun_guest_mode (mgmt_cfg, every push): what guests get while the AP

@@ -19,7 +19,9 @@
 	scan on its next heartbeat (inform.lua's _scan_requested), so the scan
 	code stays in one place and the result rides out on the next inform.
 	The second job, dfs-reset (02:00, on a site with a 5 GHz radio pinned to a
-	DFS channel), is the same hand-off to openwrt/dfsreset.lua.
+	DFS channel), is the same hand-off to openwrt/dfsreset.lua. The third,
+	refresh-walled-garden (every ten minutes, with a guest walled garden), is
+	the hand-off to openwrt/walledgarden.lua.
 
 	Timezone -> UCI system.@system[0].timezone (the wire string IS a POSIX TZ
 	string, which is exactly what that option holds); NTP -> system.ntp.server.
@@ -72,6 +74,9 @@ M.END_MARK   = "# openuf-cron-end"
 M.CRON_COMMANDS = {
 	["syswrapper.sh 11k-scan"]  = "/usr/bin/syswrapper.sh 11k-scan",
 	["syswrapper.sh dfs-reset"] = "/usr/bin/syswrapper.sh dfs-reset",
+	-- The walled garden's DNS refresh, every ten minutes; the index is the
+	-- garden's, 1 so far (openwrt/walledgarden.lua).
+	["syswrapper.sh refresh-walled-garden 1"] = "/usr/bin/syswrapper.sh refresh-walled-garden 1",
 }
 
 local function get_uci()

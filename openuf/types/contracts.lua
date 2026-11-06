@@ -348,6 +348,8 @@
 ---@field sets table<string, string[]>
 ---@field unknown string[]   guest-chain fragments not understood, verbatim
 ---@field unenforced string[] understood and not applied (wired guest networks)
+---@field wg_allowed string[]    walled-garden domain names, push order (dnsmasq.walled_garden)
+---@field wg_restricted string[] restricted ones
 
 ---@class GuestSpec          unifi/guest.lua's spec_from(); what guestguard enforces
 ---@field enabled boolean
@@ -359,6 +361,8 @@
 ---@field sets table<string, string[]>?
 ---@field dropped string[]?  rules left out (the portal's), verbatim
 ---@field ifnames string[]?  the VAP netdevs, recorded for the startup rebuild
+---@field wg_allowed string[]?    walled-garden names to resolve and allow
+---@field wg_restricted string[]? ... and to resolve and drop
 
 -- ─── Settings ────────────────────────────────────────────────────────────────
 

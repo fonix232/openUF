@@ -262,6 +262,19 @@ return {
 		end
 	},
 	{
+		name = "sysconf: the garden's refresh job is installed, for the index this build provides",
+		fn = function()
+			local _, _, files = fresh(system_db("IST-5:30", nil, nil))
+			local cron = sysconf.parse("cron.status=enabled\ncron.1.status=enabled\ncron.1.user=root\n"
+				.. "cron.1.job.1.status=enabled\ncron.1.job.1.schedule=*/10 * * * *\n"
+				.. "cron.1.job.1.cmd=syswrapper.sh refresh-walled-garden 1\n").cron
+			local out = with_stderr(function() assert_true(sysconf.apply_cron(cron), "installed") end)
+			assert_contains(files[sysconf.CRONTAB],
+				"*/10 * * * * /usr/bin/syswrapper.sh refresh-walled-garden 1\n", "the hook's line")
+			assert_nil(out:find("not a command", 1, true), "not declined")
+		end
+	},
+	{
 		name = "sysconf: apply_cron refuses commands this build does not provide and malformed schedules",
 		fn = function()
 			local _, cmds, files = fresh(system_db("IST-5:30", nil, nil))

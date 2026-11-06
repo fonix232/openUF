@@ -48,6 +48,13 @@
 	  redirect_dns       accept (no local resolver: DNS passes for everyone)
 	and a separate `ip openuf_guest` table NAT-redirects the marked HTTP to
 	guestportal.PORT, where the inform loop answers with the portal's 302.
+	The walled garden's domain half fills the three chains the controller
+	declares for it, from the addresses openwrt/walledgarden.lua resolved
+	(live.garden = {allowed = {ip...}, restricted = {ip...}}):
+	ALLOWED_DOMAIN_IN accepts by destination, ALLOWED_DOMAIN_OUT by source,
+	RESTRICTED_DOMAIN_IN drops by destination. The jumps into them are the
+	controller's, so they sit where its -I and -A put them: the allowed ones
+	above every drop, the restricted one among the restricted subnets.
 	A guest's own speed limit (rate-update) is not here: it is every
 	client's per-client WiFi Speed Limit (shaper.lua).
 	A rebuild is one transaction that replaces the table, so an
@@ -84,6 +91,7 @@ end
 local function cidr(s)
 	return type(s) == "string" and s:match("^[%d%.]+/?%d*$") and s or nil
 end
+local ipv4 = require("unifi.guest").ipv4_cidr
 local function setname(s)
 	return type(s) == "string" and s:match("^[%a_][%w_]*$") and s or nil
 end
@@ -135,6 +143,13 @@ function M.rule_text(r)
 	return table.concat(p, " ")
 end
 
+-- The domain half's chains: which resolved list fills each, and how.
+local GARDEN_CHAINS = {
+	ALLOWED_DOMAIN_IN    = {"allowed", "ether type ip ip daddr %s accept"},
+	ALLOWED_DOMAIN_OUT   = {"allowed", "ether type ip ip saddr %s accept"},
+	RESTRICTED_DOMAIN_IN = {"restricted", "ether type ip ip daddr %s drop"},
+}
+
 M.NAT_TABLE = "ip openuf_guest"
 -- The firmware's REDIRECT_HTTP mark; its iptables side matches it under
 -- 0xc0000000.
@@ -168,7 +183,8 @@ end
 
 -- The whole table as one nft script, or nil + reason. live: the portal's
 -- runtime state, {macs = {mac...},
--- selfrun = bool, bridge = {[ifname] = bridge MAC}}.
+-- selfrun = bool, bridge = {[ifname] = bridge MAC}, garden = {allowed = {ip...},
+-- restricted = {ip...}}}.
 function M.script(spec, ifnames, live)
 	live = live or {}
 	local T = M.NFT_TABLE
@@ -219,6 +235,18 @@ function M.script(spec, ifnames, live)
 			if body and not seen[body] then
 				seen[body] = true
 				L[#L + 1] = ("add rule %s %s %s"):format(T, c, body)
+			end
+		end
+		local garden = GARDEN_CHAINS[name]
+		if garden then
+			-- DNS answers are untrusted: a plain dotted quad or nothing.
+			for _, ip in ipairs((live.garden or {})[garden[1]] or {}) do
+				local body = type(ip) == "string" and not ip:find("/", 1, true)
+					and ipv4(ip) and garden[2]:format(ip)
+				if body and not seen[body] then
+					seen[body] = true
+					L[#L + 1] = ("add rule %s %s %s"):format(T, c, body)
+				end
 			end
 		end
 		if ch.policy == "accept" or ch.policy == "drop" then
@@ -295,7 +323,7 @@ function M.reconcile(spec, ifnames, live)
 		return false
 	end
 	local portal = spec.portal_url ~= nil
-	local lv = {macs = live and live.macs,
+	local lv = {macs = live and live.macs, garden = live and live.garden,
 		selfrun = live and live.selfrun, bridge = {}}
 	local unbridged = 0
 	if portal then

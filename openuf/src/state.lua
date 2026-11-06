@@ -142,6 +142,11 @@ M.FIELDS = {
 	-- one-shot cmds, so both have to outlive a restart.
 	guest_wlans               = "table",
 	guest_authorized          = "table",
+	-- The walled garden's domain half, resolved: {allowed = {name = {ip, ...}},
+	-- restricted = {...}}. A restart rebuilds the guest table from the last
+	-- good answers instead of waiting on DNS, and a name that stops resolving
+	-- keeps the addresses it had (openwrt/walledgarden.lua).
+	guest_wg_ips              = "table",
 	-- Per-client WiFi Speed Limits from rate-update ({mac = {up=, down=}}
 	-- kbps, -1 = none), one association each (inform._shaper_resync).
 	sta_rates                 = "table",

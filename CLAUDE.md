@@ -22,6 +22,7 @@ The daemon's source is `openuf/src/`, in two sides with one rule between them
   per-port VLAN), `sysconf.lua`, `rrmscan.lua` (802.11k beacon reports),
   `siblings.lua` (openUF APs exchanging BSSIDs, frequencies and Lock-to-AP lists on UDP 10011),
   `idlescan.lua` (off-channel sweeps of idle radios, sibling-channel scans),
+  `walledgarden.lua` (the guest walled garden's names resolved in the background, for `guestguard.lua`),
   `das.lua` (RADIUS CoA/Disconnect dispatcher on UDP 3799)
 - enforcement modules with their own nft tables / tc: `firewall.lua` (`bridge openuf`),
   `bcfilter.lua` (`bridge openuf_bcfilt`), `shaper.lua`, `l2guard.lua`,

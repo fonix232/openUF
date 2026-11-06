@@ -787,6 +787,7 @@ announced on stderr rather than passed off as a fresh install.
 | `inform_url` | URL for the inform heartbeat (every 10 s, or the interval the controller's `noop` names). Seeded from the `inform_url` option on a first boot (or after a factory reset) and overwritten by the controller or by `syswrapper.sh set-inform`; once present here it always wins over the option |
 | `use_gcm` | `true` when the controller has requested AES-128-GCM encryption (`use_aes_gcm=true` in mgmt_cfg) |
 | `blocked_stas` | MACs blocked from the controller's Clients view; re-applied to nftables on startup and to hostapd's deny list on every heartbeat, so blocks survive restarts |
+| `guest_wg_ips` | The guest walled garden's resolved domain names, `{allowed = {name = {ip, ...}}, restricted = {...}}` (⚠️ unconfirmed with a real guest client). A restart rebuilds the guest table from it before any DNS answers, and a name that stops resolving keeps its addresses |
 | `guest_wlans`, `guest_authorized` | Guest portal bookkeeping (⚠️ lab-validated upstream only, unconfirmed on hardware). `guest_wlans` holds the wlanconf ids of the guest WLANs while the controller has the portal on, replaced on every full config push. `guest_authorized` maps each MAC the controller sent `authorize-guest` for to the time it arrived, and `unauthorize-guest` removes it and disconnects the guest. On a portal WLAN, each station's `authorized` is reported from this map; everywhere else it is `true`. It also fills the guest table's `openuf_authorized` set. At most 512 entries; past that the oldest goes, and the controller re-authorizes it on the next heartbeat if its guest record is still active |
 | `sta_rates` | Each client's own WiFi Speed Limit from `rate-update` (`up`/`down` in kbps, `-1` = no limit that way), for clients associated to this AP only. A client's entry goes when it leaves or reconnects, as the firmware's per-station class does; the controller sends it again on every connect |
 | `guest_selfrun`, `guest_vaps_down` | `mgmt_cfg`'s `selfrun_guest_mode` (`pass` or `off`), and the guest VAP netdevs `off` took down while the controller was unreachable, until they are back on the air — also across a restart (⚠️ lab-validated upstream only) |
@@ -1640,7 +1641,7 @@ a guest gets, exactly as on a UniFi AP:
 |---|---|
 | DHCP (broadcast), ARP requests, EAPOL | allowed |
 | DNS (UDP/TCP 53) | allowed; with **restricted DNS** on, only to the listed servers |
-| Pre-authorization access (allowed subnets) | allowed, ahead of every drop |
+| Pre-authorization access (allowed subnets and domains) | allowed, ahead of every drop, both ways |
 | Post-authorization restrictions (restricted subnets), `224.0.0.0/4` | dropped |
 | Other broadcasts, **all IPv6** | dropped |
 | Everything else (the internet through the gateway) | allowed |
@@ -1650,10 +1651,48 @@ dropped. A device that claims `fw_caps 0x40000` gets the subnets as `ipset.*` se
 instead of inline rules; both forms are read (openUF does not claim the bit, so it gets
 the inline form).
 
+**The walled garden's domain names** (⚠️ unconfirmed with a real guest client on this fork).
+The controller splits "Pre-Authorization Access" by what each entry looks like: an IP or
+CIDR arrives as a port-less `-I GUESTIN -p 0x800 --ip-dst <net> -j ACCEPT` (and a
+`GUESTOUT --ip-src` twin), replayed like any other rule; a domain name arrives as a
+`dnsmasq.walled_garden.1.site.<n>.{allowed,restricted}` key plus three empty chains, which
+openUF fills with the addresses it resolves (`openwrt/walledgarden.lua`):
+`ALLOWED_DOMAIN_IN` accepts by destination, `ALLOWED_DOMAIN_OUT` by source (the replies),
+`RESTRICTED_DOMAIN_IN` drops by destination.
+
+- **Resolving never waits.** `nslookup` runs in a background shell loop (twice per name, as
+  the firmware does) and the heartbeat collects its file later, so a dead resolver cannot
+  delay an inform. Bounds: 32 names per list, 5 s per lookup, 20 s per round, 16 addresses
+  per name. A round not back after 40 s is given up on.
+- **When it runs:** on a new list of names (a push, a restart), when the controller's
+  `*/10 * * * *  syswrapper.sh refresh-walled-garden 1` job runs (installed in the crontab,
+  see "Cron runs only commands openUF provides"), two minutes after a round that left a name unanswered, and an hour after
+  the last one if no cron job ever came.
+- **The last good answer stands.** The addresses are kept per name in `state.json`
+  (`guest_wg_ips`); a restart rebuilds the rules from them before any DNS answers, and a
+  name that stops resolving keeps what it had. A name never resolved is not enforced. A name
+  the controller stops pushing is dropped at once.
+- **Answers are checked.** Only a plain unicast IPv4 address is accepted (no `0/8`,
+  loopback, multicast or reserved), then it is checked again before it reaches an nft rule.
+
+Limits: IPv4 only (AAAA is discarded); a name whose answer differs from the guest's (a CDN,
+geo-DNS) can be reachable at an address the AP never saw, as on UniFi firmware; a name that
+resolves to a private address opens it to guests. The controller emits the whole domain
+block only when the *allowed* list holds at least one domain, so restricted domains alone
+never arrive; put one allowed domain in, or restrict by subnet. Log lines:
+`walledgarden: <name> did not resolve -- keeping the last N address(es)`, `... and has no
+earlier answer -- not enforced` (check `nslookup <name>` on the AP),
+`guest: ignoring malformed walled-garden site`, `guest: walled garden: more than 32 ...`,
+`walledgarden: a lookup round did not come back in 40 s -- given up`, `guest: walled-garden
+addresses changed -- rebuilding`. Check:
+
+```sh
+nft list chain bridge openuf_guest allowed_domain_in
+nft list chain bridge openuf_guest restricted_domain_in
+```
+
 **Not implemented:**
 
-- Allowed/restricted **hostnames** (`ALLOWED_DOMAIN_*`, `RESTRICTED_DOMAIN_IN`): on a
-  UniFi AP dnsmasq fills those chains at runtime; here they stay empty.
 - A **wired** guest network (`--logical-in br<n>`) — logged as not enforced.
 - An SSID used by both a guest and a non-guest WLAN: the VAPs are matched by SSID and
   cannot be told apart, so it is refused and logged rather than guessed.
@@ -1950,9 +1989,11 @@ a steady state cost no flash writes. Malformed values (a timezone with a quote, 
 server name with a space, a schedule that is not five plain fields) are logged and
 refused.
 
-**Cron runs only commands openUF provides.** The two it installs are
-`syswrapper.sh 11k-scan` at `0 4 * * *`, the nightly neighbour scan, and
-`syswrapper.sh dfs-reset` at `0 2 * * *` (below). Anything else is
+**Cron runs only commands openUF provides.** The three it installs are
+`syswrapper.sh 11k-scan` at `0 4 * * *`, the nightly neighbour scan,
+`syswrapper.sh dfs-reset` at `0 2 * * *` (below), and
+`syswrapper.sh refresh-walled-garden 1` every ten minutes (a request for the guest walled
+garden's DNS refresh, served by the daemon on its next heartbeat; see the guest section). Anything else is
 logged as `not a command this build provides` and never written: crond runs it as
 root. The pushed `cron.<n>.user` is ignored, since that account does not exist here.
 

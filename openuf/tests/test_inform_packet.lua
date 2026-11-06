@@ -7198,4 +7198,83 @@ return {
 			if not ok then error(err, 0) end
 		end
 	},
+	{
+		name = "inform: the walled garden resolves in the background, rebuilds on a change, keeps what a lost name had",
+		fn = function()
+			local wg = inform._walledgarden
+			local orig = {exec = wg._exec, rf = wg._read_file, rm = wg._remove, gg = inform._guestguard,
+				time = inform._time, save = inform._state.save}
+			local cmds, files, lives = {}, {}, {}
+			wg._exec = function(c) if c:sub(-1) == "&" then cmds[#cmds + 1] = c end return 0 end
+			wg._read_file = function(p) return files[p] end
+			wg._remove = function(p) files[p] = nil end
+			wg._round = nil
+			inform._guestguard = setmetatable({reconcile = function(_, _, live)
+				lives[#lives + 1] = live
+				return true
+			end}, {__index = orig.gg})
+			local now = 1000
+			inform._time = function() return now end
+			inform._state.save = function() end
+			inform._guest_wg_next, inform._guest_wg_sig = 0, nil
+			local ans = function(name, ip) return "@@ " .. name .. "\nName:\t" .. name .. "\nAddress: " .. ip .. "\n" end
+			local ok, err = pcall(function()
+				local st = {guest = {enabled = true, ssids = {"Lobby"}, ifnames = {"phy0-ap1"},
+					wg_allowed = {"a.example"}, wg_restricted = {"r.example"}}}
+				inform._guest_wg_tick(st, {})
+				assert_eq(#cmds, 1, "the push's names start one background round")
+				assert_eq(#lives, 0, "and nothing is rebuilt before DNS has answered")
+				now = now + 10
+				inform._guest_wg_tick(st, {})
+				assert_eq(#cmds, 1, "a heartbeat while it runs launches nothing and waits for nothing")
+				files[wg.OUT_PREFIX .. "1000"] = ans("a.example", "198.51.100.20") .. ans("r.example", "198.51.100.30") .. "@end\n"
+				now = now + 10
+				inform._guest_wg_tick(st, {})
+				assert_eq(#lives, 1, "the answer rebuilds the guest table once")
+				assert_eq(lives[1].garden.allowed[1], "198.51.100.20", "allowed address")
+				assert_eq(lives[1].garden.restricted[1], "198.51.100.30", "restricted address")
+				assert_eq(st.guest_wg_ips.allowed["a.example"][1], "198.51.100.20", "kept in state")
+				assert_eq(inform._guest_wg_next, now + inform.GUEST_WG_FALLBACK,
+					"the next lookup waits for the controller's cron job, an hour at most")
+				now = now + 10
+				inform._guest_wg_tick(st, {})
+				assert_eq(#cmds, 1, "a repeat of the same names asks nothing")
+				-- A reboot: the table comes back from state before any lookup.
+				local boot = inform._guest_live({guest_wg_ips = st.guest_wg_ips})
+				assert_eq(boot.garden.allowed[1], "198.51.100.20", "rebuilt from state.json")
+				-- The controller's ten-minute cron job.
+				files[wg.REQUEST_FILE] = tostring(now) .. "\n"
+				now = now + 600
+				files[wg.REQUEST_FILE] = tostring(now) .. "\n"
+				inform._guest_wg_tick(st, {})
+				assert_eq(#cmds, 2, "its request starts the next round")
+				files[wg.OUT_PREFIX .. string.format("%.0f", now)] = ans("a.example", "198.51.100.20") .. "@end\n"
+				now = now + 10
+				local msg = with_stderr(function() inform._guest_wg_tick(st, {}) end)
+				assert_eq(#lives, 1, "r.example did not resolve: the chains are not rebuilt")
+				assert_eq(st.guest_wg_ips.restricted["r.example"][1], "198.51.100.30", "it keeps the last address")
+				assert_contains(msg, "keeping the last 1 address", "said")
+				assert_eq(inform._guest_wg_next, now + wg.RETRY, "and comes back in two minutes, not an hour")
+				-- The controller stops pushing r.example.
+				st.guest.wg_restricted = {}
+				inform._guest_wg_tick(st, {})
+				assert_eq(#lives, 2, "a removed name is dropped from the table at once")
+				assert_nil(next(st.guest_wg_ips.restricted), "and from state")
+				st.guest.wg_allowed = {}
+				inform._guest_wg_tick(st, {})
+				assert_nil(st.guest_wg_ips, "no names at all: no garden state")
+				assert_eq(#lives, 3, "and the table is rebuilt without it")
+				st.guest_wg_ips = nil
+				st.guest.wg_allowed = {"a.example"}
+				inform._guest_wg_tick(st, {guest_isolation = false})
+				local n = #cmds
+				inform._guest_wg_tick(st, {config = {guest_isolation = false}})
+				assert_eq(#cmds, n, "guest_isolation off: no lookups")
+			end)
+			wg._exec, wg._read_file, wg._remove, wg._round = orig.exec, orig.rf, orig.rm, nil
+			inform._guestguard, inform._time, inform._state.save = orig.gg, orig.time, orig.save
+			inform._guest_wg_next, inform._guest_wg_sig = 0, nil
+			if not ok then error(err, 0) end
+		end
+	},
 }

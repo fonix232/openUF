@@ -192,6 +192,7 @@ local test_files = {
 	"tests/test_bcfilter.lua",
 	"tests/test_rrmscan.lua",
 	"tests/test_dfsreset.lua",
+	"tests/test_walledgarden.lua",
 	"tests/test_shaper.lua",
 	"tests/test_switchvlan.lua",
 	"tests/test_netmodel.lua",

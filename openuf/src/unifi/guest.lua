@@ -36,6 +36,17 @@
 
 	Rules are replayed in wire order, so -I (insert at the head) and -A
 	(append) end up where the stock firmware's ebtables would put them.
+
+	The walled garden ("Pre-Authorization Access") arrives in two halves, split
+	by what each entry looks like and not by which list it is in (10.6.106,
+	com/ubnt/service/config/hyFnQ): an IPv4 address or CIDR is a port-less
+	`-I GUESTIN -p 0x800 --ip-dst <net> -j ACCEPT` and its `-I GUESTOUT ...
+	--ip-src <net>` twin, which the generic replay above already carries; a
+	domain name is a `dnsmasq.walled_garden.<g>.site.<n>.{allowed,restricted}`
+	key, which parse() returns as wg_allowed / wg_restricted for the device to
+	resolve. The three chains the domain half declares (ALLOWED_DOMAIN_IN /
+	_OUT, RESTRICTED_DOMAIN_IN, each `-P RETURN`) arrive empty; the firmware
+	fills them from DNS, and so does openwrt/walledgarden.lua.
 ]]--
 
 local wire = require("unifi.wire")
@@ -89,6 +100,56 @@ local L4 = {["6"] = "tcp", ["17"] = "udp", tcp = "tcp", udp = "udp", TCP = "tcp"
 local PKTTYPE = {broadcast = "broadcast", multicast = "multicast", host = "host", otherhost = "other"}
 local ARPOP = {Request = "request", Reply = "reply", ["1"] = "request", ["2"] = "reply"}
 local VERDICT = {ACCEPT = "accept", DROP = "drop", RETURN = "return"}
+
+-- Names per list the garden will resolve. The controller sends whatever the
+-- site lists, and each name costs the device a DNS lookup or two.
+M.WG_MAX_SITES = 32
+
+-- A walled-garden site name, as strictly as the controller validates it before
+-- sending it (Guava's InternetDomainName.isValid, read in 10.6.106): up to 253
+-- characters of dot-separated labels, each 1-63 of letters, digits, '-' and
+-- '_', none starting or ending with '-', and a rightmost label that is not all
+-- digits, which is what keeps an IPv4 literal out of this list (those travel as
+-- ebtables rules). One trailing dot is a valid absolute name. Strict because
+-- the name reaches a resolver command line.
+function M.is_hostname(s)
+	if type(s) ~= "string" or #s < 1 or #s > 253 then return false end
+	local body = s:gsub("%.$", "")
+	if body == "" or body:find("%.%.") then return false end
+	local last
+	for label in (body .. "."):gmatch("([^%.]*)%.") do
+		if #label < 1 or #label > 63 then return false end
+		if label:find("[^%w_%-]") then return false end
+		if label:sub(1, 1) == "-" or label:sub(-1) == "-" then return false end
+		last = label
+	end
+	return last ~= nil and last:match("^%d+$") == nil
+end
+
+-- One list of garden names, in push order (the controller iterates a Java
+-- Set, so its own order is arbitrary and the index is all there is): bad
+-- names and repeats dropped, the list cut at WG_MAX_SITES.
+local function garden_names(rows, which)
+	table.sort(rows, function(a, b)
+		if a.g ~= b.g then return a.g < b.g end
+		return a.n < b.n
+	end)
+	local out, seen = {}, {}
+	for _, r in ipairs(rows) do
+		if not M.is_hostname(r.name) then
+			io.stderr:write("guest: ignoring malformed walled-garden site " .. ("%q"):format(tostring(r.name)) .. "\n")
+		elseif not seen[r.name] then
+			seen[r.name] = true
+			if #out >= M.WG_MAX_SITES then
+				io.stderr:write(("guest: walled garden: more than %d %s sites pushed -- %q and any after it are not enforced\n")
+					:format(M.WG_MAX_SITES, which, r.name))
+				break
+			end
+			out[#out + 1] = r.name
+		end
+	end
+	return out
+end
 
 -- ─── One ebtables fragment ───────────────────────────────────────────────────
 
@@ -233,6 +294,7 @@ end
 function M.parse(sys_raw)
 	if type(sys_raw) ~= "string" then return nil end
 	local kv, cmds, seen = {}, {}, false
+	local wg_status, wg_rows = nil, {allowed = {}, restricted = {}}
 	for line in (sys_raw .. "\n"):gmatch("([^\n]*)\n") do
 		local k, v = line:match("^([^=]+)=(.*)$")
 		if k then
@@ -246,6 +308,14 @@ function M.parse(sys_raw)
 				elseif k:match("^wireless%.%d+%.") or k:match("^ipset%.")
 						or k == "redirector.status" or k == "redirector.url" then
 					kv[k] = v
+				else
+					local g, i, which = k:match("^dnsmasq%.walled_garden%.(%d+)%.site%.(%d+)%.(%a+)$")
+					if g and wg_rows[which] then
+						local rows = wg_rows[which]
+						rows[#rows + 1] = {g = tonumber(g), n = tonumber(i), name = v}
+					elseif k:match("^dnsmasq%.walled_garden%.%d+%.status$") then
+						wg_status = v
+					end
 				end
 			end
 		end
@@ -258,8 +328,12 @@ function M.parse(sys_raw)
 		ssids = {}, guest_devnames = {}, conflicts = {},
 		hooks = {["in"] = {}, out = {}},
 		chains = {}, order = {}, sets = {}, set_types = {},
-		unknown = {}, unenforced = {},
+		unknown = {}, unenforced = {}, wg_allowed = {}, wg_restricted = {},
 	}
+	if wg_status == "enabled" then
+		out.wg_allowed = garden_names(wg_rows.allowed, "allowed")
+		out.wg_restricted = garden_names(wg_rows.restricted, "restricted")
+	end
 	-- Where the portal is, while it is on. Spliced into a Location header:
 	-- one token, http(s) only.
 	local url = kv["redirector.url"]
@@ -358,7 +432,7 @@ end
 
 -- What to enforce. Returns {enabled = false} when there is nothing to do
 -- (no guest WLAN, the block disabled, or no GUESTIN chain), else
---   {enabled = true, portal, portal_url, ssids,
+--   {enabled = true, portal, portal_url, ssids, wg_allowed, wg_restricted,
 --    chains = {[name] = {policy, rules, portal}}, order,
 --    sets = {[name] = {cidr...}}}
 -- with every rule the device can express, in order. A portal chain kept for
@@ -377,7 +451,8 @@ function M.spec_from(parsed)
 	local portal = (parsed.chains.GUESTIN.policy == "drop")
 	local enforce = portal and parsed.portal_url ~= nil
 	local spec = {enabled = true, portal = portal, portal_url = enforce and parsed.portal_url or nil,
-		ssids = parsed.ssids, chains = {}, order = {}, sets = {}, set_types = {}, dropped = {}}
+		ssids = parsed.ssids, chains = {}, order = {}, sets = {}, set_types = {}, dropped = {},
+		wg_allowed = parsed.wg_allowed or {}, wg_restricted = parsed.wg_restricted or {}}
 	local used_sets = {}
 	for _, name in ipairs(parsed.order) do
 		if M.PORTAL_CHAINS[name] and enforce then
