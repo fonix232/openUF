@@ -6637,6 +6637,36 @@ return {
 		end
 	},
 	{
+		name = "inform: a changed plugin set or plugin file forgets the cfgversion; no plugins leaves the signature alone",
+		fn = function()
+			local orig_save, orig_plugins = inform._state.save, inform._plugins
+			inform._state.save = function() end
+			local fp = ""
+			inform._plugins = {fingerprint = function() return fp end}
+			local cfg = {config = {l2guard = true}}
+			local none = inform._provision_signature(cfg)
+			assert_eq(none:find("plugins=", 1, true), nil, "no plugin: nothing added to the signature")
+
+			local st = {adopted = true, cfgversion = "abc"}
+			inform._reprovision_on_settings_change(st, cfg)
+			fp = "ft:123"
+			assert_true(inform._reprovision_on_settings_change(st, cfg), "a plugin enabled")
+			assert_eq(st.cfgversion, "", "cfgversion forgotten")
+			st.cfgversion = "abc"
+			assert_false(inform._reprovision_on_settings_change(st, cfg), "unchanged")
+			fp = "ft:456"
+			assert_true(inform._reprovision_on_settings_change(st, cfg), "the plugin's source changed")
+			st.cfgversion = "abc"
+			fp = ""
+			assert_true(inform._reprovision_on_settings_change(st, cfg), "the plugin removed")
+			assert_eq(st.cfgversion, "", "so its options leave the WLANs")
+
+			inform._plugins = {fingerprint = function() error("boom") end}
+			assert_eq(inform._provision_signature(cfg), none, "a failing fingerprint is not a change")
+			inform._state.save, inform._plugins = orig_save, orig_plugins
+		end
+	},
+	{
 		name = "inform: the VLANs of private pre-shared keys reach the network plan, and the WiFi pass gets it",
 		fn = function()
 			local sys = "aaa.1.devname=ath0\naaa.1.ssid=ouf-ppsk\naaa.1.wpa=2\n"

@@ -144,6 +144,26 @@ return {
 			assert_eq(url, "http://unifi:8080/inform", "null: the built-in default")
 		end
 	},
+	{
+		name = "config: plugins is a UCI list, or an array in local.json, and absent by default",
+		fn = function()
+			assert_nil(config.options({}).plugins, "no plugin unless named")
+			local c = config.options({plugins = {"ft", "other"}})
+			assert_eq(#c.plugins, 2, "the UCI list")
+			assert_eq(c.plugins[2], "other", "in order")
+			assert_eq(config.options({plugins = "ft other"}).plugins[2], "other", "words in one option")
+			local _, conf = load_with(cursor({plugins = {"ft"}}),
+				{json = '{"config": {"plugins": ["a", "b"]}}'})
+			assert_eq(conf.plugins[1], "a", "local.json replaces the UCI list")
+			assert_eq(#conf.plugins, 2, "whole")
+			_, conf = load_with(cursor({plugins = {"ft"}}),
+				{json = '{"config": {"plugins": null}}'})
+			assert_nil(conf.plugins, "null: the default, none")
+			local patch, errs = config.check_json('{"config": {"plugins": "ft"}}')
+			assert_nil(patch, "a string where the list belongs is rejected")
+			assert_true(any_match(errs, "plugins"), "naming the option")
+		end
+	},
 
 	-- ── UCI sections ────────────────────────────────────────────────────────
 	{

@@ -4524,4 +4524,97 @@ return {
 			end)
 		end
 	},
+	{
+		name = "ucihelper: a plugin's options land through the push's batch cursor, and plugins off changes nothing",
+		fn = function()
+			local plugins = dofile("src/openwrt/plugins.lua")
+			local files = {}
+			local orig_read, orig_log = plugins._read_file, plugins._log
+			plugins._read_file = function(path)
+				return files[path:match("([^/]+)%.lua$") or ""]
+			end
+			plugins._log = function() end
+			local orig_plugins = ucihelper._plugins
+			ucihelper._plugins = plugins
+			local function push(cfg)
+				local section, commits_out
+				with_ucihelper(function(db, _, commits)
+					seed_radios({"radio0"})
+					plugins._reset()
+					silently(function()
+						ucihelper.apply_config({radio_table = {}, vap_table = {
+							{ssid = "corp", radio = "radio0", security = "wpa2",
+							 x_passphrase = "hunter22", fast_roaming_enabled = true,
+							 iapp_key = "00112233445566778899aabbccddeeff", wlanconf_id = "w1"}}}, cfg)
+					end)
+					section, commits_out = db.wireless.openuf_radio0_corp, commits.wireless
+				end)
+				return section, commits_out
+			end
+			local ok, err = pcall(function()
+				local base, base_commits = push({config = {}})
+				local off = push({config = {plugins = {}}})
+				for k, v in pairs(base) do
+					if type(v) == "table" then
+						assert_eq(table.concat(off[k], ","), table.concat(v, ","), "plugins={}: " .. k)
+					else
+						assert_eq(off[k], v, "plugins={}: " .. k)
+					end
+				end
+				for k in pairs(off) do assert_true(base[k] ~= nil, "plugins={}: no extra option " .. k) end
+
+				files.p = "return {name = 'p', api = 1, vap_options = function(extra, vap, ctx)\n"
+					.. "extra.mobility_domain = 'abcd'\n"
+					.. "extra.hostapd_bss_options = {'ft_iface=vft0'}\n"
+					.. "extra.reassociation_deadline = ctx.DELETE\n"
+					.. "extra.plugin_saw = tostring(vap.fast_roaming_enabled) .. tostring(vap.x_passphrase)\n"
+					.. "end}"
+				local s, commits = push({config = {plugins = {"p"}}})
+				assert_eq(s.mobility_domain, "abcd", "overrides openUF's value")
+				assert_eq(s.hostapd_bss_options[1], "ft_iface=vft0", "a list option reaches UCI")
+				assert_nil(s.reassociation_deadline, "DELETE removes openUF's own option")
+				assert_eq(s.plugin_saw, "truenil", "the plugin saw the VAP, not its passphrase")
+				assert_eq(s.ssid, "corp", "identity untouched")
+				assert_eq(commits, base_commits, "written through the batch: no commit of its own")
+
+				local gone = push({config = {plugins = {}}})
+				assert_nil(gone.plugin_saw, "unlisted: the option is gone with the next push")
+				assert_eq(gone.mobility_domain, base.mobility_domain, "and openUF's value is back")
+			end)
+			plugins._read_file, plugins._log = orig_read, orig_log
+			ucihelper._plugins = orig_plugins
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "ucihelper: the plugin list is read once for the VAP loop, not once per WLAN",
+		fn = function()
+			local plugins = dofile("src/openwrt/plugins.lua")
+			local reads = 0
+			plugins._read_file = function(path)
+				if path == plugins.LIST then reads = reads + 1 end
+				return nil
+			end
+			local op = ucihelper._plugins
+			ucihelper._plugins = plugins
+			local ok, err = pcall(function()
+				with_ucihelper(function(db)
+					local vaps = {}
+					for i = 1, 8 do
+						vaps[i] = {ssid = "wlan" .. i, radio = "radio0",
+							security = "wpa2", x_passphrase = "basepass123"}
+					end
+					seed_radios({"radio0"})
+					silently(function()
+						ucihelper.apply_config({radio_table = {}, vap_table = vaps}, {config = {}})
+					end)
+					assert_eq(reads, 1, "one list read for eight WLANs")
+					assert_not_nil(db.wireless.openuf_radio0_wlan8, "and every WLAN was still provisioned")
+				end)
+				assert_eq(plugins._pass, false, "apply_config closed the pass")
+			end)
+			ucihelper._plugins = op
+			if not ok then error(err, 0) end
+		end
+	},
 }

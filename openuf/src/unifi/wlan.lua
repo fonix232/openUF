@@ -844,6 +844,9 @@ function M.parse(sys_raw, caps)
 				-- one, taking the nested sta_table -- and thus every wireless
 				-- client -- with them).
 				wlanconf_id           = a.id,
+				-- wireless.<n>.is_guest: a guest network. guest.lua reads the
+				-- same key for the enforcement; plugins see it on the vap.
+				is_guest              = wire.bool(w.is_guest) or false,
 				x_passphrase          = a["wpa.psk"],
 				fast_roaming_enabled  = (a["ft.status"] == "enabled"),
 				-- aaa.<n>.wpa3.ft.status: FT for the SAE akm specifically,

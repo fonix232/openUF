@@ -289,6 +289,7 @@ commands, so a stale one corrects itself after one upgrade round.
 | `bridge_backend` | `auto` | `vlan_filtering`, `bridges` or `auto` (§ 6) |
 | `bridge_takeover`, `bridge_rollback_timeout` | `1`, `180` | Let openUF rebuild the management bridge, and roll back after this many seconds without the controller |
 | `bridge_name`, `port_default` | `br-lan`, `all` | The management bridge; what a wired port without a profile carries besides the native VLAN (`all` tagged, or `none`) |
+| `plugins` | — | A UCI list of plugin names, from `/etc/openuf/plugins/<name>.lua`, allowed to edit the UCI options of each WLAN (§ Plugins). None by default |
 | `country_override` | — | Program this ISO country's regulatory domain instead of the controller's (the controller's is still reported). A legal decision — off unless set |
 | `sta_events` | `1` | Client connection events as `STA_ASSOC_TRACKER` notification informs (§ 6) |
 | `system_timezone`, `system_ntp`, `system_cron` | `1` | Apply the controller's timezone, NTP servers and nightly scan job. A site with its own NTP switches just `system_ntp` off |
@@ -311,7 +312,7 @@ back to the default and says so in the log.
 
 A setting that changes what a controller push does (`use_only_unifi_wlan`, `own_config`,
 the `bridge_*` options, `port_default`, `country_override`, `l2guard`, `guest_isolation` and the three
-`system_*` options), the board's radio policy (`config radio_policy`) or its reported radios
+`system_*` options), the enabled plugins (their names and file contents), the board's radio policy (`config radio_policy`) or its reported radios
 (`hwassign`) also makes the daemon forget the cfgversion at its next start, so the
 controller sends its whole configuration again and the change lands straight away. An
 upgrade to a release that changes what a push writes does the same once, so the existing
@@ -461,6 +462,21 @@ cd /usr/share/openuf && lua -e 'local p, n = require("config").check_json(io.ope
 
 The package never ships the file, and keeps it across upgrades and sysupgrades.
 
+### Plugins
+
+A plugin lets a recipe that openUF does not ship, typically one that needs extra software on the
+AP, edit the UCI options of the WLANs openUF provisions. It lives in its own project; openUF only
+offers the hook. **Third-party plugins are unsupported by openUF, and a plugin is Lua running as
+root**: list only code you have read.
+
+Off by default. A plugin is `/etc/openuf/plugins/<name>.lua`, loaded only when named in the
+`plugins` list (`uci add_list openuf.main.plugins=<name>`, or `config.plugins` in `local.json`) or
+on a line of `/etc/openuf/plugins.enabled` (the file an installer should edit). A changed plugin
+set or plugin file makes openUF ask the controller for a fresh push at the next start; Force
+Provision does the same at once. Failures are logged (`logread | grep "openuf: plugin"`) and
+skipped, and the push goes on. The contract, the `ctx` reference, uninstall order, versioning and
+testing are in [docs/PLUGINS.md](docs/PLUGINS.md).
+
 ### Migrating from local.lua
 
 `/etc/openuf/local.lua` (executable Lua with `dev` and `config` in scope) is deprecated.
@@ -476,6 +492,7 @@ Move each line to its new home, then delete `local.lua`:
 |---|---|
 | `config.<option> = v` | `uci set openuf.main.<option>=v` |
 | `dev.conf.led = "x"` | `uci set openuf.board.led=x` |
+| `config.plugins = {"ft"}` | `uci add_list openuf.main.plugins=ft` |
 | `dev.conf.hwassign = {"radio0"}` | `uci add_list openuf.board.hwassign=radio0` |
 | `dev.conf.radio.na = {htmode_max = "HE80"}` | `uci set openuf.na.htmode_max=HE80` |
 | `dev.conf.radio.na.acs_exclude_dfs = true` | `uci set openuf.na.acs_exclude_dfs=1` |
@@ -554,6 +571,7 @@ kept `/etc/config/openuf` lacks, and never changes an existing one.
 | `bridge_name` | string | `br-lan` |
 | `port_default` | string | `all` |
 | `country_override` | string | unset |
+| `plugins` | list of strings | unset |
 | `sta_events` | boolean | `1` |
 | `system_timezone` | boolean | `1` |
 | `system_ntp` | boolean | `1` |

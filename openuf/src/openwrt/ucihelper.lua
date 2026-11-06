@@ -145,6 +145,7 @@ end
 
 local function get_bcfilter() return get_sibling("openwrt.bcfilter", M._bcfilter) end
 local function get_minrssi()  return get_sibling("openwrt.minrssi", M._minrssi) end
+local function get_plugins()  return get_sibling("openwrt.plugins", M._plugins) end
 
 -- Map a UCI wifi-device's channel number to the controller's band identifier.
 -- The real controller's radio_table schema requires this "radio" field
@@ -2461,6 +2462,19 @@ local function apply_config_body(resp, cfg, opts)
 			end
 			extra.hostapd_bss_options = (#raw > 0) and raw or M.DELETE
 
+			-- Third-party edits to this VAP's options (openwrt/plugins.lua),
+			-- after everything built in. Never raises; does nothing unless a
+			-- plugin is enabled. The options land through wlan_add below, so
+			-- through this push's one batch cursor.
+			local plugins = get_plugins()
+			if plugins then
+				plugins.vap_options(extra, vap, cfg, {
+					DELETE = M.DELETE,
+					bssid  = M.vap_bssid,
+					cursor = function() return get_uci().cursor() end,
+				})
+			end
+
 			local section = M.wlan_add(vap.radio, vap.ssid,
 				{security = vap.security, pairwise = vap.pairwise},
 				password, extra, network, vap.wlanconf_id)
@@ -2595,7 +2609,11 @@ end
 -- A push that raises partway leaves /etc/config/wireless as it was.
 function M.apply_config(resp, cfg, opts)
 	batch = get_uci().cursor()
+	-- One read of the enabled-plugin list for the whole push, not one per VAP.
+	local plugins = get_plugins()
+	if plugins then plugins.begin_pass() end
 	local ok, err = pcall(apply_config_body, resp, cfg, opts)
+	if plugins then plugins.end_pass() end
 	batch = nil
 	if not ok then error(err, 0) end
 end
@@ -2958,6 +2976,14 @@ end
 function M.get_ifname_for_vap(radio, ssid)
 	local iface = find_vap_iface(radio, ssid)
 	return iface and iface.ifname
+end
+
+-- The BSSID a VAP has right now: its live netdev's address, or nil when the
+-- radio has no interface for it. Asked during apply_config, before the
+-- reload, so a VAP being rebuilt answers with the netdev it is about to get
+-- back. Handed to plugins as ctx.bssid.
+function M.vap_bssid(radio, ssid)
+	return mac_of(M.get_ifname_for_vap(radio, ssid))
 end
 
 -- The VLAN netdevs of one VAP, appended to `out`. A client whose private

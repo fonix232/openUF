@@ -67,6 +67,9 @@ M.OPTIONS = {
 	{"bridge_name",             "string", "br-lan"},
 	{"port_default",            "string", "all"},
 	{"country_override",        "string", nil},
+	-- Plugins (docs/PLUGINS.md): names of /etc/openuf/plugins/<name>.lua files
+	-- allowed to edit each WLAN's UCI options. A UCI list; none: no plugin.
+	{"plugins",                 "list",   nil},
 	-- Controller features
 	{"sta_events",              "bool",   true},
 	{"system_timezone",         "bool",   true},
@@ -225,9 +228,14 @@ M.CHECK = CHECK
 
 -- ─── UCI ─────────────────────────────────────────────────────────────────────
 
+local parse_list   -- below
+
 -- One raw UCI value as its option's type; the default for anything unset or
 -- unreadable (a typo must not take a feature away silently, so it is logged).
 function M.parse(kind, raw, default, name)
+	if kind == "list" then
+		return parse_list(raw, function(w) return w end, name) or default
+	end
 	if type(raw) == "table" then raw = raw[#raw] end   -- a list where an option belongs
 	if raw == nil or raw == "" then return default end
 	if kind == "bool" then
@@ -251,7 +259,7 @@ end
 -- A raw UCI list (or an option holding space-separated words) as a table of
 -- checked values; nil, logged, when any element fails (a partial list is a
 -- different setting from the one written).
-local function parse_list(raw, check, name)
+function parse_list(raw, check, name)
 	if raw == nil or raw == "" then return nil end
 	local words = {}
 	if type(raw) == "table" then
@@ -601,7 +609,8 @@ local CONFIG_SPEC = {
 	debug_payload_extra = {check = any_object, nullable = true},
 }
 for _, o in ipairs(M.OPTIONS) do
-	CONFIG_SPEC[o[1]] = {check = scalar(o[2]), nullable = true}
+	CONFIG_SPEC[o[1]] = {check = o[2] == "list" and array_of(scalar("string")) or scalar(o[2]),
+		nullable = true}
 end
 
 local TOP_SPEC = {

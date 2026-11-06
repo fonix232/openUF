@@ -63,7 +63,7 @@ return {
 			local usage = read("../USAGE.md")
 			local ref = usage:match("### Configuration schema reference\n(.-)\n%-%-%-\n")
 			assert_not_nil(ref, "the schema reference section")
-			local kinds = {bool = "boolean", int = "integer", string = "string"}
+			local kinds = {bool = "boolean", int = "integer", string = "string", list = "list of strings"}
 			for _, o in ipairs(config.OPTIONS) do
 				local d = o[3]
 				if d == nil then d = "unset"

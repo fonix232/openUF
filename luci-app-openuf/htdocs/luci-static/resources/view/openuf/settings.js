@@ -126,6 +126,11 @@ return view.extend({
 		o = s.taboption('advanced', form.Value, 'unhandled_file', _('Unhandled-message ledger'),
 			_('Where messages openUF did not act on are recorded; "off" keeps them in memory only.'));
 		o.placeholder = '/etc/openuf/unhandled.json';
+		o = s.taboption('advanced', form.DynamicList, 'plugins', _('WLAN plugins'),
+			_('Names of /etc/openuf/plugins/<name>.lua files that may edit the wireless options of each WLAN. A plugin is Lua that runs as root and is not supported by openUF: list only code you have read. Empty loads none.'));
+		o.validate = function(section_id, value) {
+			return (!value || /^[A-Za-z0-9_-]+$/.test(value)) ? true : _('A plugin name: letters, digits, _ and -');
+		};
 		o = s.taboption('advanced', form.Value, 'debug_dump_file', _('Debug capture'),
 			_('Append every decrypted controller message to this file. For protocol research; leave empty.'));
 		o.placeholder = _('off');

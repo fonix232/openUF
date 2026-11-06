@@ -77,5 +77,27 @@ function M.nft_apply(tables, stmts, exec)
 	return ok, failed
 end
 
+-- band/bor/bxor/lshift/rshift: LuaBitOp, bit32, or 5.3+ integer operators.
+-- Built on first use, so a module that never needs it does not fail to load
+-- on a Lua that has none of the three.
+local _bit
+function M.bit()
+	if _bit then return _bit end
+	local ok, b = pcall(require, "bit")
+	if not ok then ok, b = pcall(require, "bit32") end
+	if not ok then
+		local _l = load or loadstring
+		local function _f(e) return _l("return function(a,b) return " .. e .. " end")() end
+		b = {
+			band   = _f("a&b"),
+			bor    = _l("return function(...) local r=0 for i=1,select('#',...)do r=r|select(i,...)end return r end")(),
+			bxor   = _f("a~b"),
+			lshift = _f("a<<b"),
+			rshift = _f("a>>b"),
+		}
+	end
+	_bit = b
+	return b
+end
 
 return M

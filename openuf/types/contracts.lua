@@ -96,6 +96,7 @@
 ---@field pairwise string?   "ccmp" | "gcmp256" | ...
 ---@field x_passphrase string?
 ---@field wlanconf_id string
+---@field is_guest boolean         wireless.<n>.is_guest: a guest network
 ---@field devname string     the controller's VAP name ("ath0")
 ---@field br_devname string? the controller bridge it joins
 ---@field vlan_enabled boolean?

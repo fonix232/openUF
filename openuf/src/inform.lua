@@ -51,6 +51,7 @@ local backhaul  = require("openwrt.backhaul")
 local recognized = require("unifi.recognized")
 local wlansched = require("openwrt.wlansched")
 local lockap    = require("openwrt.lockap")
+local plugins   = require("openwrt.plugins")
 local snmp_unifi = require("unifi.snmp")
 local snmp_owrt = require("openwrt.snmp")
 
@@ -99,6 +100,7 @@ M._dnswatch   = dnswatch
 M._staphase   = staphase
 M._wlansched  = wlansched
 M._lockap     = lockap
+M._plugins    = plugins
 M._report     = report
 M._snmp_parse = snmp_unifi.parse
 M._snmp       = snmp_owrt
@@ -1980,6 +1982,11 @@ function M._provision_signature(cfg)
 	for _, k in ipairs(M.PROVISION_OPTIONS) do parts[#parts + 1] = k .. "=" .. tostring(c[k]) end
 	parts[#parts + 1] = "radio=" .. stable(cfg and cfg.radio)
 	parts[#parts + 1] = "hwassign=" .. stable(cfg and cfg.hwassign)
+	-- The plugins a push was built with, and their source: a changed set asks
+	-- for a fresh push. Left out when none, so a device without plugins keeps
+	-- its recorded signature.
+	local ok, fp = pcall(M._plugins.fingerprint, cfg)
+	if ok and fp ~= "" then parts[#parts + 1] = "plugins=" .. fp end
 	return table.concat(parts, ";")
 end
 function M._reprovision_on_settings_change(st, cfg)
