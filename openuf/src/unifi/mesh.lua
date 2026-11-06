@@ -56,19 +56,16 @@ end
 
 -- Whether one wireless.<n> block is a backhaul VAP rather than a WLAN, and
 -- which side: "downlink" (the hidden AP children join), "uplink" (the
--- 4-address station toward a parent), or nil for an ordinary WLAN. Every
--- WLAN of a wired push carries mode=master and usage=user.
+-- 4-address station toward a parent), or nil for an ordinary WLAN. A WLAN of
+-- a wired push carries mode=master and usage=user, or usage=guest on a guest
+-- network.
 ---@param w table<string,string>  one wireless.<n> block, keys without the prefix
 ---@return "downlink"|"uplink"|nil
 function M.role(w)
 	if type(w) ~= "table" then return nil end
-	local backhaul = (w.mode ~= nil and w.mode ~= "master")
-		or (w.usage ~= nil and w.usage ~= "user")
-	if not backhaul then return nil end
-	if w.usage == "downlink" or (w.mode == "master" and w.usage ~= "uplink") then
-		return "downlink"
-	end
-	return "uplink"
+	if w.usage == "downlink" then return "downlink" end
+	if w.usage == "uplink" or (w.mode ~= nil and w.mode ~= "master") then return "uplink" end
+	return nil
 end
 
 -- One backhaul VAP as unifi/wlan.lua hands it over.

@@ -2776,7 +2776,8 @@ matches fxkr's 2015 capture of a real UAP's uplink VAP.
 **Before this port, openUF provisioned both entries as ordinary access points** whenever a
 push carried them (only possible with `debug_caps` claiming the bits): the downlink as a
 hidden SSID, the uplink as an **open** AP named `vport-<mac>`. `unifi/wlan.lua` now hands them
-to `unifi/mesh.lua` instead (`mode` not `master`, or `usage` not `user`).
+to `unifi/mesh.lua` instead (`mode` not `master`, or `usage` `uplink` or `downlink`; a guest
+WLAN carries `usage=guest` and stays an ordinary WLAN).
 
 ### The reporting contract (decompiled)
 

@@ -197,7 +197,10 @@ return {
 		name = "mesh: role() tells the two backhaul VAPs from a WLAN",
 		fn = function()
 			assert_nil(mesh.role({mode = "master", usage = "user"}), "a WLAN")
+			assert_nil(mesh.role({mode = "master", usage = "guest"}), "a guest WLAN")
 			assert_nil(mesh.role({}), "a WLAN of a push with neither key")
+			assert_eq(mesh.role({usage = "downlink"}), "downlink", "downlink without mode")
+			assert_eq(mesh.role({mode = "master", usage = "uplink"}), "uplink", "uplink beats master")
 			assert_eq(mesh.role({mode = "master", usage = "downlink"}), "downlink", "downlink")
 			assert_eq(mesh.role({mode = "managed", usage = "uplink"}), "uplink", "uplink")
 			assert_eq(mesh.role({mode = "managed"}), "uplink", "a station without usage")
