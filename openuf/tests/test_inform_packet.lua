@@ -2815,6 +2815,43 @@ return {
 		end
 	},
 	{
+		name = "inform packet: _parse_wifi_system_cfg reads the per-station SAE keys (sae.psk.<n>)",
+		fn = function()
+			local base = "aaa.1.ssid=sae-keys\naaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=SAE\n"
+				.. "wireless.1.ssid=sae-keys\nwireless.1.parent=radio0\n"
+			local real = io.stderr
+			io.stderr = {write = function() end}
+			local _, v = inform._parse_wifi_system_cfg(base
+				.. "aaa.1.sae.psk.1.psk=mainpass123\naaa.1.sae.psk.1.mac=ff:ff:ff:ff:ff:ff\n"
+				.. "aaa.1.sae.psk.2.psk=stationkey1\naaa.1.sae.psk.2.mac=00:00:5E:00:53:01\n"
+				.. "aaa.1.sae.psk.2.vlan=30\naaa.1.sae.psk.2.id=phone\n"
+				.. "aaa.1.sae.psk.3.psk=anystation1\n"
+				.. "aaa.1.sae.psk.4.psk=short\n"
+				.. "aaa.1.sae.psk.5.psk=badvlankey1\naaa.1.sae.psk.5.vlan=9999\n"
+				.. "aaa.1.sae.psk.6.psk=badmackey11\naaa.1.sae.psk.6.mac=zz\n"
+				.. "aaa.1.sae.psk.7.psk=tab\tinside1\n")
+			local p = v[1].ppsk
+			assert_eq(#p, 2, "own key (ff:..), short, bad VLAN, bad MAC and non-printable are left out")
+			assert_eq(p[1].key, "stationkey1", "key 2")
+			assert_eq(p[1].vid, 30, "its VLAN")
+			assert_eq(p[1].mac, "00:00:5e:00:53:01", "its station, lowercased")
+			assert_eq(p[2].key, "anystation1", "key 3")
+			assert_nil(p[2].mac, "no mac: any station")
+			local _, d = inform._parse_wifi_system_cfg(base
+				.. "aaa.1.wpa.psk_file.status=enabled\naaa.1.wpa.psk_file.1.psk=anystation1\n"
+				.. "aaa.1.sae.psk.2.psk=anystation1\n")
+			assert_eq(#d[1].ppsk, 1, "psk_file + sae.psk duplicates collapse")
+			local _, none = inform._parse_wifi_system_cfg(base)
+			assert_nil(none[1].ppsk, "no keys -> nil")
+			local _, wpa2 = inform._parse_wifi_system_cfg(
+				"aaa.1.ssid=k\naaa.1.wpa=2\naaa.1.wpa.key.1.mgmt=WPA-PSK\n"
+				.. "wireless.1.ssid=k\nwireless.1.parent=radio0\n"
+				.. "aaa.1.sae.psk.1.psk=anystation1\n")
+			assert_nil(wpa2[1].ppsk, "a WPA2-only WLAN has no SAE keys")
+			io.stderr = real
+		end
+	},
+	{
 		name = "inform packet: a captured PPSK push reaches UCI as stations and VLANs",
 		fn = function()
 			-- The consumer side, end to end: the captured keys through the
@@ -3213,23 +3250,23 @@ return {
 				disconnect_station = function(mac) deauthed = mac end,
 			}
 			local result = inform.handle_response(
-				'{"_type":"cmd","cmd":"block-sta","mac":"aa:bb:cc:dd:ee:01"}', st)
+				'{"_type":"cmd","cmd":"block-sta","mac":"00:00:5e:00:53:01"}', st)
 			inform._firewall = { reconcile = function() end }
 			inform._ucihelper = nil
 			assert_eq(#st.blocked_stas, 1, "one MAC persisted")
-			assert_eq(st.blocked_stas[1], "aa:bb:cc:dd:ee:01", "correct MAC persisted")
+			assert_eq(st.blocked_stas[1], "00:00:5e:00:53:01", "correct MAC persisted")
 			assert_eq(#reconciled, 1, "reconcile called with the updated list")
-			assert_eq(reconciled[1], "aa:bb:cc:dd:ee:01", "reconcile sees the newly blocked MAC")
-			assert_eq(deauthed, "aa:bb:cc:dd:ee:01", "disconnected from every VAP (disconnect_station)")
+			assert_eq(reconciled[1], "00:00:5e:00:53:01", "reconcile sees the newly blocked MAC")
+			assert_eq(deauthed, "00:00:5e:00:53:01", "disconnected from every VAP (disconnect_station)")
 			assert_true(result, "re-inform immediately after executing a command")
 		end
 	},
 	{
 		name = "inform packet: handle_response cmd block-sta is idempotent for an already-blocked MAC",
 		fn = function()
-			local st = sample_state({blocked_stas = {"aa:bb:cc:dd:ee:01"}})
+			local st = sample_state({blocked_stas = {"00:00:5e:00:53:01"}})
 			inform._firewall = { reconcile = function() end }
-			inform.handle_response('{"_type":"cmd","cmd":"block-sta","mac":"aa:bb:cc:dd:ee:01"}', st)
+			inform.handle_response('{"_type":"cmd","cmd":"block-sta","mac":"00:00:5e:00:53:01"}', st)
 			inform._firewall = { reconcile = function() end }
 			assert_eq(#st.blocked_stas, 1, "MAC not duplicated")
 		end
@@ -3237,14 +3274,14 @@ return {
 	{
 		name = "inform packet: handle_response cmd unblock-sta removes the MAC and reconciles",
 		fn = function()
-			local st = sample_state({blocked_stas = {"aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"}})
+			local st = sample_state({blocked_stas = {"00:00:5e:00:53:01", "aa:bb:cc:dd:ee:02"}})
 			local reconciled, denied
 			inform._firewall = {
 				reconcile = function(macs) reconciled = macs end,
 			}
 			inform._deny_pending = false
 			local result = inform.handle_response(
-				'{"_type":"cmd","cmd":"unblock-sta","mac":"aa:bb:cc:dd:ee:01"}', st)
+				'{"_type":"cmd","cmd":"unblock-sta","mac":"00:00:5e:00:53:01"}', st)
 			inform._firewall = { reconcile = function() end }
 			assert_eq(#st.blocked_stas, 1, "one MAC remains")
 			assert_eq(st.blocked_stas[1], "aa:bb:cc:dd:ee:02", "the other MAC is untouched")
@@ -4058,10 +4095,10 @@ return {
 				end}
 			inform._ucihelper = bss_mock()
 			inform._deny_at, inform._deny_socks, inform._deny_settle = nil, nil, nil
-			local st = sample_state({blocked_stas = {"aa:bb:cc:dd:ee:01"}})
+			local st = sample_state({blocked_stas = {"00:00:5e:00:53:01"}})
 			inform._deny_pending = false
 			assert_true(inform._block_resync(st), "first look: synced")
-			assert_eq(calls[1], "aa:bb:cc:dd:ee:01@phy0-ap0,phy0-ap1,phy1-ap0", "on every BSS")
+			assert_eq(calls[1], "00:00:5e:00:53:01@phy0-ap0,phy0-ap1,phy1-ap0", "on every BSS")
 			assert_true(inform._block_resync(st), "that pass asked for another: synced the same second")
 			st.blocked_stas = {}
 			assert_true(inform._block_resync(st), "empty but pending from the last pass: synced")
@@ -4088,7 +4125,7 @@ return {
 			inform._ucihelper = bss_mock()
 			inform._deny_at, inform._deny_socks, inform._deny_settle = nil, nil, nil
 			inform._deny_pending = false
-			local st = sample_state({blocked_stas = {"aa:bb:cc:dd:ee:01"}})
+			local st = sample_state({blocked_stas = {"00:00:5e:00:53:01"}})
 			assert_true(inform._block_resync(st), "first look")
 			for _, dt in ipairs({15, 30, 59}) do
 				now = 1000 + dt
@@ -4127,7 +4164,7 @@ return {
 			inform._ucihelper = bss_mock()
 			inform._deny_at, inform._deny_socks, inform._deny_settle = nil, nil, nil
 			inform._deny_pending = false
-			local st = sample_state({blocked_stas = {"aa:bb:cc:dd:ee:01"}})
+			local st = sample_state({blocked_stas = {"00:00:5e:00:53:01"}})
 			assert_true(inform._block_resync(st), "first look")
 			inform._deny_reloaded()
 			for _, dt in ipairs({0, 15, 30, 59}) do
@@ -4443,12 +4480,12 @@ return {
 			-- to compare against, which must not read as a change.
 			local cfg = {net = {lan_cpueth = "eth0"}}
 			local out = with_stderr(function()
-				assert_false(inform._warn_identity_change("aa:bb:cc:dd:ee:01",
+				assert_false(inform._warn_identity_change("00:00:5e:00:53:01",
 					{adopted = false, mac = "aa:bb:cc:dd:ee:02"}, cfg), "unadopted")
-				assert_false(inform._warn_identity_change("aa:bb:cc:dd:ee:01",
-					{adopted = true, mac = "aa:bb:cc:dd:ee:01"}, cfg), "unchanged")
+				assert_false(inform._warn_identity_change("00:00:5e:00:53:01",
+					{adopted = true, mac = "00:00:5e:00:53:01"}, cfg), "unchanged")
 				assert_false(inform._warn_identity_change(nil,
-					{adopted = true, mac = "aa:bb:cc:dd:ee:01"}, cfg), "first run")
+					{adopted = true, mac = "00:00:5e:00:53:01"}, cfg), "first run")
 			end)
 			assert_eq(out, "", "and stays silent in all three")
 		end
@@ -4912,7 +4949,7 @@ return {
 				harvest          = function() return {}, {} end,
 				hostapd_objects  = function() return {"hostapd.wlan0", "hostapd.wlan1"} end,
 				capable_stations = function(ifname)
-					return {ifname == "wlan0" and "aa:bb:cc:dd:ee:01" or "aa:bb:cc:dd:ee:02"}
+					return {ifname == "wlan0" and "00:00:5e:00:53:01" or "aa:bb:cc:dd:ee:02"}
 				end,
 				request = function(ifname, sta, opts)
 					asked[#asked + 1] = {ifname = ifname, sta = sta, op = opts and opts.op_class}
@@ -4980,7 +5017,7 @@ return {
 				collector_ensure = function() end,
 				harvest          = function() return {}, reporters end,
 				hostapd_objects  = function() return {"hostapd.wlan0"} end,
-				capable_stations = function() return {"aa:bb:cc:dd:ee:01"} end,
+				capable_stations = function() return {"00:00:5e:00:53:01"} end,
 				request          = function() asked = asked + 1 end,
 			}
 			inform._sysinfo = setmetatable({
@@ -4997,7 +5034,7 @@ return {
 				"asked twice, then left alone however many ticks go by")
 
 			-- An answer -- any answer -- puts it straight back in rotation.
-			reporters = {["aa:bb:cc:dd:ee:01"] = true}
+			reporters = {["00:00:5e:00:53:01"] = true}
 			inform._rrm_tick(cfg)
 			assert_eq(asked, inform.RRM_MAX_UNANSWERED + 1, "a report clears the count")
 
@@ -5430,9 +5467,9 @@ return {
 			inform._state.save = function() saved = saved + 1 end
 			local ok, err = pcall(function()
 				local r = inform.handle_response(
-					'{"_type":"cmd","cmd":"authorize-guest","mac":"AA:BB:CC:DD:EE:01"}', st, {})
+					'{"_type":"cmd","cmd":"authorize-guest","mac":"00:00:5E:00:53:01"}', st, {})
 				assert_true(r, "re-inform so the controller sees authorized at once")
-				assert_not_nil(st.guest_authorized["aa:bb:cc:dd:ee:01"], "recorded, lowercased")
+				assert_not_nil(st.guest_authorized["00:00:5e:00:53:01"], "recorded, lowercased")
 				assert_eq(saved, 1, "persisted")
 				inform.handle_response('{"_type":"cmd","cmd":"authorize-guest","mac":"x;reboot"}', st, {})
 				inform.handle_response('{"_type":"cmd","cmd":"authorize-guest"}', st, {})
@@ -5440,7 +5477,7 @@ return {
 				for _ in pairs(st.guest_authorized) do n = n + 1 end
 				assert_eq(n, 1, "a malformed or missing mac records nothing")
 				inform.handle_response(
-					'{"_type":"cmd","cmd":"unauthorize-guest","mac":"aa:bb:cc:dd:ee:01"}', st, {})
+					'{"_type":"cmd","cmd":"unauthorize-guest","mac":"00:00:5e:00:53:01"}', st, {})
 				assert_nil(next(st.guest_authorized), "unauthorize-guest drops it")
 			end)
 			inform._state.save = save
@@ -5659,18 +5696,18 @@ return {
 			inform._time = function() return now end
 			provision._guest_kicked = {}
 			local ok, err = pcall(function()
-				local st = sample_state({adopted = true, guest_authorized = {["aa:bb:cc:dd:ee:01"] = 1}})
+				local st = sample_state({adopted = true, guest_authorized = {["00:00:5e:00:53:01"] = 1}})
 				local function unauth(mac)
 					inform.handle_response('{"_type":"cmd","cmd":"unauthorize-guest","mac":"' .. mac .. '"}', st, {})
 				end
-				unauth("AA:BB:CC:DD:EE:01")
-				assert_eq(table.concat(kicked, ","), "aa:bb:cc:dd:ee:01", "kicked, lowercased")
-				assert_nil(st.guest_authorized["aa:bb:cc:dd:ee:01"], "and unauthorized first")
+				unauth("00:00:5E:00:53:01")
+				assert_eq(table.concat(kicked, ","), "00:00:5e:00:53:01", "kicked, lowercased")
+				assert_nil(st.guest_authorized["00:00:5e:00:53:01"], "and unauthorized first")
 				now = 1030
-				unauth("aa:bb:cc:dd:ee:01")
+				unauth("00:00:5e:00:53:01")
 				assert_eq(#kicked, 1, "a repeat inside the hold is not kicked again")
 				now = 1061
-				unauth("aa:bb:cc:dd:ee:01")
+				unauth("00:00:5e:00:53:01")
 				assert_eq(#kicked, 2, "after the hold it is")
 				unauth("x;reboot")
 				assert_eq(#kicked, 2, "a malformed MAC never reaches a command line")

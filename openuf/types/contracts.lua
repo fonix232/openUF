@@ -220,9 +220,10 @@
 ---@field secret string
 ---@field clients {cidr: string}[]  at least one: radius.dad.client.<i>.cidr, else radius.das.client/32
 
----@class PpskKey          one private pre-shared key (aaa.<n>.wpa.psk_file.<k>.*)
+---@class PpskKey          one private pre-shared key (aaa.<n>.wpa.psk_file.<k>.* or sae.psk.<k>.*)
 ---@field key string        8-63 printable characters, or 64 hex digits
 ---@field vid integer?      its VLAN; nil: the VAP's own network (a VLAN-1 network)
+---@field mac string?       the one station it is bound to, lowercase; nil: any station
 
 ---@class BandSteeringIntent unifi/wlan.lua's parse_bandsteering(): the AP's own setting
 ---@field enabled boolean    bandsteering.status; false is not "per-WLAN steering off"

@@ -557,7 +557,7 @@ end
 -- network it names. A key without a VLAN puts its client on the VAP's own
 -- network.
 --
--- keys:     vap.ppsk, {key=, vid=} each
+-- keys:     vap.ppsk, {key=, vid=, mac=} each (mac nil = any station)
 -- networks: vid -> UCI network section for that VLAN
 -- A key whose VLAN has no network is left out rather than provisioned
 -- without one: that client would land on the VAP's own network, past the
@@ -585,7 +585,7 @@ function M.ppsk_add(iface, keys, networks)
 			local ss = iface .. "_psk" .. i
 			cursor:set("wireless", ss, "wifi-station")
 			cursor:set("wireless", ss, "iface", {iface})
-			cursor:set("wireless", ss, "mac", {"00:00:00:00:00:00"})
+			cursor:set("wireless", ss, "mac", {k.mac or "00:00:00:00:00:00"})
 			cursor:set("wireless", ss, "key", k.key)
 			if k.vid then
 				cursor:set("wireless", ss, "vid", tostring(k.vid))

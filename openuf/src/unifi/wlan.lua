@@ -634,34 +634,62 @@ function M.parse(sys_raw, caps)
 			-- along, a random passphrase the controller generates for the WLAN,
 			-- and is provisioned like any other WLAN key.
 			local ppsk
-			if wire.bool(a["wpa.psk_file.status"])
-					and (security == "wpa2" or security == "wpa3" or security == "wpa2/wpa3") then
+			local function add_ppsk(label, i, key, vid_raw, mac_raw)
+				local vid = tonumber(vid_raw)
+				local mac = mac_raw and mac_raw:lower()
+				-- hostapd's own limits: a passphrase is 8..63 printable
+				-- ASCII characters, or the PSK itself as 64 hex digits. The
+				-- key becomes one line of hostapd's wpa_psk_file.
+				local key_ok = key:match("^[ -~]+$") ~= nil
+					and ((#key >= 8 and #key <= 63)
+						or (#key == 64 and key:match("^%x+$") ~= nil))
+				local vid_ok = vid_raw == nil
+					or (vid ~= nil and vid == math.floor(vid) and vid >= 1 and vid <= 4094)
+				local mac_ok = mac == nil or wire.is_mac(mac)
+				if key_ok and vid_ok and mac_ok then
+					ppsk = ppsk or {}
+					for _, e in ipairs(ppsk) do
+						if e.key == key and e.vid == vid and e.mac == mac then return end
+					end
+					ppsk[#ppsk + 1] = {key = key, vid = vid, mac = mac}
+				else
+					io.stderr:write(("inform: WLAN %q: skipping %s %d (%s)\n"):format(
+						w.ssid, label, i,
+						not key_ok and "passphrase is not 8-63 printable characters or 64 hex digits"
+							or (not vid_ok and "bad VLAN id " .. tostring(vid_raw)
+								or "bad station MAC " .. tostring(mac_raw))))
+				end
+			end
+			local function indexed(pattern)
 				local idxs = {}
 				for k in pairs(a) do
-					local i = k:match("^wpa%.psk_file%.(%d+)%.psk$")
+					local i = k:match(pattern)
 					if i then idxs[#idxs + 1] = tonumber(i) end
 				end
 				table.sort(idxs)
-				for _, i in ipairs(idxs) do
-					local key = a["wpa.psk_file." .. i .. ".psk"]
-					local vid_raw = a["wpa.psk_file." .. i .. ".vlanid"]
-					local vid = tonumber(vid_raw)
-					-- hostapd's own limits: a passphrase is 8..63 printable
-					-- ASCII characters, or the PSK itself as 64 hex digits. The
-					-- key becomes one line of hostapd's wpa_psk_file.
-					local key_ok = key:match("^[ -~]+$") ~= nil
-						and ((#key >= 8 and #key <= 63)
-							or (#key == 64 and key:match("^%x+$") ~= nil))
-					local vid_ok = vid_raw == nil
-						or (vid ~= nil and vid == math.floor(vid) and vid >= 1 and vid <= 4094)
-					if key_ok and vid_ok then
-						ppsk = ppsk or {}
-						ppsk[#ppsk + 1] = {key = key, vid = vid}
-					else
-						io.stderr:write(("inform: WLAN %q: skipping private pre-shared key %d "
-							.. "(%s)\n"):format(w.ssid, i,
-							key_ok and ("bad VLAN id " .. tostring(vid_raw))
-								or "passphrase is not 8-63 printable characters or 64 hex digits"))
+				return idxs
+			end
+			if wire.bool(a["wpa.psk_file.status"])
+					and (security == "wpa2" or security == "wpa3" or security == "wpa2/wpa3") then
+				for _, i in ipairs(indexed("^wpa%.psk_file%.(%d+)%.psk$")) do
+					add_ppsk("private pre-shared key", i, a["wpa.psk_file." .. i .. ".psk"],
+						a["wpa.psk_file." .. i .. ".vlanid"])
+				end
+			end
+
+			-- aaa.<n>.sae.psk.<k>.{psk,mac,vlan,id}: the WLAN's sae_psk list
+			-- (10.6.106 emitter XWWFgnDBrNRLQZ). Entry mac=ff:ff:ff:ff:ff:ff is
+			-- the WLAN's own key, already provisioned as wpa.psk. Firmware 6.8.2
+			-- writes the rest as sae_password= lines; OpenWrt's wifi-station
+			-- writes the same key to both the PSK and the SAE file, so they join
+			-- the private keys, bound to their MAC. A key also sent as psk_file
+			-- is created once.
+			if security == "wpa3" or security == "wpa2/wpa3" then
+				for _, i in ipairs(indexed("^sae%.psk%.(%d+)%.psk$")) do
+					local pre = "sae.psk." .. i .. "."
+					local mac = a[pre .. "mac"]
+					if not (mac and mac:lower() == "ff:ff:ff:ff:ff:ff") then
+						add_ppsk("SAE key", i, a[pre .. "psk"], a[pre .. "vlan"], mac)
 					end
 				end
 			end
