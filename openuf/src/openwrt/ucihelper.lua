@@ -104,6 +104,19 @@ local function get_uci()
 	return require("uci")
 end
 
+-- One push, one write of /etc/config/wireless: apply_config sets `batch` to a
+-- single cursor, every wireless writer it calls works on that cursor and
+-- leaves the commit to it. Called on their own the writers open and commit
+-- their own. A fresh cursor reads the file, so a reader that must see this
+-- push's sections has to go through the batch too.
+local batch
+local function wireless_cursor()
+	return batch or get_uci().cursor()
+end
+local function wireless_commit(cursor)
+	if cursor ~= batch then cursor:commit("wireless") end
+end
+
 -- General memo for the lookup pass M.begin_pass/end_pass open (see the
 -- wireless_status cache further down, which was the first thing to need one).
 -- Anything in here answers the SAME question for the length of one inform
@@ -494,8 +507,7 @@ end
 -- with the private pre-shared keys and VLANs (M.ppsk_add) that belong to them.
 -- radio: optional UCI radio name (e.g. "radio0"); nil removes from all radios.
 function M.wlan_clear(radio)
-	local uci = get_uci()
-	local cursor = uci.cursor()
+	local cursor = wireless_cursor()
 	local to_delete = {}
 	cursor:foreach("wireless", "wifi-iface", function(s)
 		local name = s[".name"]
@@ -527,7 +539,7 @@ function M.wlan_clear(radio)
 	for _, name in ipairs(to_delete) do
 		cursor:delete("wireless", name)
 	end
-	cursor:commit("wireless")
+	wireless_commit(cursor)
 end
 
 -- ─── Private Pre-Shared Keys ─────────────────────────────────────────────────
@@ -563,8 +575,7 @@ end
 -- without one: that client would land on the VAP's own network, past the
 -- segmentation the key exists for.
 function M.ppsk_add(iface, keys, networks)
-	local uci = get_uci()
-	local cursor = uci.cursor()
+	local cursor = wireless_cursor()
 	for i, k in ipairs(keys or {}) do
 		local net = k.vid and networks[k.vid]
 		if k.vid and not net then
@@ -592,7 +603,7 @@ function M.ppsk_add(iface, keys, networks)
 			end
 		end
 	end
-	cursor:commit("wireless")
+	wireless_commit(cursor)
 end
 
 -- MAC-based VLANs ("Virtual Network Override") for one vap_table entry: what
@@ -667,8 +678,7 @@ end
 -- no other way is not in the file and hostapd refuses the station.
 -- networks: vid -> UCI network section
 function M.radius_vlans_add(iface, networks)
-	local uci = get_uci()
-	local cursor = uci.cursor()
+	local cursor = wireless_cursor()
 	local vids = {}
 	for vid in pairs(networks or {}) do vids[#vids + 1] = vid end
 	table.sort(vids)
@@ -680,7 +690,7 @@ function M.radius_vlans_add(iface, networks)
 		cursor:set("wireless", vs, "vid", tostring(vid))
 		cursor:set("wireless", vs, "network", {networks[vid]})
 	end
-	cursor:commit("wireless")
+	wireless_commit(cursor)
 end
 
 -- UCI option marking a wifi-iface that openUF disabled on the user's behalf,
@@ -715,8 +725,7 @@ M.WIRELESS_PRISTINE = "/etc/openuf/wireless.pre-openuf"
 -- (config.own_config, default on) -- the controller's WLANs are the AP's WLANs.
 -- Client/mesh sections are never touched.
 function M.set_wlan_exclusive(enabled, own)
-	local uci = get_uci()
-	local cursor = uci.cursor()
+	local cursor = wireless_cursor()
 	if enabled and own then
 		local doomed = {}
 		cursor:foreach("wireless", "wifi-iface", function(s)
@@ -734,7 +743,7 @@ function M.set_wlan_exclusive(enabled, own)
 			for _, name in ipairs(doomed) do cursor:delete("wireless", name) end
 			io.stderr:write("openuf: removed the board's own SSIDs (" .. table.concat(doomed, ", ")
 				.. "); originals in " .. M.WIRELESS_PRISTINE .. "\n")
-			cursor:commit("wireless")
+			wireless_commit(cursor)
 		end
 		return
 	end
@@ -767,7 +776,7 @@ function M.set_wlan_exclusive(enabled, own)
 			cursor:set("wireless", t.name, AUTODISABLED, "0")
 		end
 	end
-	cursor:commit("wireless")
+	wireless_commit(cursor)
 end
 
 -- ─── Minimum Data Rate ───────────────────────────────────────────────────────
@@ -844,8 +853,7 @@ end
 --           the vap (and its sta_table) at all.
 -- Returns the section name, which a private pre-shared key ties itself to.
 function M.wlan_add(radio, ssid, security, password, extra, network, wlanconf_id)
-	local uci = get_uci()
-	local cursor = uci.cursor()
+	local cursor = wireless_cursor()
 	local section_name = M.section_name(radio, ssid)
 	local enc
 	if type(security) == "table" then
@@ -887,7 +895,7 @@ function M.wlan_add(radio, ssid, security, password, extra, network, wlanconf_id
 			end
 		end
 	end
-	cursor:commit("wireless")
+	wireless_commit(cursor)
 	return section_name
 end
 
@@ -1395,8 +1403,7 @@ end
 -- policy's acs_exclude_dfs / channels override them.
 function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, rates,
 		disabled, country, radio_policy, opts)
-	local uci = get_uci()
-	local cursor = uci.cursor()
+	local cursor = wireless_cursor()
 	-- Every write below is cursor:set on a named section, which in UCI CREATES
 	-- that section when it does not exist. A controller naming a phy this
 	-- device does not have (a stale device record, a config cloned from
@@ -1701,7 +1708,7 @@ function M.rf_config(radio, htmode, chan, txpwr, minrssi_enabled, minrssi_raw, r
 			cursor:delete("wireless", radio, "openuf_cell_density")
 		end
 	end
-	cursor:commit("wireless")
+	wireless_commit(cursor)
 	return true
 end
 
@@ -1721,7 +1728,7 @@ end
 -- hostapd.uc keeps ieee80211h on every hw_mode=a radio (5 and 6 GHz), and its
 -- schema default is on. Writing off there would take the radio off the air.
 function M.country_ie_config(radio, want)
-	local cursor = get_uci().cursor()
+	local cursor = wireless_cursor()
 	if cursor:get("wireless", radio) ~= "wifi-device" then return false end
 	local band = band_for_device({
 		band    = cursor:get("wireless", radio, "band"),
@@ -1760,7 +1767,7 @@ function M.country_ie_config(radio, want)
 	else
 		return true
 	end
-	cursor:commit("wireless")
+	wireless_commit(cursor)
 	return true
 end
 
@@ -1814,7 +1821,7 @@ local function reconcile_runtime(entries)
 end
 
 -- Handles vap_table and radio_table from the setparam/config response.
-function M.apply_config(resp, cfg, opts)
+local function apply_config_body(resp, cfg, opts)
 	local radio_table   = resp.radio_table   or {}
 	local vap_table     = resp.vap_table     or {}
 	local cpueth = cfg and cfg.net and cfg.net.lan_cpueth
@@ -1882,7 +1889,7 @@ function M.apply_config(resp, cfg, opts)
 			local rates
 			local agg = rates_by_radio[radio.name]
 			if agg then
-				local cur = get_uci().cursor()
+				local cur = wireless_cursor()
 				local band = band_for_device({
 					band    = cur:get("wireless", radio.name, "band"),
 					hwmode  = cur:get("wireless", radio.name, "hwmode"),
@@ -2510,6 +2517,11 @@ function M.apply_config(resp, cfg, opts)
 	M.set_wlan_exclusive(cfg and cfg.config and cfg.config.use_only_unifi_wlan == true,
 		not (cfg and cfg.config and cfg.config.own_config == false))
 
+	-- Everything above wrote through the one cursor; netifd and wifi reload
+	-- read the file.
+	batch:commit("wireless")
+	batch = nil
+
 	-- A VLAN bridge that only exists in UCI carries no traffic: netifd has to
 	-- be told, and `wifi reload` alone does not create a bridge device. Runs
 	-- BEFORE the wireless reload so the bridge exists by the time hostapd's
@@ -2578,6 +2590,14 @@ function M.apply_config(resp, cfg, opts)
 		local das = require("openwrt.das")
 		das.save(das.plan(vap_table))
 	end)
+end
+
+-- A push that raises partway leaves /etc/config/wireless as it was.
+function M.apply_config(resp, cfg, opts)
+	batch = get_uci().cursor()
+	local ok, err = pcall(apply_config_body, resp, cfg, opts)
+	batch = nil
+	if not ok then error(err, 0) end
 end
 
 -- Reapply the Multicast and Broadcast Blocker from UCI.
@@ -3096,8 +3116,7 @@ end
 -- Returns the section names written.
 function M.backhaul_apply(bh, network, peer_ie)
 	if type(bh) ~= "table" then return {} end
-	local uci = get_uci()
-	local cursor = uci.cursor()
+	local cursor = wireless_cursor()
 	local written = {}
 	network = network or "lan"
 	local dl = bh.downlink
@@ -3138,7 +3157,7 @@ function M.backhaul_apply(bh, network, peer_ie)
 		cursor:set("wireless", s, "openuf_backhaul", "uplink")
 		written[#written + 1] = s
 	end
-	if #written > 0 then cursor:commit("wireless") end
+	if #written > 0 then wireless_commit(cursor) end
 	return written
 end
 

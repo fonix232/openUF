@@ -4340,4 +4340,165 @@ return {
 			end)
 		end
 	},
+	{
+		name = "ucihelper: one push commits /etc/config/wireless once, and the result matches the per-writer commits",
+		fn = function()
+			local function copy(t)
+				if type(t) ~= "table" then return t end
+				local o = {}
+				for k, v in pairs(t) do o[k] = copy(v) end
+				return o
+			end
+			-- libuci semantics the always-live mock hides: a cursor reads the
+			-- file as of its first touch of a config and sees only its own
+			-- uncommitted changes; commit writes the file.
+			local function staged_uci()
+				local st = {committed = {}, commits = 0}
+				function st.cursor()
+					local view, cur = {}, {}
+					local function load(config)
+						if not view[config] then
+							view[config] = copy(st.committed[config]) or {order = {}, secs = {}}
+						end
+						return view[config]
+					end
+					function cur:set(config, section, a, b)
+						local c = load(config)
+						if not c.secs[section] then
+							c.secs[section] = {[".name"] = section}
+							c.order[#c.order + 1] = section
+						end
+						if b == nil then c.secs[section][".type"] = a
+						elseif type(b) == "table" then
+							local l = {}
+							for i, v in ipairs(b) do l[i] = tostring(v) end
+							c.secs[section][a] = l
+						else c.secs[section][a] = b end
+					end
+					function cur:get(config, section, option)
+						local s = load(config).secs[section]
+						if option == nil then return s and s[".type"] end
+						return s and s[option]
+					end
+					function cur:foreach(config, stype, fn)
+						local c = load(config)
+						for _, n in ipairs(copy(c.order)) do
+							local s = c.secs[n]
+							if s and s[".type"] == stype then fn(s) end
+						end
+					end
+					function cur:delete(config, section, option)
+						local c = load(config)
+						if option ~= nil then
+							if c.secs[section] then c.secs[section][option] = nil end
+							return
+						end
+						c.secs[section] = nil
+						for i, n in ipairs(c.order) do
+							if n == section then table.remove(c.order, i); break end
+						end
+					end
+					function cur:commit(config)
+						if config == "wireless" then st.commits = st.commits + 1 end
+						st.committed[config] = copy(load(config))
+					end
+					return cur
+				end
+				return st
+			end
+			local function dump(secs)
+				local names = {}
+				for n in pairs(secs or {}) do names[#names + 1] = n end
+				table.sort(names)
+				local out = {}
+				for _, n in ipairs(names) do
+					local opts = {}
+					for k, v in pairs(secs[n]) do
+						opts[#opts + 1] = k .. "=" .. (type(v) == "table" and table.concat(v, ",") or tostring(v))
+					end
+					table.sort(opts)
+					out[#out + 1] = n .. " {" .. table.concat(opts, " ") .. "}"
+				end
+				return table.concat(out, "\n")
+			end
+			local function seed(c)
+				c:set("wireless", "radio0", "wifi-device")
+				c:set("wireless", "radio1", "wifi-device")
+				c:set("wireless", "wifinet0", "wifi-iface")
+				c:set("wireless", "wifinet0", "device", "radio0")
+				c:set("wireless", "wifinet0", "mode", "ap")
+				c:set("wireless", "wifinet0", "ssid", "board")
+				c:set("network", "br_lan", "device")
+				c:set("network", "br_lan", "name", "br-lan")
+			end
+			local resp = {
+				radio_table = {{name = "radio0", channel = 6, htmode = "HT20"},
+					{name = "radio1", channel = 36, htmode = "VHT80"}},
+				vap_table = {
+					{ssid = "keys", radio = "radio0", security = "wpa2", x_passphrase = "basepass123",
+						ppsk = {{key = "keydefault1"}, {key = "keyvlan20a", vid = 20}}},
+					{ssid = "plain", radio = "radio1", security = "wpa2", x_passphrase = "hunter2222"},
+					{ssid = "iot", radio = "radio0", security = "wpa2", x_passphrase = "hunter3333",
+						vlan_enabled = true, vlan = 30},
+				},
+			}
+			local opts = {backhaul = {downlink = {radio = "radio1", ssid = "bh", key = "backhaulkey1"}}}
+			for _, own in ipairs({true, false}) do
+				local cfg = {net = {lan_cpueth = "eth1"},
+					config = {use_only_unifi_wlan = true, own_config = own}}
+				local live, live_commits
+				with_ucihelper(function(db, _, commits)
+					seed(ucihelper._uci.cursor())
+					silently(function() ucihelper.apply_config(resp, cfg, opts) end)
+					live, live_commits = dump(db.wireless), commits.wireless
+				end)
+				local staged_state, staged_commits
+				with_ucihelper(function()
+					local st = staged_uci()
+					ucihelper._uci = st
+					local c = st.cursor()
+					seed(c); c:commit("wireless"); c:commit("network"); st.commits = 0
+					silently(function() ucihelper.apply_config(resp, cfg, opts) end)
+					staged_state, staged_commits = dump(st.committed.wireless.secs), st.commits
+				end)
+				local label = " (own_config " .. tostring(own) .. ")"
+				assert_eq(staged_commits, 1, "one wireless commit per push" .. label)
+				assert_eq(staged_state, live, "what reaches the file is what the per-writer commits wrote" .. label)
+				assert_contains(staged_state, "openuf_radio0_keys_psk2", "the private keys" .. label)
+				assert_true(live_commits == 1, "the always-live mock counts the same" .. label)
+				if own then
+					assert_nil(staged_state:find("wifinet0 {", 1, true), "the board's own SSID removed" .. label)
+				else
+					assert_contains(staged_state, "wifinet0 {", "the board's own SSID kept in the file" .. label)
+					assert_contains(staged_state, "disabled=1", "and switched off by use_only_unifi_wlan, which saw the new sections" .. label)
+				end
+			end
+		end
+	},
+	{
+		name = "ucihelper: the wireless writers commit for themselves outside a push, and a push that raises commits nothing",
+		fn = function()
+			with_ucihelper(function(db, _, commits)
+				seed_radios({"radio0"})
+				ucihelper.wlan_add("radio0", "solo", "wpa2", "hunter2222", nil, "lan")
+				ucihelper.ppsk_add("openuf_radio0_solo", {{key = "keydefault1"}}, {})
+				ucihelper.radius_vlans_add("openuf_radio0_solo", {[20] = "lan20"})
+				ucihelper.set_wlan_exclusive(false, true)
+				ucihelper.wlan_clear()
+				assert_eq(commits.wireless, 5, "one commit per standalone call")
+
+				local before = commits.wireless
+				local real = ucihelper.ensure_vlan_network
+				ucihelper.ensure_vlan_network = function() error("boom") end
+				local ok = pcall(ucihelper.apply_config, {radio_table = {}, vap_table = {
+					{ssid = "iot", radio = "radio0", security = "wpa2", x_passphrase = "hunter2222",
+						vlan_enabled = true, vlan = 20}}}, {net = {lan_cpueth = "eth1"}})
+				ucihelper.ensure_vlan_network = real
+				assert_true(not ok, "the error reaches the caller")
+				assert_eq(commits.wireless, before, "and nothing was committed")
+				ucihelper.wlan_add("radio0", "after", "wpa2", "hunter2222", nil, "lan")
+				assert_eq(commits.wireless, before + 1, "the batch is gone: a later standalone call commits again")
+			end)
+		end
+	},
 }
