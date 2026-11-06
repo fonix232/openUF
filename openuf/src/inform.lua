@@ -2141,22 +2141,27 @@ end
 
 -- The idle wait's look at the collector between heartbeats (staevents.lua
 -- roam reports): anything new is ingested now, and a roam report it produced
--- is sent now. Returns how many reports were queued.
+-- is sent now, and so is a radar hit the collector logged. Returns how many
+-- reports were queued.
 function M._roam_poll()
 	local ev, ph = M._staevents, M._staphase
-	local evs, top = ev.parse_roam_log(ph.read_roam(), M._roam_seq)
+	local text = ph.read_roam()
+	local evs, top = ev.parse_roam_log(text, M._roam_seq)
+	local radar = ev.radar_ingest(ev.parse_radar_log(text, M._roam_seq))
 	M._roam_seq = top
 	evs = ev.merge_events(evs, ev.parse_fdb_log(ph.drain_fdb()))
-	if #evs == 0 then return 0 end
-	local now = M._time()
-	local n = ev.roam_ingest(evs, M._last_vap_by_ifname, function(mac)
-		return M._lockap.departure_cause(mac, now, ev, M._roamassist)
-	end)
+	local n = 0
+	if #evs > 0 then
+		local now = M._time()
+		n = ev.roam_ingest(evs, M._last_vap_by_ifname, function(mac)
+			return M._lockap.departure_cause(mac, now, ev, M._roamassist)
+		end)
+	end
 	local st = M._roam_st
-	if n > 0 and st and st.adopted and M._last_identity then
+	if n + radar > 0 and st and st.adopted and M._last_identity then
 		pcall(M._send_sta_events, st, M._roam_cfg)
 	end
-	return n
+	return n + radar
 end
 
 -- ─── Script entry point ───────────────────────────────────────────────────────

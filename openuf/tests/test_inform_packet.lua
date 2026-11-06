@@ -6028,6 +6028,34 @@ return {
 		end
 	},
 	{
+		name = "inform: _roam_poll queues a radar hit once and sends it at once",
+		fn = function()
+			local ev, ph = inform._staevents, inform._staphase
+			ev._reset()
+			ev._log = function() end
+			local orig = {read = ph.read_roam, drain = ph.drain_fdb, send = inform._send_sta_events,
+				st = inform._roam_st, id = inform._last_identity, seq = inform._roam_seq}
+			local log = "1 100.10 radar 5500 2 5530\n"
+			ph.read_roam = function() return log end
+			ph.drain_fdb = function() return nil end
+			local sent = {}
+			inform._send_sta_events = function() sent[#sent + 1] = ev.peek() return 0 end
+			inform._roam_st, inform._last_identity, inform._roam_seq = sample_state({adopted = true}), {}, 0
+			local ok, err = pcall(function()
+				assert_eq(inform._roam_poll(), 1, "the hit")
+				assert_eq(#sent, 1, "sent at once")
+				assert_eq(sent[1].event_string, "EVT_AP_RadarDetected", "the radar event")
+				assert_eq(sent[1].channel, "100", "channel")
+				assert_eq(inform._roam_poll(), 0, "the same log again: nothing new")
+				assert_eq(#sent, 1, "and nothing sent")
+			end)
+			ph.read_roam, ph.drain_fdb, inform._send_sta_events = orig.read, orig.drain, orig.send
+			inform._roam_st, inform._last_identity, inform._roam_seq = orig.st, orig.id, orig.seq
+			ev._reset()
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "inform: a clean push becomes cfgversion_effective",
 		fn = function()
 			local st = sample_state({adopted = true, cfgversion = "new"})

@@ -1894,6 +1894,46 @@ Each decided attempt is also logged, once, as `openuf: staevents: <mac> <ifname>
 Authentication frame (`logread | grep staevents`). A verdict ending in `no event` is an
 attempt that sent nothing to the controller, and a `-` is a stage that was not seen.
 
+### DFS radar reporting
+
+On a DFS channel (52-144) the radio must leave the channel for 30 minutes when it detects
+radar. hostapd does that by itself; what was missing is telling the controller, which
+otherwise logs nothing, and the channel change looks unexplained.
+
+The same collector that stamps the connection steps (`staphase.uc`) is subscribed to every
+hostapd BSS, and hostapd announces a radar hit on each of them as a `radar-detected` ubus
+notification (`frequency`, `width`, `center1`, `center2`; confirmed in 25.12's hostapd
+binary). The collector writes one `radar` line to `/tmp/openuf-roam.log` and the daemon
+sends it, within a quarter of a second, as the AP's own event:
+
+```
+inform_as_notif = true, notif_reason = "event",
+notif_payload = {event_string = "EVT_AP_RadarDetected", channel = "100", freq = 5500}
+```
+
+The controller logs *"<AP> detected radar on channel 100 (5500 MHz)"* under the wlan
+subsystem and raises the matching alert. `channel` is a **string** and `freq` a number,
+because that is how 10.6.106's handler reads them; with either missing the controller
+discards the event. The channel is derived from `freq`, which is where the radar was seen,
+not from the BSS's centre frequency (`center1`), which differs on a wide channel.
+
+Nothing to configure, and it needs no `capability=notif,notif-assoc-stat`: the controller
+asked for nothing. It does depend on the collector, which the init script starts unless
+`sta_events = false`; it does **not** depend on `rrm_enrichment`, which runs a different
+collector (`ubus subscribe` and `hostapd_cli` monitors) that this path does not use.
+
+What to expect in the log:
+
+```
+openuf: staevents: radar detected on channel 100 (5500 MHz) -- reported to the controller
+```
+
+One detection is reported once even when the radio carries several BSSes (hostapd announces
+it on each; the collector drops the repeats of one frequency within five seconds). The
+event is queued with the connection events (200 at most) and a failed POST keeps it for the
+next heartbeat. It carries no `vap`, which a UniFi AP sends beside the channel: ubus names
+the BSS only by object id, and the controller's handler reads `channel` and `freq` alone.
+
 ### Controller-managed system settings (timezone, NTP, nightly scan)
 
 Every full `system_cfg` push also carries three blocks, which `sysconf.lua` applies, each

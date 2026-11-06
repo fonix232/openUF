@@ -5112,6 +5112,88 @@ same AP and band the **first** left event stays, and the record carries that eve
 `event_type`. So the order matters, and `sta_roam` must precede its `sta_leave`, as
 `staevents.roam_ingest` queues them (a unit test pins the order).
 
+## DFS radar detection: `EVT_AP_RadarDetected`
+
+openUF sent no device event of any kind. 10.6.106 has handlers for eleven `EVT_AP_*`
+strings (`AcsTriggerComplete`, `AfcEvent`, `ChannelChanged`, `DetectRogueAP`, `Isolated`,
+`LocationEvent`, `PossibleInterference`, `QuickScanEvent`, `RadarDetected`,
+`RestartedUnknown`, `RestartProc`), and U7LR 6.8.2's whole rootfs contains exactly three:
+`EVT_AP_RadarDetected`, `EVT_AP_WirelessEvent` and `EVT_AP_Notification`, all in
+`sbin/ubntbox`. The intersection is one event, `EVT_AP_RadarDetected`, and it is
+implemented. The other ten controller-side strings are declined as **not device-sent**: the
+controller raises them itself from what it already has. `EVT_AP_WirelessEvent` and
+`EVT_AP_Notification` are declined the other way round: **no handler in 10.6.106**.
+(Upstream's reading, 2026-10-27; not repeated on this fork.)
+
+**The wire contract**, read from the handler (upstream, 2026-10-27) —
+`com.ubnt.service.devmgr.e.c.Cuhf`, whose `kCNoUwYXLXMAUl(long, device, doc)` is:
+
+```java
+if (!doc.containsAllFields(new String[]{"channel", "freq"})) return false;
+String channel = doc.getString("channel");
+int freq = doc.getInt("freq");
+... alert(..., "ap", dev.getMAC(), "ap_name", dev.getName(),
+          "radar_channel", channel, "freq", freq)
+```
+
+So the envelope is the ordinary notif inform (`inform_as_notif`, `notif_reason = "event"`),
+and the payload needs `event_string`, `channel` **as a string** and `freq` **as a number**;
+returning false lands in the dispatcher's `debug("Event without handler, payload: {}")`.
+`event_defs.json` carries the rest: subsystem `wlan`, `event_enabled: true`, message
+`"{ap} detected radar on channel {radar_channel} ({freq} MHz)"`, `is_negative: false`.
+6.8.2's own payload is the same three fields plus `vap`, from the string pool around
+`EVT_AP_RadarDetected` in `sbin/ubntbox`: `"DFS: Radar detected on channel %u (freq %u)"`,
+`event_string`, `mca-custom-alert`, `freq`, `vap`.
+
+**Lab, 10.6.106, 2026-10-27 (upstream).** `debug.device=debug` in `system.properties`
+(restart required) puts the dispatcher's own decision in `server.log`, which makes this
+testable without a radio:
+
+| sent | `server.log` |
+|---|---|
+| `{event_string: EVT_AP_RadarDetected, channel: "100", freq: 5500, vap: "phy1-ap0"}` | `notif inform` … `Inform finished`, **no** "Event without handler" |
+| the same with `channel` removed | `Event without handler, payload: {"event_string":"EVT_AP_RadarDetected","freq":5500}` |
+| `{event_string: EVT_AP_NoSuchEventOpenUF, channel: "100", freq: 5500}` | `Event without handler, payload: {…}` |
+
+The two negative controls are what make the first row evidence: the dispatcher is reached,
+it logs its refusals at the level that was enabled, and it refused exactly the payloads it
+should. What the lab **cannot** show is the stored event: 10.6.106 keeps no documents in
+Mongo's `event` or `alarm` collections and `/api/s/default/stat/event` is 404 on that build.
+Handler acceptance is proven; the UI row is not. A notif inform with a *minimal* identity
+(mac/model/version only) is refused with HTTP 400, so a hand-written control must repeat
+what `_notif_identity` carries.
+
+**The device side on this fork.** Upstream read `DFS-RADAR-DETECTED freq=5500 … cf1=5530`
+off hostapd's control socket with `hostapd_cli -a` monitors. This fork's connection
+collector (`staphase.uc`) is already subscribed to every `hostapd.<ifname>` ubus object, and
+hostapd publishes the same event there, so the collector is extended and no monitor process
+is added.
+
+- *hostapd emits it* (Tier 2, 2026-11-06): `strings /usr/sbin/hostapd` in
+  `openwrt/rootfs:x86-64-25.12.0` (hostapd 2025.08.26) carries `radar-detected`, `center1`
+  and `center2` next to the control-socket `DFS-RADAR-DETECTED freq=%d … cf1=%d cf2=%d`
+  format. `frequency` and `width` are tail-merged into longer strings and cannot be read
+  there, so the fields come from 25.12's `package/network/services/hostapd/src/src/ap/ubus.c`,
+  `hostapd_ubus_notify_radar_detected`: `frequency`, `width`, `center1`, `center2`, all
+  `u16`, notified on **every** BSS of the interface (`for i < iface->num_bss`), timeout -1
+  (hostapd does not wait for the subscriber's answer).
+- *what a ucode subscriber receives* (Tier 2): `{type: "radar-detected", data: {frequency,
+  width, center1, center2}, info: {object: {id}}}`. No interface name, so the event cannot
+  carry `vap`, and one hit arrives once per BSS with identical data, which is why the
+  collector collapses on frequency within five seconds.
+- *the collector end to end* (Tier 2): `staphase.uc` run against `ubusd` and a publisher of
+  `hostapd.phy1-ap0` and `hostapd.phy1-ap1`. A hit announced on both, and again one second
+  later, produced one `radar 5500 2 5530` line in `/tmp/openuf-roam.log`; a hit on 5260 a
+  second after that produced a second line; a notification with no `frequency` produced
+  none and did not stop the collector.
+- *the freq, not cf1* (unit): 5500 is channel 100 and `center1` 5530 is 106 on an 80 MHz
+  channel; the channel comes from `frequency`, which is where the radar was.
+
+**Not claimed.** No radar hit has been captured on this fork's hardware, and upstream
+captured none either: radar cannot be produced on demand, so the whole device-side path
+from a real DFS driver event to the inform is unconfirmed on radios. The lab proves the
+controller's side, the Tier 2 run proves the collector and the ubus shape.
+
 ## UniFi Network 11.x (string-level, not decompiled)
 
 **Source.** `unifi-native` 11.0.81-37038-1 for `uos-deb13-arm64`, fw-update channel `qa`:

@@ -4341,6 +4341,29 @@ return {
 		end
 	},
 	{
+		name = "ucihelper: country_ie_config reads 5 GHz from hwmode or a channel, and keeps the IE where the band is unknowable",
+		fn = function()
+			with_ucihelper(function(db)
+				seed_radios({"radio0", "radio1", "radio2", "radio3"})
+				local c = ucihelper._uci.cursor()
+				c:set("wireless", "radio0", "hwmode", "11a")
+				c:set("wireless", "radio1", "channel", "36")
+				c:set("wireless", "radio2", "channel", "auto")
+				c:set("wireless", "radio3", "channel", "6")
+				local quiet = io.stderr
+				io.stderr = {write = function() end}
+				for _, r in ipairs({"radio0", "radio1", "radio2", "radio3"}) do
+					ucihelper.country_ie_config(r, false)
+				end
+				io.stderr = quiet
+				assert_nil(db.wireless.radio0.country_ie, "hwmode=11a: 5 GHz, kept")
+				assert_nil(db.wireless.radio1.country_ie, "channel 36: 5 GHz, kept")
+				assert_nil(db.wireless.radio2.country_ie, "no band, channel auto: a dead radio is the cost of guessing 2.4, kept")
+				assert_eq(db.wireless.radio3.country_ie, "0", "channel 6: 2.4 GHz, off honoured")
+			end)
+		end
+	},
+	{
 		name = "ucihelper: one push commits /etc/config/wireless once, and the result matches the per-writer commits",
 		fn = function()
 			local function copy(t)

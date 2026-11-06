@@ -512,4 +512,60 @@ return {
 			ev._reset()
 		end
 	},
+
+	{
+		name = "staevents: channel_of_freq is an integer channel on every band, nil off any",
+		fn = function()
+			assert_eq(ev.channel_of_freq(5500), 100, "5 GHz")
+			assert_eq(tostring(ev.channel_of_freq(5500)), "100", "an integer, not 100.0")
+			assert_eq(ev.channel_of_freq(5180), 36, "UNII-1")
+			assert_eq(ev.channel_of_freq(2437), 6, "2.4 GHz")
+			assert_eq(ev.channel_of_freq(2484), 14, "channel 14")
+			assert_nil(ev.channel_of_freq(5501), "off the 5 MHz grid")
+			assert_nil(ev.channel_of_freq(nil), "no frequency")
+			assert_nil(ev.channel_of_freq(900), "no band")
+		end
+	},
+	{
+		name = "staevents: radar lines parse beside the station lines, from the freq and not the centre",
+		fn = function()
+			local text = table.concat({
+				"4 100.10 assoc aa:bb:cc:00:00:01 phy1-ap0 -61 -",
+				"5 100.50 radar 5500 2 5530",
+				"6 100.60 radar 5501 2 5530",
+				"7 100.70 radar - - -",
+			}, "\n")
+			local hits = ev.parse_radar_log(text, 0)
+			assert_eq(#hits, 1, "one usable hit; a freq off the grid or missing is dropped")
+			assert_eq(hits[1].channel, 100, "the channel of freq (5500), not of cf1 (5530 = 106)")
+			assert_eq(hits[1].freq, 5500, "freq")
+			assert_eq(#ev.parse_radar_log(text, 5), 0, "seq 5 was already read")
+			assert_eq(#ev.parse_radar_log("1 5.00 radar 5500 2 5530", 9), 1, "a restarted collector's log is read whole")
+			local evs, top = ev.parse_roam_log(text, 0)
+			assert_eq(#evs, 1, "the station parser ignores radar lines")
+			assert_eq(top, 7, "but counts their seq")
+			assert_eq(#ev.parse_radar_log(nil, 0), 0, "no log")
+		end
+	},
+	{
+		name = "staevents: radar_ingest queues the controller's EVT_AP_RadarDetected, channel a string and freq a number",
+		fn = function()
+			ev._reset()
+			local lines = {}
+			ev._log = function(l) lines[#lines + 1] = l end
+			assert_eq(ev.radar_ingest(ev.parse_radar_log("1 9.00 radar 5500 2 5530", 0)), 1, "one queued")
+			assert_eq(ev.pending(), 1, "pending beside the station events")
+			local p = ev.notif_payload({mac = "aa:bb:cc:00:00:99"}, ev.peek())
+			assert_true(p.inform_as_notif, "a notif inform")
+			assert_eq(p.notif_reason, "event", "of reason event")
+			assert_eq(p.notif_payload.event_string, "EVT_AP_RadarDetected", "the event")
+			assert_eq(p.notif_payload.channel, "100", "channel is a string")
+			assert_eq(p.notif_payload.freq, 5500, "freq is a number")
+			assert_nil(p.notif_payload.message_type, "not a STA_ASSOC_TRACKER")
+			assert_contains(lines[1], "radar detected on channel 100 (5500 MHz)", "logged")
+			ev.pop()
+			ev._log = function() end
+			ev._reset()
+		end
+	},
 }

@@ -80,6 +80,9 @@
 	came: an unverified one would be dropped by the controller anyway.
 	Failures are the wrong-passphrase attempts hostapd reports, one event per
 	client per FAIL_WINDOW carrying the count.
+
+	The same queue carries the one device event a UniFi AP sends,
+	EVT_AP_RadarDetected (radar_ingest below).
 ]]--
 
 local M = {}
@@ -362,12 +365,11 @@ M._here   = {}
 M._roamed = {}
 M._roam_queue = {}
 
--- The collector's hostapd roam log (openwrt/staphase.uc), one event per line:
---   <seq> <uptime> <ev> <mac> <ifname|-> <signal|-> <alg|->
--- Returns the events with seq > after, oldest first, and the highest seq. A
--- log whose seqs are all below after is a restarted collector's: read whole.
-local WANTED = {assoc = true, ["sta-authorized"] = true, disassoc = true, deauth = true}
-function M.parse_roam_log(text, after)
+-- The collector's hostapd log (openwrt/staphase.uc), one event per line:
+--   <seq> <uptime> <ev> <rest>
+-- The lines with seq > after, oldest first, and the highest seq. A log whose
+-- seqs are all below after is a restarted collector's: read whole.
+local function log_lines(text, after)
 	local out, top = {}, 0
 	if type(text) ~= "string" then return out, after or 0 end
 	for line in text:gmatch("[^\n]+") do
@@ -379,18 +381,31 @@ function M.parse_roam_log(text, after)
 		local seq, t, ev, rest = line:match("^(%d+)%s+(%d+%.?%d*)%s+(%S+)%s*(.*)$")
 		seq = tonumber(seq)
 		if seq and seq > (after or 0) then
-			if WANTED[ev] then
-				local mac, ifname, sig, alg = rest:match("^(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)%s+(%S+)%s+(%S+)%s+(%S+)")
-				if mac then
-					out[#out + 1] = {seq = seq, t = tonumber(t), mac = mac:lower(),
-						ev = (ev == "deauth") and "disassoc" or ev,
-						ifname = ifname ~= "-" and ifname or nil,
-						signal = tonumber(sig), alg = alg ~= "-" and alg or nil}
-				end
-			end
+			out[#out + 1] = {seq = seq, t = tonumber(t), ev = ev, rest = rest}
 		end
 	end
 	return out, math.max(top, after or 0)
+end
+
+-- The collector's hostapd roam log (openwrt/staphase.uc), one event per line:
+--   <seq> <uptime> <ev> <mac> <ifname|-> <signal|-> <alg|->
+-- Returns the station events among them, and the highest seq.
+local WANTED = {assoc = true, ["sta-authorized"] = true, disassoc = true, deauth = true}
+function M.parse_roam_log(text, after)
+	local lines, top = log_lines(text, after)
+	local out = {}
+	for _, l in ipairs(lines) do
+		if WANTED[l.ev] then
+			local mac, ifname, sig, alg = l.rest:match("^(%x%x:%x%x:%x%x:%x%x:%x%x:%x%x)%s+(%S+)%s+(%S+)%s+(%S+)")
+			if mac then
+				out[#out + 1] = {seq = l.seq, t = tonumber(l.t), mac = mac:lower(),
+					ev = (l.ev == "deauth") and "disassoc" or l.ev,
+					ifname = ifname ~= "-" and ifname or nil,
+					signal = tonumber(sig), alg = alg ~= "-" and alg or nil}
+			end
+		end
+	end
+	return out, top
 end
 
 -- The collector's fdb log: "<uptime> fdb <bridge monitor fdb line>" per line.
@@ -552,6 +567,57 @@ function M.roam_ingest(events, vap_by_ifname, cause)
 				end
 			end
 		end
+	end
+	return n
+end
+
+-- ─── DFS radar ───────────────────────────────────────────────────────────
+
+-- The channel a frequency is, for the radar event: hostapd names the
+-- frequency, and the controller's handler wants the channel as well.
+-- math.floor, because Lua 5.3+ divides to a float and "100.0" is not a
+-- channel the handler can match.
+function M.channel_of_freq(freq)
+	freq = tonumber(freq)
+	if not freq then return nil end
+	if freq == 2484 then return 14 end
+	if freq >= 2412 and freq <= 2472 and (freq - 2407) % 5 == 0 then
+		return math.floor((freq - 2407) / 5)
+	end
+	if freq >= 5160 and freq <= 5885 and (freq - 5000) % 5 == 0 then
+		return math.floor((freq - 5000) / 5)
+	end
+	return nil
+end
+
+-- The radar hits in the collector's log, "<seq> <uptime> radar <freq> <width>
+-- <cf1>", newer than seq `after`. `freq` is where the radar was seen, which on
+-- a wide channel is not the BSS's own centre (cf1). A line without a usable
+-- freq is dropped, not reported with a guessed channel: the controller's
+-- handler needs both fields and ignores the event without either.
+function M.parse_radar_log(text, after)
+	local out = {}
+	for _, l in ipairs((log_lines(text, after))) do
+		if l.ev == "radar" then
+			local freq = tonumber(l.rest:match("^(%d+)"))
+			local channel = M.channel_of_freq(freq)
+			if channel then out[#out + 1] = {seq = l.seq, freq = freq, channel = channel} end
+		end
+	end
+	return out
+end
+
+-- Queue EVT_AP_RadarDetected for each hit: the one device event 10.6.106
+-- handles that a UniFi AP sends (PROTOCOL-VALIDATION.md, "DFS radar
+-- detection"). `channel` is a string and `freq` a number, as the handler
+-- reads them. Returns how many were queued.
+function M.radar_ingest(hits)
+	local n = 0
+	for _, h in ipairs(hits or {}) do
+		enqueue({event_string = "EVT_AP_RadarDetected", channel = tostring(h.channel), freq = h.freq})
+		n = n + 1
+		M._log(string.format("openuf: staevents: radar detected on channel %d (%d MHz) -- reported to the controller\n",
+			h.channel, h.freq))
 	end
 	return n
 end

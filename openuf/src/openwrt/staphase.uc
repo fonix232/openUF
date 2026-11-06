@@ -26,6 +26,12 @@
 // AP is learned on the uplink here in the same second, while hostapd still
 // lists it for 6-40 s.
 //
+// A radar hit rides the same log. hostapd announces it on every BSS of the
+// radio, with the frequency the radar was seen on and no station address
+// (`radar-detected`: frequency, width, center1, center2), so the copies are
+// collapsed here and one `radar` line is written; inform.lua reports it as
+// the controller's EVT_AP_RadarDetected (unifi/staevents.lua radar_ingest).
+//
 // It sits in hostapd's path. With notify_response on (usteer turns it on),
 // hostapd waits up to 100 ms for every subscriber's answer to an auth, assoc
 // or probe notification and REJECTS the client when any answer is non-zero --
@@ -46,6 +52,7 @@ const STALE_US = 30 * 1000000;      // an unfinished one is abandoned after this
 const MAX_FAILURES = 500;
 const ROAM_OUT = '/tmp/openuf-roam.log';
 const MAX_ROAM = 64;                // lines kept in ROAM_OUT
+const RADAR_DEDUP_US = 5 * 1000000; // one radar hit arrives once per BSS
 
 let attempts = {};      // mac -> {ifname, auth, signal, assoc, authorized, alg, done, seq}
 let failures = [];      // {seq, mac, ifname, auth, signal, assoc, at}
@@ -55,6 +62,7 @@ let to_clear = {};
 let clear_timer = null;
 let roam = [];          // the last MAX_ROAM roam log lines
 let roam_seq = 0;
+let radar_at = {};      // frequency -> when it was last logged
 
 function now_us() {
 	let c = clock();
@@ -99,6 +107,17 @@ function roam_log(ev, rest) {
 		splice(roam, 0, length(roam) - MAX_ROAM);
 	if (!roam_timer)
 		roam_timer = uloop.timer(1, roam_write);
+}
+
+function radar(d) {
+	let freq = int(d?.frequency);
+	if (!freq)
+		return;
+	let t = now_us();
+	if (radar_at[freq] != null && t - radar_at[freq] < RADAR_DEDUP_US)
+		return;
+	radar_at[freq] = t;
+	roam_log('radar', `${freq} ${d.width ?? '-'} ${d.center1 ?? '-'}`);
 }
 
 const ROAM_EVENTS = { 'assoc': true, 'sta-authorized': true, 'disassoc': true, 'deauth': true };
@@ -164,7 +183,10 @@ function handle(type, d) {
 function on_notify(req) {
 	if (req.type != 'probe') {
 		try {
-			handle(req.type, req.data);
+			if (req.type == 'radar-detected')
+				radar(req.data);
+			else
+				handle(req.type, req.data);
 		}
 		catch (e) {
 			warn(`openuf-phases: ${e}\n`);
