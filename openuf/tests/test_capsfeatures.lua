@@ -1059,4 +1059,66 @@ return {
 			assert_nil(qos({["hs20.qos.map.1.low"] = "-1"}), "negative")
 		end
 	},
+	{
+		name = "hotspot2: a full profile is indexed in one pass over its keys, and parses as before",
+		fn = function()
+			local a = {["hs20.status"] = "enabled", ["hs20.qos.status"] = "enabled",
+				["hs20.metrics.status"] = "enabled", ["hs20.metrics.info"] = "1",
+				["hs20.metrics.downlink_speed"] = "8000", ["hs20.metrics.uplink_speed"] = "1000",
+				["hs20.metrics.downlink_load"] = "0", ["hs20.metrics.uplink_load"] = "0",
+				["hs20.metrics.measurement"] = "0", ["hs20.icon.1.name"] = "logo",
+				["radius.1.ip"] = "192.0.2.1"}
+			for i = 1, 3 do
+				local n = tostring(i)
+				a["hs20.venue_name." .. n .. ".lang"] = "eng"
+				a["hs20.venue_name." .. n .. ".name"] = "Cafe " .. n
+				a["hs20.venue_name." .. n .. ".url"] = "https://example.com/" .. n
+				a["hs20." .. n .. ".roaming_consortium"] = "5A03BA000" .. n
+				a["hs20.3gpp." .. n .. ".mcc"] = "31" .. n
+				a["hs20.3gpp." .. n .. ".mnc"] = "026"
+				a["hs20.friendly_name." .. n .. ".language"] = "eng"
+				a["hs20.friendly_name." .. n .. ".text"] = "Op " .. n
+				a["hs20.capab." .. n .. ".protocol"] = "6"
+				a["hs20.capab." .. n .. ".port"] = tostring(440 + i)
+				a["hs20.capab." .. n .. ".status"] = "open"
+				a["hs20.qos.exception." .. n .. ".dcsp"] = tostring(10 + i)
+				a["hs20.qos.exception." .. n .. ".up"] = "2"
+				local p = "hs20.nai_realm." .. n .. "."
+				a[p .. "status"], a[p .. "encoding"] = "enabled", "0"
+				a[p .. "name"], a[p .. "eap_method"] = "r" .. n .. ".example.com", "21"
+				for j = 1, 12 do
+					a[p .. "eap_method.auth." .. j .. ".id"] = tostring(j)
+					a[p .. "eap_method.auth." .. j .. ".val"] = tostring(j + 1)
+				end
+			end
+			for i = 1, 8 do
+				a["hs20.qos.map." .. i .. ".low"] = tostring((i - 1) * 8)
+				a["hs20.qos.map." .. i .. ".high"] = tostring(i * 8 - 1)
+			end
+			a["hs20.nai_realm.2.eap_method.auth.13.id"] = "x"
+			a["hs20.nai_realm.2.eap_method.auth.13.val"] = "1"
+			a["hs20.2.roaming_consortium"] = "zz"
+			local function ser(v)
+				if type(v) ~= "table" then return tostring(v) end
+				local ks = {}
+				for k in pairs(v) do ks[#ks + 1] = k end
+				table.sort(ks, function(x, y) return tostring(x) < tostring(y) end)
+				local o = {}
+				for _, k in ipairs(ks) do o[#o + 1] = tostring(k) .. "=" .. ser(v[k]) end
+				return "{" .. table.concat(o, ",") .. "}"
+			end
+			local keys = 0
+			for _ in pairs(a) do keys = keys + 1 end
+			local looks, rmatch, rfind = 0, string.match, string.find
+			string.match = function(s, ...) if a[s] ~= nil then looks = looks + 1 end return rmatch(s, ...) end
+			string.find = function(s, ...) if a[s] ~= nil then looks = looks + 1 end return rfind(s, ...) end
+			local h
+			local ok, err = pcall(function() quiet(function() h = hotspot2_p.parse(a, "x") end) end)
+			string.match, string.find = rmatch, rfind
+			if not ok then error(err, 0) end
+			assert_true(looks <= 3 * keys, "each key is looked at at most three times, not once per collector ("
+				.. looks .. " for " .. keys .. " keys)")
+			assert_eq(ser(h), [[{cell_nets={1=311,026,2=312,026,3=313,026},conn_capabs={1={port=441,proto=6,status=1},2={port=442,proto=6,status=1},3={port=443,proto=6,status=1}},friendly_names={1={lang=eng,text=Op 1},2={lang=eng,text=Op 2},3={lang=eng,text=Op 3}},nai_realms={1={eap=21[1:2][2:3][3:4][4:5][5:6][6:7][7:8][8:9][9:10][10:11][11:12][12:13],encoding=0,name=r1.example.com},2={eap=21[1:2][2:3][3:4][4:5][5:6][6:7][7:8][8:9][9:10][10:11][11:12][12:13],encoding=0,name=r3.example.com}},osu_dropped=true,qos_map_set=11,2,12,2,13,2,0,7,8,15,16,23,24,31,32,39,40,47,48,55,56,63,roaming_consortiums={1=5a03ba0001,2=5a03ba0003},venue_names={1={lang=eng,name=Cafe 1},2={lang=eng,name=Cafe 2},3={lang=eng,name=Cafe 3}},venue_urls={1={idx=1,url=https://example.com/1},2={idx=2,url=https://example.com/2},3={idx=3,url=https://example.com/3}},wan_metrics=01:8000:1000:0:0:0}]], "the parsed block, field for field")
+		end
+	},
 }

@@ -61,12 +61,22 @@ function M.parse(a, ssid)
 	local function url_ok(v)
 		return type(v) == "string" and #v <= 250 and v:match("^https?://[%w%p]+$") ~= nil
 	end
-	local function sorted_idx(pattern)
-		local out = {}
-		for k in pairs(a) do
-			local i = k:match(pattern)
-			if i then out[#out + 1] = tonumber(i) end
+	-- One pass over the keys: each indexed key goes under "<prefix>/<leaf>"
+	-- with its last indexed level as the index, so a realm's own
+	-- eap_method.auth.<j>.* is a bucket of its own. Keys with no index are
+	-- read by name and skipped here.
+	local buckets, osu = {}, false
+	for k in pairs(a) do
+		local prefix, i, leaf = k:match("^(.*)%.(%d+)%.([^.]+)$")
+		if prefix then
+			local b = prefix .. "/" .. leaf
+			buckets[b] = buckets[b] or {}
+			buckets[b][#buckets[b] + 1] = tonumber(i)
 		end
+		if k:find("^hs20%.icon%.") or k:find("^osu%.") then osu = true end
+	end
+	local function sorted_idx(prefix, leaf)
+		local out = buckets[prefix .. "/" .. leaf] or {}
 		table.sort(out)
 		return out
 	end
@@ -109,7 +119,7 @@ function M.parse(a, ssid)
 		else warn("domain name list") end
 	end
 	h.venue_names, h.venue_urls = {}, {}
-	for _, k in ipairs(sorted_idx("^hs20%.venue_name%.(%d+)%.name$")) do
+	for _, k in ipairs(sorted_idx("hs20.venue_name", "name")) do
 		local p = "hs20.venue_name." .. k .. "."
 		local lang, name, vurl = a[p .. "lang"] or "eng", a[p .. "name"], a[p .. "url"]
 		if lang:match("^%a%a%a?$") and txt(name, 252) then
@@ -122,7 +132,7 @@ function M.parse(a, ssid)
 		else warn("venue name " .. k) end
 	end
 	h.nai_realms = {}
-	for _, k in ipairs(sorted_idx("^hs20%.nai_realm%.(%d+)%.name$")) do
+	for _, k in ipairs(sorted_idx("hs20.nai_realm", "name")) do
 		local p = "hs20.nai_realm." .. k .. "."
 		if a[p .. "status"] ~= "disabled" then
 			local enc, name, eap = a[p .. "encoding"] or "0", a[p .. "name"], a[p .. "eap_method"]
@@ -132,7 +142,7 @@ function M.parse(a, ssid)
 			if ok and eap and eap ~= "" then
 				ok = eap:match("^%d%d?%d?$") ~= nil
 				method = eap
-				for _, j in ipairs(sorted_idx("^hs20%.nai_realm%." .. k .. "%.eap_method%.auth%.(%d+)%.id$")) do
+				for _, j in ipairs(sorted_idx("hs20.nai_realm." .. k .. ".eap_method.auth", "id")) do
 					local id = a[p .. "eap_method.auth." .. j .. ".id"]
 					local val = a[p .. "eap_method.auth." .. j .. ".val"]
 					if id and val and id:match("^%d%d?%d?$") and val:match("^%d%d?%d?$") then
@@ -146,7 +156,7 @@ function M.parse(a, ssid)
 		end
 	end
 	h.roaming_consortiums = {}
-	for _, k in ipairs(sorted_idx("^hs20%.(%d+)%.roaming_consortium$")) do
+	for _, k in ipairs(sorted_idx("hs20", "roaming_consortium")) do
 		local oi = a["hs20." .. k .. ".roaming_consortium"]
 		-- An OI is 3 to 15 octets, written as hex.
 		if oi and oi:match("^%x+$") and #oi % 2 == 0 and #oi >= 6 and #oi <= 30 then
@@ -154,14 +164,14 @@ function M.parse(a, ssid)
 		else warn("roaming consortium " .. k) end
 	end
 	h.cell_nets = {}
-	for _, k in ipairs(sorted_idx("^hs20%.3gpp%.(%d+)%.mcc$")) do
+	for _, k in ipairs(sorted_idx("hs20.3gpp", "mcc")) do
 		local mcc, mnc = a["hs20.3gpp." .. k .. ".mcc"], a["hs20.3gpp." .. k .. ".mnc"]
 		if mcc and mnc and mcc:match("^%d%d%d$") and mnc:match("^%d%d%d?$") then
 			h.cell_nets[#h.cell_nets + 1] = mcc .. "," .. mnc
 		else warn("3GPP network " .. k) end
 	end
 	h.friendly_names = {}
-	for _, k in ipairs(sorted_idx("^hs20%.friendly_name%.(%d+)%.text$")) do
+	for _, k in ipairs(sorted_idx("hs20.friendly_name", "text")) do
 		local lang = a["hs20.friendly_name." .. k .. ".language"] or "eng"
 		local t = a["hs20.friendly_name." .. k .. ".text"]
 		if lang:match("^%a%a%a?$") and txt(t, 252) then
@@ -170,7 +180,7 @@ function M.parse(a, ssid)
 	end
 	h.conn_capabs = {}
 	local cstatus = {closed = 0, open = 1, unknown = 2}
-	for _, k in ipairs(sorted_idx("^hs20%.capab%.(%d+)%.protocol$")) do
+	for _, k in ipairs(sorted_idx("hs20.capab", "protocol")) do
 		local p = "hs20.capab." .. k .. "."
 		local proto, port = tonumber(a[p .. "protocol"]), tonumber(a[p .. "port"])
 		local st = cstatus[a[p .. "status"] or ""] or tonumber(a[p .. "status"])
@@ -186,13 +196,13 @@ function M.parse(a, ssid)
 			return (n and n >= lo and n <= hi) and n or nil
 		end
 		local ex, ranges, bad = {}, {}, false
-		for _, k in ipairs(sorted_idx("^hs20%.qos%.exception%.(%d+)%.dcsp$")) do
+		for _, k in ipairs(sorted_idx("hs20.qos.exception", "dcsp")) do
 			-- An exception: one DSCP value (0-63) to one user priority (0-7).
 			local d = n_in(a["hs20.qos.exception." .. k .. ".dcsp"], 0, 63)
 			local u = n_in(a["hs20.qos.exception." .. k .. ".up"], 0, 7)
 			if d and u then ex[#ex + 1] = d .. "," .. u else bad = true end
 		end
-		for _, k in ipairs(sorted_idx("^hs20%.qos%.map%.(%d+)%.low$")) do
+		for _, k in ipairs(sorted_idx("hs20.qos.map", "low")) do
 			-- A range of DSCP values (0-63, low <= high) for one user
 			-- priority, or 255,255 for a priority no DSCP maps to.
 			local lo = n_in(a["hs20.qos.map." .. k .. ".low"], 0, 255)
@@ -226,9 +236,7 @@ function M.parse(a, ssid)
 			h.wan_metrics = string.format("%02x:%.0f:%.0f:%d:%d:%d", info, ds, us, dload, uload, lmd)
 		end
 	end
-	for k in pairs(a) do
-		if k:match("^hs20%.icon%.") or k:match("^osu%.") then h.osu_dropped = true end
-	end
+	h.osu_dropped = osu or nil
 	if h.osu_dropped then warn("online sign-up (OSU providers, icons)") end
 	return h
 end
