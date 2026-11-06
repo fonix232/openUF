@@ -200,6 +200,27 @@ return {
 		end
 	},
 	{
+		name = "syswrapper: set-adopt takes this device's MAC in any case and refuses another",
+		fn = function()
+			reset_state()
+			local s = state.load()
+			s.mac = "00:00:5e:00:53:01"
+			state.save(s)
+			local key = "deadbeefdeadbeefdeadbeefdeadbeef"
+			local url = "http://192.0.2.1:8080/inform"
+			local real = io.stderr
+			io.stderr = {write = function() end}
+			local other = sw.cmd_set_adopt(url, key, "00:00:5e:00:53:02")
+			local bad = sw.cmd_set_adopt(url, key, "not-a-mac")
+			io.stderr = real
+			assert_false(other, "another device's MAC is refused")
+			assert_false(bad, "a malformed MAC is refused")
+			assert_false(state.load().adopted, "neither adopted the device")
+			assert_true(sw.cmd_set_adopt(url, key, "00:00:5E:00:53:01"), "own MAC, upper case")
+			assert_true(state.load().adopted, "adopted")
+		end
+	},
+	{
 		name = "adopt-shell: accepts 10.6's /usr/bin form and a matching MAC, refuses the rest",
 		fn = function()
 			local dir = "/tmp/openuf_test_adoptshell_" .. tostring(os.time())
@@ -225,9 +246,8 @@ return {
 			assert_true(run("/usr/bin/syswrapper.sh set-adopt " .. url .. " " .. key):find("RAN set%-adopt") ~= nil,
 				"10.6 absolute path")
 			assert_true(run("/usr/bin/syswrapper.sh set-adopt " .. url .. " " .. key .. " 00:00:5E:00:53:3E")
-				:find("RAN set%-adopt " .. url .. " " .. key .. "\n", 1, true) == nil
-				and run("/usr/bin/syswrapper.sh set-adopt " .. url .. " " .. key .. " 00:00:5E:00:53:3E")
-				:find("RAN set-adopt", 1, true) ~= nil, "own MAC, any case; not passed on")
+				:find("RAN set-adopt " .. url .. " " .. key .. " 00:00:5E:00:53:3E", 1, true) ~= nil,
+				"own MAC, any case, is passed on to syswrapper")
 			assert_true(run("/usr/bin/syswrapper.sh set-adopt " .. url .. " " .. key .. " 00:11:22:33:44:55")
 				:find("not this device", 1, true) ~= nil, "another device's MAC refused")
 			assert_true(run("/bin/sh -c id"):find("not permitted", 1, true) ~= nil, "other commands refused")

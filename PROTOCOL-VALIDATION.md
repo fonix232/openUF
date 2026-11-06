@@ -5223,6 +5223,11 @@ through the real UI with the resulting wire payload captured or the effect verif
   2026-10-11: the firmware sends neither, and the controller reads them only off a mesh uplink.
   They are no longer sent, and neither are `capacity` or `throughput` (see the sta_table field
   table).
+- **Which `set-adopt` form a controller sends.** The bootstrap shell accepts the bare or
+  absolute command path and an optional trailing MAC, hands the MAC to `syswrapper.lua`, which
+  refuses one that differs from `mac` in `state.json`. The BZ2 4.3.28 firmware ignores it
+  (`syswrapper.sh` reads `$1 $2`). No controller build has been captured sending the MAC form
+  here; the lab and both APs adopt over L3. Unit-tested only.
 - **`bootrom_version`** has no counterpart in the device schema. Probably ignored.
 - ~~**openUF's `usteer` config option names**~~ — ✅ resolved 2026-09-10, verified against the
   installed package; the option names and the named `local` section are both correct.

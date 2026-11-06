@@ -8,7 +8,8 @@
 #   [/usr/bin/]syswrapper.sh set-adopt <url> <key32hex> [<mac>]
 #
 # 10.6 sends the absolute path, and on some builds appends the device's MAC
-# (devmgr VtWV); a MAC that is not this AP's is refused. TCP forwarding is off
+# (devmgr VtWV); a MAC that is not this AP's is refused here and again by
+# syswrapper.lua, which is handed it. TCP forwarding is off
 # while this account is usable (hook/ssh-forwarding.sh), since a forced shell
 # does not stop `ssh -N -L`.
 #
@@ -68,4 +69,4 @@ if [ -n "$mac" ]; then
 	fi
 fi
 
-exec "${OPENUF_SYSWRAPPER:-/usr/bin/syswrapper.sh}" set-adopt "$url" "$key"
+exec "${OPENUF_SYSWRAPPER:-/usr/bin/syswrapper.sh}" set-adopt "$url" "$key" ${mac:+"$mac"}
