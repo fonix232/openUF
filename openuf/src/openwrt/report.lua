@@ -1497,12 +1497,12 @@ function M.build(ctx, st, cfg, ufhw)
 		-- L2 discovery "firmware version verbose" TLV -- do not reuse it here.
 		-- The catalogue version: built into the identity, or learned from the
 		-- controller's own upgrade commands. 10.6 calls a device upgradable
-		-- whenever this differs from the catalogue's by a character; the
-		-- opt-in variants (advertising an OpenWrt update, the revision scheme)
-		-- are in upgrade.lua.
+		-- when this differs from the catalogue's and required_version does not
+		-- hold it off; upgrade.lua holds it off unless owut has a build.
 		version          = ctx._upgrade.version(uap.fw and uap.fw.ver or "6.6.55",
 			cfg and cfg.config, st.fw_version),
-		required_version = uap.required_version or "6.0.0",
+		required_version = ctx._upgrade.required_version(uap.required_version or "6.0.0",
+			cfg and cfg.config),
 		bootrom_version  = uap.bootver or "",
 		country_code     = st.country_code or derived_country or 840,
 		mem_total        = meminfo.total_kb * 1024,

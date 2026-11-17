@@ -70,6 +70,52 @@ return {
 		end
 	},
 	{
+		name = "upgrade: required_version holds the badge off unless owut has a build",
+		fn = function()
+			local owut = {upgrade_mode = "owut", advertise_updates = true}
+			upgrade.update_available = false
+			assert_eq(upgrade.required_version("6.0.0", {}), upgrade.HOLD_VERSION, "default: held")
+			assert_eq(upgrade.required_version("6.0.0", nil), upgrade.HOLD_VERSION, "no config: held")
+			assert_eq(upgrade.required_version("6.0.0", owut), upgrade.HOLD_VERSION, "owut: nothing newer")
+			upgrade.update_available = true
+			assert_eq(upgrade.required_version("6.0.0", owut), "6.0.0", "owut build: let through")
+			assert_eq(upgrade.required_version("6.0.0", {upgrade_mode = "owut"}), upgrade.HOLD_VERSION,
+				"a stale result without advertise_updates stays held")
+			upgrade.update_available = false
+		end
+	},
+	{
+		-- The controller's own rule (10.6.106, CFR): upgradable when the
+		-- catalogue differs from `version` and compare(catalogue, required)
+		-- is not -1, comparing dotted integers left to right.
+		name = "upgrade: the payload pair satisfies the controller's upgradable rule as intended",
+		fn = function()
+			local function cmp(a, b)
+				local x, y = {}, {}
+				for n in a:gmatch("%d+") do x[#x + 1] = tonumber(n) end
+				for n in b:gmatch("%d+") do y[#y + 1] = tonumber(n) end
+				for i = 1, math.min(#x, #y) do
+					if x[i] < y[i] then return -1 elseif x[i] > y[i] then return 1 end
+				end
+				return 0
+			end
+			local function upgradable(catalogue, conf)
+				local v = upgrade.version("6.8.2.15592", conf)
+				return catalogue ~= v and cmp(catalogue, upgrade.required_version("6.0.0", conf)) ~= -1
+			end
+			local owut = {upgrade_mode = "owut", advertise_updates = true}
+			with_release(36162, function()
+				upgrade.update_available = false
+				assert_false(upgradable("8.8.14.20179", {}), "a newer Ubiquiti release: no badge")
+				assert_false(upgradable("8.8.14.20179", owut), "owut on, nothing newer: no badge")
+				upgrade.update_available = true
+				assert_true(upgradable("8.8.14.20179", owut), "owut build: badge")
+				assert_true(upgradable("6.8.2.15592", owut), "owut build, same catalogue: badge")
+				upgrade.update_available = false
+			end)
+		end
+	},
+	{
 		name = "upgrade: parse_check reads owut's verdict",
 		fn = function()
 			assert_true(upgrade.parse_check(CHECK_NEWER), "newer SNAPSHOT build, safe")

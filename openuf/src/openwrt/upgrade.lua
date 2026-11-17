@@ -25,15 +25,15 @@
 
 	  config.version_scheme = "openwrt"   (cosmetic)
 	      Put the OpenWrt revision in the build field (6.8.2.36162 for r36162)
-	      so the firmware column follows the real build -- at the price of a
-	      permanent Upgrade badge (below).
+	      so the firmware column follows the real build.
 
-	Why version games are needed at all: on 10.6 the controller marks a device
-	upgradable whenever its `version` differs, character for character, from
-	the catalogue's current version for the model. So by default the exact
-	catalogue string is reported -- and LEARNED from the controller's own
-	`upgrade` commands (their `version` field), so a new Ubiquiti release stops
-	leaving every openUF AP permanently "outdated" after one upgrade round.
+	The badge itself: on 10.6 the controller marks a device upgradable when
+	its `version` differs, character for character, from the catalogue's
+	current version for the model, unless that catalogue version is below the
+	payload's `required_version`. A Ubiquiti release says nothing about this
+	board, so required_version holds the badge off (M.required_version) and
+	only an owut build lets it through. The catalogue string is still LEARNED
+	from the controller's `upgrade` commands, so the firmware column matches.
 ]]--
 
 local M = {}
@@ -120,6 +120,20 @@ function M.version(ufver, conf, learned)
 		return string.format("%d.%d.%d.%d", h[1], h[2], h[3], rev)
 	end
 	return base
+end
+
+-- The payload's required_version, which is what makes the badge follow owut.
+-- 10.6.106 (CFR, devmgr CNSMptQSEDMQtIKop and the inform processor
+-- AqxpICcpcuIxnda) calls a device upgradable only when the catalogue version
+-- differs from `version` AND is not below `required_version`, which the
+-- inform copies from the payload. HOLD sits above any release, so the
+-- catalogue alone never raises the badge; `base` (6.0.0) lets it through
+-- while owut reports a build. Always sent: the inform skips an absent field
+-- and would keep a stored HOLD.
+M.HOLD_VERSION = "999.0.0"
+function M.required_version(base, conf)
+	if conf and conf.advertise_updates and M.update_available then return base end
+	return M.HOLD_VERSION
 end
 
 -- Parse `owut check` output: is there a newer build that is safe to install?

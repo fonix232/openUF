@@ -5223,6 +5223,47 @@ same AP and band the **first** left event stays, and the record carries that eve
 `event_type`. So the order matters, and `sta_roam` must precede its `sta_leave`, as
 `staevents.roam_ingest` queues them (a unit test pins the order).
 
+## The "Upgrade available" badge: `required_version` (2026-11-17)
+
+**Symptom (real hardware):** of three openUF APs all reporting `6.8.2.15592`, the two
+presenting as U6IW showed "Upgrade available" and the UAP6MP did not. `advertise_updates` was
+off on all three, so owut was not involved. The controller's device records: U6IW
+`upgradable=true`, `upgrade_to_firmware=8.8.14.20179`; UAP6MP `upgradable=false`. A Ubiquiti
+release for one presented model, not anything on the board, raised the badge.
+
+**Mechanism (CFR 0.152 on 10.6.106 `internal-dependencies.jar`):**
+- `com.ubnt.service.devmgr.CNSMptQSEDMQtIKop`, the periodic pass over connected devices:
+  `upgradable = !catalogue.equals(version) && !OWIoHe.QLqPdHXqLJloQ(catalogue, required_version)`,
+  where `catalogue` is the model's firmware-cache version and `required_version` is the
+  device record's. The same rule runs at adoption and in the inform processor.
+- `com.ubnt.ace.OWIoHe.QLqPdHXqLJloQ(a, b)` is `compare(a, b) == -1`;
+  `com.ubnt.c.b.ctfbDsCjrxgkv` compares `[.-]`-separated integers left to right and returns
+  exactly -1/0/1. A version that does not parse gives -2, which never holds the badge.
+- `com.ubnt.service.devmgr.l.AqxpICcpcuIxnda` (inform processor) copies `serial`, `ip`,
+  `version`, `required_version`, ... from the payload into the device record, skipping a
+  field that is absent. An absent `required_version` therefore keeps the stored one.
+  While it holds the badge it logs `WARN inform - Upgrade unavailable for [mac],
+  bundled(<catalogue>) < required(<required_version>)` on every inform.
+- `com.ubnt.data.GgmSKhaEy.kCNoUwYXLXMAUl(model, version, catalogue)`, the other term in the
+  inform-side rule, is a USW-Flex-only (`USWF066`) exception.
+
+**openUF:** `openwrt/upgrade.lua` `required_version()` reports `999.0.0` unless
+`advertise_updates` is on and the last `owut check` found a newer build, when it reports the
+identity's `6.0.0`. It is sent on every inform.
+
+**Lab, 10.6.106 (Docker tier), U6IW identity, catalogue 8.8.14.20179 fetched by the lab
+controller, `owut` stubbed in the AP container:**
+| owut says | payload `version` / `required_version` | controller `upgradable` / `upgrade_to_firmware` |
+|---|---|---|
+| nothing newer | `6.8.2.15592` / `999.0.0` | `false` / none |
+| r36162 → r36556, safe | `6.8.1.15592` / `6.0.0` | `true` / `8.8.14.20179` |
+| nothing newer again (no restart) | `6.8.2.15592` / `999.0.0` | `false` / none |
+
+`handle_response failed` 0 throughout; the WARN line appeared 74 times in ~12 minutes from
+one AP. The same run found that a `owut check` that prints nothing left `__done__` on the
+check file's first line, which `tick` did not recognise, stalling the next check for 900 s;
+fixed. Not yet run on hardware or with a real owut. Whether 11.x keeps the rule is not checked.
+
 ## DFS radar detection: `EVT_AP_RadarDetected`
 
 openUF sent no device event of any kind. 10.6.106 has handlers for eleven `EVT_AP_*`

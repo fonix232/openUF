@@ -269,10 +269,12 @@ python3 openuf/tools/uidb-catalog.py --uidb uidb.json --bundles bundles.json --f
     --source "UniFi Network 11.0.81" > openuf/src/unifi/catalog.lua
 ```
 
-`--fw` adds each model's current release version from fw-update.ui.com. It matters: the
-controller calls a device "upgradable" whenever its version differs from the catalogue's,
-character for character. openUF also learns the version from the controller's own upgrade
-commands, so a stale one corrects itself after one upgrade round.
+`--fw` adds each model's current release version from fw-update.ui.com, so the firmware
+column shows a real release. It no longer drives the "Upgrade available" badge: the
+controller calls a device upgradable when its version differs from the catalogue's AND the
+catalogue version is not below the payload's `required_version`, and openUF reports
+`required_version` `999.0.0` unless owut has a build (§ OpenWrt upgrades through UniFi).
+openUF still learns the version from the controller's own upgrade commands.
 
 ### Options
 
@@ -1893,8 +1895,20 @@ See `openuf/src/openwrt/upgrade.lua`'s header and [openuf/contrib/asu](openuf/co
 `option upgrade_mode 'owut'` makes a controller upgrade run an attended sysupgrade of this
 board, leaving openUF's own packages out of the ASU request (the package's bootstrap
 reinstalls them on the new image); `option advertise_updates '1'` shows UniFi's "Upgrade available" badge while `owut check` finds
-a newer build. By default the controller's catalogue version is learned from its own
-upgrade commands and reported, so no stale version keeps the badge up.
+a newer build, and only then.
+
+The badge follows owut, not Ubiquiti's releases. The controller (10.6.106) marks a device
+upgradable only when the catalogue version differs from the reported `version` and is not
+below the reported `required_version`. openUF reports `required_version` `999.0.0`, above any
+release, so a new Ubiquiti firmware for the presented model raises nothing. While `owut
+check` reports a newer build it reports the identity's `6.0.0` and a version one step below
+the catalogue's, and the badge appears; clicking Upgrade then runs owut (with
+`upgrade_mode 'owut'`). The value is sent on every inform because the controller keeps a
+stored `required_version` when the field is absent.
+
+Troubleshooting: while the badge is held, the controller logs `WARN inform - Upgrade
+unavailable for [<mac>], bundled(<catalogue>) < required(999.0.0)` on every inform from the
+device. It is expected and harmless. With `advertise_updates` off the badge never appears.
 
 ### Client connection events
 
