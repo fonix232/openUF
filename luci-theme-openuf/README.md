@@ -88,6 +88,12 @@ on their wireless network. Bridges with other virtual members (tunnels, VLAN
 sub-interfaces) are still refused. The page appears where LuCI's would, and
 also on LuCI builds without it.
 
+A VLAN without a label of its own shows the SSIDs on it as the label's
+placeholder (from each wireless network's `<bridge>.<vid>` device). A UniFi
+controller sends an AP no names for its networks, so on an openUF AP the SSIDs
+are the nearest thing to one; nothing is written to the label store until you
+type a label.
+
 ### Network designs
 
 *Network → Interfaces* and *Network → Wireless* each come in three designs,

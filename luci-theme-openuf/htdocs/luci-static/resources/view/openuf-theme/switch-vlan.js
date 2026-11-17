@@ -50,6 +50,29 @@ function portMapToSpecs(portMap) {
 	);
 }
 
+/* VLAN id -> the SSIDs on it, from each wireless network's interface device
+ * (<bridge>.<vid>). A UniFi controller pushes no names for its networks to
+ * an AP, so on an openUF AP these are the nearest thing to one. */
+function collectVlanSsids(bridgeName) {
+	const out = {};
+	uci.sections('wireless', 'wifi-iface', s => {
+		if (s.disabled == '1' || !s.ssid)
+			return;
+		L.toArray(s.network).forEach(net => {
+			const dev = uci.get('network', net, 'device') || '';
+			if (dev.indexOf(bridgeName + '.') !== 0)
+				return;
+			const vid = +dev.substring(bridgeName.length + 1);
+			if (!(vid > 0))
+				return;
+			out[vid] = out[vid] || [];
+			if (out[vid].indexOf(s.ssid) === -1)
+				out[vid].push(s.ssid);
+		});
+	});
+	return out;
+}
+
 /* Full-page replacement when the bridge VLAN config can't be modelled here. */
 function renderUnsupportedBlocker(bridgeName, issues) {
 	return E('div', { 'class': 'cbi-section' }, [
@@ -93,6 +116,7 @@ return view.extend({
 	vlans: [],
 	portLabels: {},
 	vlanLabels: {},
+	vlanSsids: {},
 	selection: null,
 
 
@@ -104,6 +128,7 @@ return view.extend({
 		return Promise.all([
 			uci.load('network'),
 			uci.load('luci'),
+			L.resolveDefault(uci.load('wireless')),
 			network.getDevices()
 		]);
 	},
@@ -117,6 +142,8 @@ return view.extend({
 
 		this.vlanLabels = {};
 		this.vlans.forEach(v => { this.vlanLabels[v.vlan] = bvtool.readVlanLabel(v.vlan); });
+
+		this.vlanSsids = collectVlanSsids(this.bridge.name);
 	},
 
 	render() {
@@ -483,10 +510,12 @@ return view.extend({
 	},
 
 	renderVlanRow(v, count) {
+		const ssids = (this.vlanSsids[v.vlan] || []).join(', ');
 		const labelInput = E('input', {
 			'type': 'text',
 			'class': 'svc-vlan-label',
-			'placeholder': _('label'),
+			'placeholder': ssids || _('label'),
+			'title': ssids ? _('Wireless networks on VLAN %d: %s').format(v.vlan, ssids) : null,
 			'value': this.vlanLabels[v.vlan] || '',
 			'maxlength': 32,
 			'spellcheck': 'false'
