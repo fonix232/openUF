@@ -1217,8 +1217,9 @@ function M.parse_radius(a)
 			local port = tonumber(a[p .. "port"]) or default_port
 			-- RadSec: .tls=enabled plus the certificate filenames (files it
 			-- transfers by another channel), only to a device claiming fw2_caps
-			-- 0x80000. Either marks it; the server is dropped, never contacted
-			-- with its secret in the clear.
+			-- 0x80000. Either marks it; the server is dropped: 25.12's hostapd
+			-- rejects auth_server_type=TLS, and plain RADIUS to it would fail
+			-- and expose its attributes.
 			if ip and (wire.bool(a[p .. "tls"]) or a[p .. "ca_cert"] or a[p .. "client_cert"]
 					or a[p .. "private_key"] or a[p .. "private_key_passwd"]) then
 				io.stderr:write(("inform: ignoring RADIUS %s server %d: RadSec (TLS) "

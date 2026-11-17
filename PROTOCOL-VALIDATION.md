@@ -3151,7 +3151,7 @@ Gated, and not to be claimed:
   - `wifi_caps` `0x4000`/`0x8000`: multi-vport and Element. (`0x1`/`0x800`, vwire and meshv3, are claimed with `wireless_uplink`; `0x80` does nothing — see the table above.)
   - `wifi_caps` `0x2000` "open hostapd", `0x40` `bga_filter`, `0x4000000` low-performance mode.
   - `wifi_caps2` `0x4` Green AP, `0x20000` (an AP-group check, purpose unclear).
-  - `fw2_caps` `0x80000` RadSec (claimed with the Hotspot 2.0 bit although OpenWrt 25.12 has no RadSec client, see [Hotspot 2.0](#hotspot-20--passpoint-aaanhs20)), `0x20` `port_table.mac_table_ipv6`, `0x80` device command retry.
+  - `fw2_caps` `0x80000` RadSec (claimed with the Hotspot 2.0 bit although openUF implements no RadSec, see [Hotspot 2.0](#hotspot-20--passpoint-aaanhs20)), `0x20` `port_table.mac_table_ipv6`, `0x80` device command retry.
 - **No callers in the controller**, so a bit does nothing: `supportMinRateCtrl` (`wifi_caps`
   `0x200`), `supportMultiAclList` (`0x400`), `supportHideChWidth` (`0x10000`),
   `supportZeroHandoff` (`0x2`). `supportRadiusMacAuth` (`0x1000`) has no caller either and
@@ -4976,15 +4976,20 @@ The keys come from `VAZShipWTNxlo`'s Enterprise branch (`aaa.<n>.hs20.status`, t
 the block as raw lines (`openwrt/hotspot2.lua`), because 25.12's `ap.uc`
 `iface_interworking()` overwrites `domain_name` with the 3GPP list and joins array options
 onto one line. Online sign-up (OSU providers, icons) is not carried (hostapd dropped its OSU
-server support); an OSEN WLAN is skipped (no OpenWrt encryption for it). RadSec: no
-`radsecproxy` in the 25.12 feed and hostapd speaks RADIUS over UDP only, yet `fw2_caps`
+server support); an OSEN WLAN is skipped (no OpenWrt encryption for it). RadSec: 25.12's
+`wpad-openssl` rejects `auth_server_type=TLS` ("unsupported RADIUS type") and
+`auth_server_ca_cert`/`auth_server_client_cert` ("unknown configuration item"), tested by
+feeding those lines to it in the 25.12.0 rootfs; the feed does carry `radsecproxy` 1.11.2
+(installs, ~100 KB), unused by openUF, and the push names certificates by filename only. Yet `fw2_caps`
 `0x80000` is claimed (with `fw_caps` `0x800000`, same `hostapd -vhs20` probe): the REST
 validator (`com/ubnt/service/W/ctfbDsCjrxgkv`, 10.6.106) refuses a Hotspot 2.0 profile on a WLAN
 with `api.err.DevicePasspointNotSupported` without it. What the claim changes on the wire: a
 RADIUS server whose profile has TLS on arrives with `aaa.<n>.radius.{auth,acct}.<k>.tls=enabled`
 and `{ca_cert,client_cert,private_key,private_key_passwd}` filenames, which tell it from a
 plaintext one. `parse_radius` drops such a server with a log; without the claim it would arrive
-as a bare ip/port/secret and its secret would go out in the clear.
+as a bare ip/port/secret and openUF would speak plain RADIUS to it. Plain RADIUS does not
+send the shared secret itself; it hides User-Password and signs packets with it, which
+leaves usernames and other attributes readable and the secret open to offline guessing.
 Upstream ce7163f reached the same conclusion; its lab run (10.6.106) accepted both bits.
 
 Lab, 10.6.106 (Docker tier, this fork, with the lab's hostapd stub answering `-vhs20`): without

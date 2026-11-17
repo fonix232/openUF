@@ -1495,11 +1495,13 @@ as raw hostapd lines (table above); hostapd itself refuses Hotspot 2.0 on anythi
 WPA2-Enterprise with CCMP/GCMP. The controller admits a
 Passpoint profile onto a WLAN only from a device that claims RadSec (`fw2_caps` `0x80000`,
 `supportsRadSec()`), so openUF claims it together with `0x800000`, from the same
-`hostapd -vhs20` probe, although it implements no RadSec: OpenWrt 25.12 has no RadSec
-client (no `radsecproxy` package, and hostapd speaks RADIUS over UDP only). The claim makes
-the controller send a RADIUS server whose profile has TLS on with its certificate
-filenames; openUF drops that server with a log line rather than send the shared secret
-in the clear. A Passpoint site whose RADIUS profile uses RadSec therefore ends up with a
+`hostapd -vhs20` probe, although it implements no RadSec: 25.12's hostapd rejects
+`auth_server_type=TLS` and the `auth_server_*_cert` options. The feed does carry
+`radsecproxy` (1.11.2), a UDP-to-TLS proxy, but openUF does not set it up, and the push
+carries only certificate filenames, not their contents. The claim makes the controller
+send a RADIUS server whose profile has TLS on with those filenames; openUF drops that
+server with a log line rather than speak plain RADIUS to it, which would fail against a
+TLS listener and expose usernames and attributes the shared secret only obscures. A Passpoint site whose RADIUS profile uses RadSec therefore ends up with a
 WLAN that has no server (an Enterprise WLAN with no usable server is skipped).
 
 **Minimum Data Rate** is set per WLAN in the controller but OpenWrt's rate options
