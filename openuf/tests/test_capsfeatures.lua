@@ -9,6 +9,8 @@
 OPENUF_TEST_MODE = true
 
 local inform    = dofile("src/inform.lua")
+-- No test runs the host's nft or writes its /tmp/dhcp.leases (hosthints.lua).
+inform._hosthints = nil
 local ucihelper = require("openwrt.ucihelper")
 local schedule  = require("unifi.schedule")
 local wlansched = require("openwrt.wlansched")

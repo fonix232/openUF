@@ -205,6 +205,7 @@ local test_files = {
 	"tests/test_l2guard.lua",
 	"tests/test_guest.lua",
 	"tests/test_guestportal.lua",
+	"tests/test_hosthints.lua",
 	"tests/test_staevents.lua",
 	"tests/test_minrssi.lua",
 	"tests/test_loadbalance.lua",

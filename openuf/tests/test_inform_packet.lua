@@ -6,6 +6,8 @@ OPENUF_TEST_MODE = true
 local crypto = dofile("src/unifi/crypto.lua")
 local state  = dofile("src/state.lua")
 local inform = dofile("src/inform.lua")
+-- No test runs the host's nft or writes its /tmp/dhcp.leases (hosthints.lua).
+inform._hosthints = nil
 local cjson  = require("cjson")
 -- The same instance inform.lua loaded (package.loaded): its sweep jobs.
 local provision = require("openwrt.provision")
@@ -3626,6 +3628,49 @@ return {
 				orig.build_json, orig.build_packet, orig.http_post, orig.parse_packet
 			inform._reload_if_changed, inform._rrm_tick, inform._dfsreset = orig.reload, orig.rrm, orig.dfs
 			inform._time = orig.time
+			if not ok then error(err, 0) end
+		end
+	},
+	{
+		name = "inform: each heartbeat feeds the VAPs to hosthints, the lease file once a minute",
+		fn = function()
+			local orig = {
+				build_json = inform.build_json, build_packet = inform.build_packet,
+				http_post = inform.http_post, parse_packet = inform.parse_packet,
+				reload = inform._reload_if_changed, rrm = inform._rrm_tick,
+				time = inform._time, vaps = inform._last_vap_by_ifname,
+			}
+			local calls, now = {}, 1000
+			inform._hosthints = {
+				ensure = function(v, force) calls[#calls + 1] = {"ensure", v, force} end,
+				publish = function(t) calls[#calls + 1] = {"publish", t} end,
+			}
+			inform._hosthints_check, inform._hosthints_next = nil, nil
+			inform._time = function() return now end
+			inform._reload_if_changed = function(_, _, last) return last end
+			inform._rrm_tick = function() return false end
+			inform.build_json = function() return "{}" end
+			inform.build_packet = function() return "pkt" end
+			inform.http_post = function() return "body" end
+			inform.parse_packet = function() return '{"_type":"noop"}' end
+			local vaps = {["phy0-ap0"] = {}}
+			inform._last_vap_by_ifname = vaps
+			local ok, err = pcall(function()
+				local ctx = {interval = 10, backoff = 10}
+				inform._tick(sample_state(), nil, nil, ctx)
+				now = 1010
+				inform._tick(sample_state(), nil, nil, ctx)
+				assert_eq(#calls, 3, "ensure twice, publish once")
+				assert_eq(calls[1][1], "ensure"); assert_true(calls[1][2] == vaps, "the heartbeat's VAPs")
+				assert_eq(calls[1][3], true, "the first check is forced")
+				assert_eq(calls[2][1], "publish"); assert_eq(calls[2][2], 1000)
+				assert_eq(calls[3][1], "ensure"); assert_eq(calls[3][3], false, "then only on a change")
+			end)
+			inform._hosthints, inform._hosthints_check, inform._hosthints_next = nil, nil, nil
+			inform.build_json, inform.build_packet, inform.http_post, inform.parse_packet =
+				orig.build_json, orig.build_packet, orig.http_post, orig.parse_packet
+			inform._reload_if_changed, inform._rrm_tick = orig.reload, orig.rrm
+			inform._time, inform._last_vap_by_ifname = orig.time, orig.vaps
 			if not ok then error(err, 0) end
 		end
 	},

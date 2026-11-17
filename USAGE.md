@@ -2007,6 +2007,31 @@ event is queued with the connection events (200 at most) and a failed POST keeps
 next heartbeat. It carries no `vap`, which a UniFi AP sends beside the channel: ubus names
 the BSS only by object id, and the controller's handler reads `channel` and `freq` alone.
 
+### Client names in LuCI
+
+LuCI names a client (the dashboard's wireless list, *Network → Wireless*,
+*Status → Overview*) from rpcd's `luci-rpc getHostHints`: DHCP leases, `/etc/ethers`
+and the neighbour table, then a reverse DNS lookup of every address it found
+(`network.rrdns`, through `/etc/resolv.conf`). On an AP the gateway runs DHCP and the
+AP talks to few of its clients, so most of them had no address there and showed as `?`.
+A UniFi gateway's DNS answers the reverse lookup with each client's DHCP hostname, on
+every VLAN; what was missing is the address.
+
+openUF learns it: `table bridge openuf_hosts` adds the source IPv4 address of each frame
+that comes into the bridge from a wireless interface (IP and ARP) to a set that forgets
+a client after an hour silent. Wired ports are left out. Once a minute the set is
+written to `/tmp/dhcp.leases` as dnsmasq leases with no name
+(`<expiry> <mac> <ip> * *`, expiring after ten minutes), which rpcd-mod-luci reads and
+resolves. Nothing is written while a `dnsmasq` process runs on the AP (the file is its
+lease database then), nor over a file holding anything but such nameless leases. The table needs `kmod-nft-bridge` (already a dependency).
+
+- Names are the gateway's DHCP hostnames, as its DNS returns them (often with a
+  `.localdomain` suffix). Aliases set in the UniFi controller are not pushed to APs
+  and do not appear.
+- A client that sent no hostname has no PTR record and stays unnamed.
+- Check: `nft list set bridge openuf_hosts staips`, `cat /tmp/dhcp.leases`,
+  `ubus call luci-rpc getHostHints`.
+
 ### Controller-managed system settings (timezone, NTP, nightly scan)
 
 Every full `system_cfg` push also carries three blocks, which `sysconf.lua` applies, each

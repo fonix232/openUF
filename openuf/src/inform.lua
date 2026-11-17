@@ -38,6 +38,7 @@ local walledgarden = require("openwrt.walledgarden")
 local airtime   = require("openwrt.airtime")
 local staevents = require("unifi.staevents")
 local dnswatch  = require("openwrt.dnswatch")
+local hosthints = require("openwrt.hosthints")
 local staphase  = require("openwrt.staphase")
 local http      = require("unifi.http")
 local wlan      = require("unifi.wlan")
@@ -97,6 +98,7 @@ M._walledgarden = walledgarden
 M._airtime    = airtime
 M._staevents  = staevents
 M._dnswatch   = dnswatch
+M._hosthints  = hosthints
 M._staphase   = staphase
 M._wlansched  = wlansched
 M._lockap     = lockap
@@ -1309,6 +1311,19 @@ function M._tick(st, cfg, ufhw, ctx)
 		end)
 		pcall(M._staevents.observe, M._last_sta_snapshot or {}, now,
 			M._last_identity and M._last_identity.uptime, ok_ph and phases or nil)
+	end
+	-- Wireless clients' addresses for LuCI's host hints (hosthints.lua):
+	-- the table follows the heartbeat's VAPs, re-checked every few minutes
+	-- in case a reboot or a flush took it; the lease file once a minute.
+	if M._hosthints and M._last_vap_by_ifname then
+		local now = M._time()
+		local force = now >= (M._hosthints_check or 0)
+		if force then M._hosthints_check = now + 300 end
+		pcall(M._hosthints.ensure, M._last_vap_by_ifname, force)
+		if now >= (M._hosthints_next or 0) then
+			M._hosthints_next = now + 60
+			pcall(M._hosthints.publish, now)
+		end
 	end
 
 	local ok_p, pkt = pcall(M.build_packet, json_str, st)  -- use_gcm read from st.use_gcm
