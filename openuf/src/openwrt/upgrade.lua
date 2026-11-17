@@ -155,7 +155,8 @@ function M.tick(now, conf)
 	if not (conf and conf.advertise_updates) then return end
 	if M._check_started then
 		local out = M._read_file(M.CHECK_FILE)
-		if out and out:find("\n__done__", 1, true) then
+		-- "\n" first: an owut that printed nothing leaves __done__ on line 1.
+		if out and ("\n" .. out):find("\n__done__", 1, true) then
 			M.update_available = M.parse_check(out)
 			M._check_started = nil
 		elseif now - M._check_started > 900 then

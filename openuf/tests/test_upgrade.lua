@@ -116,6 +116,29 @@ return {
 		end
 	},
 	{
+		name = "upgrade: a check whose owut printed nothing still finishes",
+		fn = function()
+			local orig_read, orig_exec, orig_running = upgrade._read_file, upgrade._exec, upgrade._running
+			local conf = {advertise_updates = true, advertise_interval = 30}
+			upgrade._exec = function() end
+			upgrade._running = function() return false end
+			upgrade._next_check, upgrade._check_started, upgrade.update_available = 0, nil, true
+			upgrade.tick(1000, conf)
+			assert_eq(upgrade._check_started, 1000, "check started")
+			upgrade._read_file = function(p)
+				if p == upgrade.CHECK_FILE then return "__done__\n" end
+				return orig_read(p)
+			end
+			upgrade.tick(1010, conf)
+			assert_nil(upgrade._check_started, "finished")
+			assert_false(upgrade.update_available, "nothing to install")
+			upgrade.tick(1031, conf)
+			assert_eq(upgrade._check_started, 1031, "the next check runs on schedule")
+			upgrade._read_file, upgrade._exec, upgrade._running = orig_read, orig_exec, orig_running
+			upgrade._next_check, upgrade._check_started, upgrade.update_available = 0, nil, false
+		end
+	},
+	{
 		name = "upgrade: parse_check reads owut's verdict",
 		fn = function()
 			assert_true(upgrade.parse_check(CHECK_NEWER), "newer SNAPSHOT build, safe")
