@@ -152,9 +152,11 @@ return {
 	{
 		name = "upgrade: start refuses without owut mode, owut or the bootstrap",
 		fn = function()
-			local orig_exists, orig_exec, orig_running = upgrade._exists, upgrade._exec, upgrade._running
-			local ran = nil
+			local orig_exists, orig_exec, orig_running, orig_write =
+				upgrade._exists, upgrade._exec, upgrade._running, upgrade._write
+			local ran, wrote = nil, {}
 			upgrade._exec = function(c) ran = c end
+			upgrade._write = function(p, t) wrote[p] = t return true end
 			upgrade._running = function() return false end
 			upgrade._exists = function() return true end
 			assert_false((upgrade.start({})), "not in owut mode")
@@ -165,7 +167,56 @@ return {
 			upgrade._exists = function() return true end
 			assert_true((upgrade.start({upgrade_mode = "owut"})), "starts")
 			assert_true(ran and ran:find("owut upgrade", 1, true) ~= nil, "owut upgrade launched")
-			upgrade._exists, upgrade._exec, upgrade._running = orig_exists, orig_exec, orig_running
+			assert_not_nil(wrote[upgrade.RESTORE_SCRIPT], "with its pre-install hook written")
+			upgrade._exists, upgrade._exec, upgrade._running, upgrade._write =
+				orig_exists, orig_exec, orig_running, orig_write
+		end
+	},
+	{
+		-- Runs the real command in sh against a fake owut that records whether
+		-- the feed line was there during the build, then runs its -p hook the
+		-- way owut does before sysupgrade.
+		name = "upgrade: the feed is hidden from the ASU build and back before sysupgrade",
+		fn = function()
+			local dir = os.tmpname()
+			os.remove(dir)
+			assert_true(os.execute("mkdir -p " .. dir .. "/bin") ~= nil, "scratch dir")
+			local saved = {upgrade.FEED_LIST, upgrade.FEED_ASIDE, upgrade.RESTORE_SCRIPT,
+				upgrade.LOG_FILE, upgrade._exec}
+			upgrade.FEED_LIST, upgrade.FEED_ASIDE = dir .. "/openuf.list", dir .. "/aside"
+			upgrade.RESTORE_SCRIPT, upgrade.LOG_FILE = dir .. "/restore.sh", dir .. "/log"
+			upgrade._exec = function() return 1 end   -- owut_args: nothing installed
+			local function sh(s) local f = io.open(dir .. "/x.sh", "w") f:write(s) f:close()
+				os.execute("sh " .. dir .. "/x.sh") end
+			local function exists(p) local f = io.open(p) if f then f:close() return true end return false end
+			local function run(build_ok)
+				sh("echo feed > " .. upgrade.FEED_LIST .. "\n")
+				local fake = "#!/bin/sh\n[ -f " .. upgrade.FEED_LIST .. " ] && echo present > " .. dir
+					.. "/during || echo absent > " .. dir .. "/during\n"
+				if build_ok then
+					fake = fake .. "while [ $# -gt 0 ]; do [ \"$1\" = -p ] && { sh \"$2\"; "
+						.. "[ -f " .. upgrade.FEED_LIST .. " ] && echo present > " .. dir .. "/at_sysupgrade; }; shift; done\n"
+				end
+				local f = io.open(dir .. "/bin/owut", "w") f:write(fake .. "exit 0\n") f:close()
+				os.execute("chmod 755 " .. dir .. "/bin/owut")
+				assert_true(upgrade._write(upgrade.RESTORE_SCRIPT, upgrade.restore_script()), "hook written")
+				local cmd = upgrade.upgrade_command():gsub("sleep 2; ", ""):gsub("%s*&$", "")
+				sh("PATH=" .. dir .. "/bin:$PATH; " .. cmd .. "\n")
+			end
+			local ok, err = pcall(function()
+				run(true)
+				assert_eq(io.open(dir .. "/during"):read("*l"), "absent", "ASU never sees the feed")
+				assert_true(exists(dir .. "/at_sysupgrade"), "back before sysupgrade saves /etc")
+				assert_true(exists(upgrade.FEED_LIST), "and still there after")
+				os.remove(dir .. "/at_sysupgrade")
+				run(false)
+				assert_true(exists(upgrade.FEED_LIST), "a failed build puts it back too")
+				assert_false(exists(upgrade.FEED_ASIDE), "nothing left aside")
+			end)
+			upgrade.FEED_LIST, upgrade.FEED_ASIDE, upgrade.RESTORE_SCRIPT,
+				upgrade.LOG_FILE, upgrade._exec = saved[1], saved[2], saved[3], saved[4], saved[5]
+			os.execute("rm -rf " .. dir)
+			if not ok then error(err, 0) end
 		end
 	},
 	{

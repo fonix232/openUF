@@ -171,6 +171,36 @@ function M.tick(now, conf)
 		.. M.CHECK_FILE .. " ) </dev/null >/dev/null 2>&1 &")
 end
 
+-- owut sends every configured apk repository with its build request, and the
+-- ASU server refuses one it does not host ("Repository not allowed", HTTP 400,
+-- sysupgrade.openwrt.org, 2026-11-18). So the openUF feed's line is moved
+-- aside for the build and put back by owut's pre-install hook, which runs
+-- just before sysupgrade saves the settings: the new image then has the feed,
+-- which the bootstrap installs openUF from. Put back on exit as well, for a
+-- build that failed.
+M.FEED_LIST      = "/etc/apk/repositories.d/openuf.list"
+M.FEED_ASIDE     = "/tmp/openuf.list.aside"
+M.RESTORE_SCRIPT = "/tmp/openuf-owut-restore.sh"
+
+function M.restore_script()
+	return ("#!/bin/sh\n[ -f %s ] && mv %s %s\nexit 0\n"):format(M.FEED_ASIDE, M.FEED_ASIDE, M.FEED_LIST)
+end
+
+function M.upgrade_command()
+	return ("( sleep 2; [ -f %s ] && mv %s %s; owut upgrade%s -p %s > %s 2>&1; sh %s ) "
+		.. "</dev/null >/dev/null 2>&1 &"):format(M.FEED_LIST, M.FEED_LIST, M.FEED_ASIDE,
+		M.owut_args(), M.RESTORE_SCRIPT, M.LOG_FILE, M.RESTORE_SCRIPT)
+end
+
+M._write = function(path, text)
+	local f = io.open(path, "w")
+	if not f then return false end
+	f:write(text)
+	f:close()
+	os.execute("chmod 755 " .. path)
+	return true
+end
+
 -- Start an upgrade. Returns true when one was started, false and a reason
 -- otherwise.
 function M.start(conf)
@@ -181,8 +211,10 @@ function M.start(conf)
 			.. " (it is part of the openuf package)"
 	end
 	if M._running() then return false, "owut is already running" end
-	M._exec("( sleep 2; owut upgrade" .. M.owut_args() .. " > " .. M.LOG_FILE
-		.. " 2>&1 ) </dev/null >/dev/null 2>&1 &")
+	if not M._write(M.RESTORE_SCRIPT, M.restore_script()) then
+		return false, "cannot write " .. M.RESTORE_SCRIPT
+	end
+	M._exec(M.upgrade_command())
 	return true
 end
 

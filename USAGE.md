@@ -1894,7 +1894,10 @@ triggers an inform, so the controller learns it before it next needs it.
 See `openuf/src/openwrt/upgrade.lua`'s header and [openuf/contrib/asu](openuf/contrib/asu/README.md). In short:
 `option upgrade_mode 'owut'` makes a controller upgrade run an attended sysupgrade of this
 board, leaving openUF's own packages out of the ASU request (the package's bootstrap
-reinstalls them on the new image); `option advertise_updates '1'` shows UniFi's "Upgrade available" badge while `owut check` finds
+reinstalls them on the new image). The openUF feed's repository line is moved aside while
+owut asks the ASU server for the image, because the server refuses a build request that
+names a repository it does not host ("Repository not allowed"); owut's pre-install hook puts
+it back just before sysupgrade saves the settings. `option advertise_updates '1'` shows UniFi's "Upgrade available" badge while `owut check` finds
 a newer build, and only then.
 
 The badge follows owut, not Ubiquiti's releases. The controller (10.6.106) marks a device
