@@ -13,7 +13,7 @@ once the network is up. Both come from two files:
 | Where | What to do |
 |---|---|
 | [firmware-selector](https://firmware-selector.openwrt.org) | Pick the device, open **Customize installed packages and/or first boot script**, append `packages.txt` (space-separated) to the package list, paste `openuf-firstboot.sh` into **Script to run on first boot**, then **Request build**. |
-| `owut` on a running device | `owut upgrade -a "$(grep -v '^#' packages.txt \| xargs)" -I openuf-firstboot.sh`. owut keeps everything else that is already installed. On a device that already runs openUF, add `-r openuf,luci-app-openuf` (the ASU server does not know them; the package reinstalls itself after the upgrade). |
+| `owut` on a running device | `owut upgrade -a "$(grep -v '^#' packages.txt \| xargs)" -I openuf-firstboot.sh`. owut keeps everything else that is already installed. On a device that already runs openUF, add `-r openuf,luci-app-openuf,luci-theme-openuf` (the ASU server does not know them; the bootstrap reinstalls them after the upgrade), and move `/etc/apk/repositories.d/openuf.list` aside first, with `-p` putting it back: owut sends every repository and the server refuses one it does not host. The controller's Upgrade with `upgrade_mode 'owut'` does all of this itself. |
 | ASU API, scripted | `./asu-build.py --from-device root@<ap> --inform-url http://<controller>:8080/inform`. This reads target, profile and version from the device, fills in the settings and prints the image URLs. Add `--dry-run` to see the request. |
 | ImageBuilder | `PACKAGES="$(grep -v '^#' packages.txt \| xargs)"`, with the script at `files/etc/uci-defaults/99-openuf`. |
 

@@ -26,6 +26,42 @@ return {
 		end
 	},
 	{
+		-- The real reinstall() in sh, with the device's commands stubbed:
+		-- what it asks apk to add on the first boot of a new image.
+		name = "package: the bootstrap reinstalls the LuCI app with LuCI and the theme where it was registered",
+		fn = function()
+			local dir = os.tmpname()
+			os.remove(dir)
+			os.execute("mkdir -p " .. dir)
+			local function added(luci, theme)
+				local stubs = table.concat({
+					"ip() { echo default; }", "nslookup() { :; }", "logger() { :; }", "sleep() { :; }",
+					"uci() { [ \"$3\" = luci.themes.openUF ] && return " .. (theme and 0 or 1) .. "; return 1; }",
+					"apk() { case \"$1\" in info) [ \"$3\" = luci-base ] && return " .. (luci and 0 or 1)
+						.. "; return 1;; update) return 0;; add) shift; echo \"$*\" > " .. dir .. "/added;; esac; }",
+				}, "\n")
+				local f = io.open(dir .. "/run.sh", "w")
+				f:write(stubs .. "\n. " .. os.getenv("PWD") .. "/files/openuf-bootstrap.init\nreinstall >/dev/null\n")
+				f:close()
+				os.remove(dir .. "/added")
+				os.execute("sh " .. dir .. "/run.sh")
+				local r = io.open(dir .. "/added")
+				local s = r and r:read("*l") or ""
+				if r then r:close() end
+				return s
+			end
+			local ok, err = pcall(function()
+				assert_eq(added(false, false), "openuf", "no LuCI: the daemon alone")
+				assert_eq(added(true, false), "openuf luci-app-openuf", "LuCI: its page too")
+				assert_eq(added(true, true), "openuf luci-app-openuf luci-theme-openuf",
+					"the theme where /etc/config/luci still registers it")
+				assert_eq(added(false, true), "openuf", "no theme without LuCI")
+			end)
+			os.execute("rm -rf " .. dir)
+			if not ok then error(err, 0) end
+		end
+	},
+	{
 		name = "package: the feed key, keep-list and Makefile agree on the key and repository files",
 		fn = function()
 			local mk, keep = read("Makefile"), read("files/openuf.keep")

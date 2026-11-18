@@ -12,7 +12,7 @@
 # This lays down its settings (/etc/config/openuf), the openUF feed's key and
 # repository line, and the bootstrap service the openuf package itself ships
 # (a test keeps the copy below identical): once the network is up, that
-# service installs openuf -- and luci-app-openuf when LuCI is there -- from
+# service installs openuf -- with luci-app-openuf when LuCI is there, and luci-theme-openuf where it was installed -- from
 # the feed. From then on the package keeps itself across firmware upgrades.
 #
 # Edit the settings below before building. Nothing else needs changing.
@@ -148,6 +148,10 @@ reinstall() {
 		sleep 10
 	done
 	apk info -e luci-base >/dev/null 2>&1 && pkgs="$pkgs luci-app-openuf"
+	# The theme's registration survives in /etc/config/luci (its postrm
+	# removes it), so it marks a theme that was installed before the upgrade.
+	apk info -e luci-base >/dev/null 2>&1 && uci -q get luci.themes.openUF >/dev/null &&
+		pkgs="$pkgs luci-theme-openuf"
 	n=0
 	until apk update >/dev/null 2>&1 && apk add $pkgs; do
 		n=$((n + 1)); [ $n -ge 30 ] && { log "giving up on: apk add $pkgs"; return 1; }

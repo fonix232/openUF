@@ -226,7 +226,8 @@ return {
 			upgrade._installed = function(p) return p == "openuf" end
 			assert_eq(upgrade.owut_args(), " --remove openuf", "only what is installed")
 			upgrade._installed = function() return true end
-			assert_eq(upgrade.owut_args(), " --remove openuf,luci-app-openuf", "both, comma-separated")
+			assert_eq(upgrade.owut_args(), " --remove openuf,luci-app-openuf,luci-theme-openuf",
+				"all three, comma-separated")
 			upgrade._installed = function() return false end
 			assert_eq(upgrade.owut_args(), "", "nothing to remove on a tarball install")
 			upgrade._installed = orig
