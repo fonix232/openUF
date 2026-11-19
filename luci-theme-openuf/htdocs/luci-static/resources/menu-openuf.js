@@ -44,7 +44,9 @@ const DESIGNED = {
  * given the view's path. Its styles are in cascade.css. */
 const ENHANCED = {
 	'status/syslog': 'logs',
-	'status/dmesg': 'logs'
+	'status/dmesg': 'logs',
+	'network/wireless': 'stations',
+	'admin_status/index': 'stations'
 };
 
 function pref(key, value) {

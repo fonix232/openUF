@@ -79,6 +79,16 @@ $hex: '[style^="background-color:#"]:not([style*="#90f090"], [style*="#f09090"],
 
 .ifacebadge-active { border-color: var(--uf-blue); font-weight: 600; }
 
+// A station's network as its SSID and interface ("HomeNet (phy0-ap0)"), not
+// LuCI's 'Access Point "HomeNet" (phy0-ap0)': view/openuf-theme/stations.js
+// copies the badge's data-ssid onto the label, whose own text is a bare text
+// node, so it is hidden by size and the SSID painted in its place.
+.ifacebadge > span[data-uf-ssid] {
+	font-size: 0;
+	&::before { content: attr(data-uf-ssid) "\a0"; font-size: 13px; }
+	> small { font-size: 11.7px; } // small's .9em of 13px
+}
+
 // LuCI fades an unused device's name to half opacity inline, which leaves
 // it unreadable (3:1); quieter text says the same and can be read.
 .ifacebadge > span[style*="opacity"] {
