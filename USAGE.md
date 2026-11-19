@@ -2024,10 +2024,15 @@ every VLAN; what was missing is the address.
 openUF learns it: `table bridge openuf_hosts` adds the source IPv4 address of each frame
 that comes into the bridge from a wireless interface (IP and ARP) to a set that forgets
 a client after an hour silent. Wired ports are left out. Once a minute the set is
-written to `/tmp/dhcp.leases` as dnsmasq leases with no name
-(`<expiry> <mac> <ip> * *`, expiring after ten minutes), which rpcd-mod-luci reads and
-resolves. Nothing is written while a `dnsmasq` process runs on the AP (the file is its
-lease database then), nor over a file holding anything but such nameless leases. The table needs `kmod-nft-bridge` (already a dependency).
+written to `/tmp/dhcp.leases` as dnsmasq leases (`<expiry> <mac> <ip> <name> *`,
+expiring after ten minutes). The name is what rpcd's own reverse lookup
+(`ubus call network.rrdns lookup`) returns for the address, kept an hour (ten minutes
+when there was none), and `*` without one: the host hints resolve addresses
+themselves, but *Status → Overview*'s DHCP table shows only a lease's own name.
+Nothing is written while a `dnsmasq` process runs on the AP (the file is its lease
+database then), nor over a file openUF did not write (it keeps a copy of its last
+write in `/tmp/openuf-hosthints.leases`). That table also offers *Reserve IP* on these
+entries; it would add a static lease to the AP's own, unused, DHCP configuration. The table needs `kmod-nft-bridge` (already a dependency).
 
 - Names are the gateway's DHCP hostnames, as its DNS returns them (often with a
   `.localdomain` suffix). Aliases set in the UniFi controller are not pushed to APs
